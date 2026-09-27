@@ -1,0 +1,13 @@
+{
+  "name": "parkalert",
+  "version": "1.0.0",
+  "description": "Mobile-first PWA that notifies you when Disney rides go down or come back up",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

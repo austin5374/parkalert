@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ParkAlert</title>
+  <meta name="theme-color" content="#101828">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- Setup screen: GPS detect / manual pick / join by code -->
+  <div id="setup" class="screen hidden">
+    <div class="setup-inner">
+      <div class="logo">🎢</div>
+      <h1>ParkAlert</h1>
+      <p class="tagline">Get pinged the moment a ride goes down — or comes back up.</p>
+      <div id="setup-status" class="setup-status"></div>
+      <button id="btn-locate" class="btn primary">📍 Find my park</button>
+      <div id="park-list" class="park-list"></div>
+      <div class="divider"><span>or join a trip</span></div>
+      <form id="join-form" class="join-form">
+        <input id="join-code" inputmode="text" autocapitalize="characters" autocomplete="off"
+               maxlength="6" placeholder="TRIP CODE" aria-label="Trip code">
+        <button class="btn" type="submit">Join</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="screen hidden">
+    <header>
+      <div class="header-park">
+        <h1 id="park-name">…</h1>
+        <div id="park-meta" class="park-meta"></div>
+      </div>
+      <button id="btn-mute" class="mute-btn" aria-label="Toggle mute">🔔</button>
+    </header>
+
+    <main>
+      <section id="view-down" class="view">
+        <div id="down-list"></div>
+      </section>
+
+      <section id="view-rides" class="view hidden">
+        <div class="rides-toolbar">
+          <span id="watch-summary"></span>
+          <button id="btn-watch-all" class="btn small">Watch all</button>
+        </div>
+        <div id="rides-list"></div>
+      </section>
+
+      <section id="view-settings" class="view hidden">
+        <div class="card">
+          <h2>Trip</h2>
+          <p>Share this code so another phone gets the same alerts:</p>
+          <div class="trip-code" id="trip-code">——</div>
+          <button id="btn-share" class="btn primary full">Share trip link</button>
+        </div>
+        <div class="card">
+          <h2>Push notifications</h2>
+          <p>Alerts are delivered via <strong>ntfy</strong>. Install the ntfy app
+             (<a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">iOS</a> /
+             <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a>)
+             and subscribe to your trip's topic:</p>
+          <div class="topic-row"><code id="ntfy-topic">…</code></div>
+          <div class="btn-row">
+            <button id="btn-copy-topic" class="btn">Copy topic</button>
+            <a id="link-ntfy-web" class="btn" target="_blank" rel="noopener">Open in browser</a>
+          </div>
+          <button id="btn-test-notif" class="btn full">Send test notification</button>
+        </div>
+        <div class="card">
+          <h2>Mute</h2>
+          <div class="btn-row">
+            <button id="btn-mute-1h" class="btn">Mute 1 hour</button>
+            <button id="btn-mute-toggle" class="btn">Mute</button>
+          </div>
+          <p id="mute-status" class="muted-note"></p>
+          <p class="muted-note">Alerts auto-mute after the park's published closing time.</p>
+        </div>
+        <div class="card">
+          <h2>Park</h2>
+          <div id="settings-park-list" class="park-list compact"></div>
+        </div>
+        <div class="card danger">
+          <button id="btn-leave" class="btn full">Leave trip</button>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button data-view="down" class="tab active"><span>🔴</span>Down now</button>
+      <button data-view="rides" class="tab"><span>⭐</span>Rides</button>
+      <button data-view="settings" class="tab"><span>⚙️</span>Settings</button>
+    </nav>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
