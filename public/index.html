@@ -58,6 +58,7 @@
       <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5.5 13.5H11L10 21l7.5-10.5H12L13 3Z"/></symbol>
       <symbol id="i-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16.5v-9M8 11.5l4-4 4 4"/></symbol>
       <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3.5V15M8 7.3l4-3.8 4 3.8"/><path d="M8 10.5H6.5v10h11v-10H16"/></symbol>
+      <symbol id="i-add-square" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M12 8.5v7M8.5 12h7"/></symbol>
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
       <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4 17-6.5Z"/></symbol>
       <symbol id="i-map" viewBox="0 0 24 24"><path d="m3.5 6.5 5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2v-13ZM9 4.5v13M15 6.5v13"/></symbol>
@@ -189,7 +190,7 @@
         <!-- Shown only where the app can be installed and isn't yet. -->
         <div class="group spaced hidden" id="install-group">
           <button id="row-install" class="row pressable" type="button">
-            <svg class="row-icon tint-accent"><use href="#i-share"/></svg>
+            <svg class="row-icon tint-accent" aria-hidden="true"><use href="#i-add-square"/></svg>
             <span class="row-label">Add to Home Screen<small>Opens full screen, like an app</small></span>
             <svg class="chevron"><use href="#i-chevron"/></svg>
           </button>
