@@ -25,6 +25,27 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// Everything the page loads comes from here. Inline styles are allowed
+// because the templates set a few style attributes; scripts never are, so
+// even a slip in escaping could not run one.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(self), camera=(), microphone=()',
+};
+
 function json(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -250,6 +271,9 @@ function serveStatic(req, res, url) {
 
 export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+  // Only meaningful over HTTPS, which on Railway arrives via its proxy.
+  if (req.headers['x-forwarded-proto'] === 'https') res.setHeader('Strict-Transport-Security', 'max-age=15552000');
   try {
     if (url.pathname.startsWith('/api/')) {
       await handleApi(req, res, url);

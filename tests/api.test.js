@@ -219,3 +219,12 @@ test('an oversized body is refused with a 413, and non-ASCII JSON reads correctl
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.trip.watched, ids);
 });
+
+test('every response carries the security headers', async () => {
+  for (const path of ['/', '/app.js', '/api/parks', '/api/trips/ZZZZZ3']) {
+    const res = await fetch(base + path);
+    assert.match(res.headers.get('content-security-policy'), /script-src 'self'/, path);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', path);
+    assert.equal(res.headers.get('referrer-policy'), 'no-referrer', path);
+  }
+});
