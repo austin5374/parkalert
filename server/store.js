@@ -88,14 +88,60 @@ export const history = load(HISTORY_FILE, { fetched: {}, episodes: {} });
 //   fetched: UTC days already pulled from the report archive
 export const weather = load(WEATHER_FILE, { obs: {}, fetched: {} });
 
+// The weather and outage archives grow to several MB over a year. Writing
+// them synchronously held up polls and pushes for 100 ms or more, so they
+// are written off the event loop, a moment after the last change; a write
+// asked for while one is under way runs once more after it.
+function laterWriter(file, get) {
+  let timer = null;
+  let writing = null;
+  let again = false;
+  const write = async () => {
+    timer = null;
+    if (writing) { again = true; return; }
+    writing = (async () => {
+      const tmp = `${file}.tmp`;
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      const fh = await fs.promises.open(tmp, 'w');
+      try {
+        await fh.writeFile(JSON.stringify(get()));
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      await fs.promises.rename(tmp, file);
+    })().catch((err) => console.error(`[store] writing ${path.basename(file)}:`, err.message))
+      .finally(() => {
+        writing = null;
+        if (again) { again = false; write(); }
+      });
+  };
+  return {
+    save() {
+      if (!timer) timer = setTimeout(write, 1000);
+      timer.unref?.();
+    },
+    // Now, synchronously: on shutdown.
+    flush() {
+      if (!timer && !again) return;
+      clearTimeout(timer);
+      timer = null;
+      again = false;
+      saveAtomic(file, get());
+    },
+  };
+}
+const weatherWriter = laterWriter(WEATHER_FILE, () => weather);
+const historyWriter = laterWriter(HISTORY_FILE, () => history);
+
 export function saveWeather() {
-  saveAtomic(WEATHER_FILE, weather);
+  weatherWriter.save();
 }
 
 // State and history are large and only ever read by the app, so they are
 // written compactly; trips.json stays readable for a person poking at it.
 export function saveHistory() {
-  saveAtomic(HISTORY_FILE, history);
+  historyWriter.save();
 }
 
 export function saveTrips() {
@@ -114,8 +160,10 @@ export function saveState() {
   stateTimer.unref();
 }
 
-// Write any pending state now, e.g. on shutdown.
+// Write anything pending now, e.g. on shutdown.
 export function flushState() {
+  weatherWriter.flush();
+  historyWriter.flush();
   if (!stateTimer) return;
   clearTimeout(stateTimer);
   stateTimer = null;

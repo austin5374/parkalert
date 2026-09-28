@@ -31,11 +31,19 @@ const stationsFor = (parkId) => getPark(parkId)?.weather || [];
 
 // Merge parsed reports into a station's list: one per observation time,
 // oldest first, nothing older than a year.
+// Merge parsed reports into a station's list: one per observation time,
+// oldest first, nothing older than a year. Returns how many were new.
 export function addObservations(station, list, now = Date.now()) {
   const byTime = new Map((weather.obs[station] || []).map((o) => [o.at, o]));
-  for (const o of list) if (Number.isFinite(o.at)) byTime.set(o.at, o);
+  let added = 0;
+  for (const o of list) {
+    if (!Number.isFinite(o.at)) continue;
+    if (!byTime.has(o.at)) added++;
+    byTime.set(o.at, o);
+  }
   weather.obs[station] = [...byTime.values()].filter((o) => now - o.at < KEEP_MS).sort((a, b) => a.at - b.at);
-  timelineCache.clear();
+  if (added) timelineCache.clear();
+  return added;
 }
 
 async function get(url, timeout = 20_000) {
@@ -90,8 +98,10 @@ export async function refreshWeather(parkId, now = Date.now()) {
   lastLive.set(key, now);
   try {
     const byStation = await fetchLive(stations);
-    for (const [station, list] of Object.entries(byStation)) addObservations(station, list, now);
-    saveWeather();
+    let added = 0;
+    for (const [station, list] of Object.entries(byStation)) added += addObservations(station, list, now);
+    // Each fetch repeats the last three hours; only new reports need a write.
+    if (added) saveWeather();
   } catch (err) {
     console.error('[weather] live reports:', err.message);
   }
