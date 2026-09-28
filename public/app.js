@@ -773,10 +773,27 @@ function drawDown() {
     const holds = down.filter((r) => r.outlook?.kind === 'hold');
     const rest = down.filter((r) => r.outlook?.kind !== 'hold');
     if (holds.length) {
-      const hdr = el(`<button class="hold-header pressable" type="button">${icon('bolt')}<span>Park-wide hold · ${holds.length} rides</span>${icon('chevron', 'chevron')}</button>`);
-      hdr.onclick = () => openHold();
-      list.appendChild(hdr);
-      list.appendChild(el(`<div class="cards">${holds.map(downCard).join('')}</div>`));
+      // One card for the hold, not a card per ride: in a storm that was
+      // thirty identical cards before the breakdowns below. The rides are
+      // rows inside it, each still opening its own sheet.
+      const first = holds.reduce((a, r) => (r.downSince < a.downSince ? r : a));
+      const o = first.outlook || {};
+      const card = el(`
+        <div class="card hold-card">
+          <button class="hold-header pressable" type="button">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
+          <p class="card-sub">Since ${fmtTime(first.downSince)} · ${fmtDuration(Date.now() - first.downSince)}</p>
+          ${timeline(first)}
+          ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
+          ${basisLine(o) ? `<p class="card-foot">${esc(basisLine(o))}</p>` : ''}
+          <div class="hold-rides">${holds.map((r) => `
+            <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
+              <span class="row-label">${esc(r.name)}</span>
+              <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
+              ${icon('chevron', 'chevron')}
+            </button>`).join('')}</div>
+        </div>`);
+      card.querySelector('.hold-header').onclick = () => openHold();
+      list.appendChild(el('<div class="cards"></div>')).appendChild(card);
     }
     if (rest.length) {
       if (holds.length) list.appendChild(el('<h2 class="section-label">Down</h2>'));
