@@ -120,3 +120,12 @@ test('a ride missing from one response keeps its outage clock, and is dropped if
   for (let i = 0; i < MISSING_POLLS + 1; i++) ({ rides } = applyLiveData(rides, onlyB, 240_000 + i * 60_000));
   assert.equal(rides.a, undefined, 'gone after several polls');
 });
+
+test('estimates pick up newly archived days', () => {
+  const history = { P: eps([10, 10, 10, 10, 10, 10]) };
+  assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').p50, 10);
+  history.P.push(...eps([90, 90, 90, 90, 90, 90, 90])); // the nightly sync appends in place
+  assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').p50, 90);
+  history.P = history.P.slice(6); // a prune replaces the array
+  assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').n, 7);
+});
