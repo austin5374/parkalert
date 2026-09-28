@@ -61,3 +61,14 @@ test('an outage that never reopened counts as a miss once it outlasts the range'
   assert.equal(withClose.n, base.n + 2);
   assert.ok(withClose.inRange < base.inRange + 0.001, 'the stayed-down outage is a miss, not ignored');
 });
+
+test('outages are classified as the live app saw them when they went down', async () => {
+  const { liveKindAt } = await import('../server/backtest.js');
+  const t = Date.parse('2026-09-01T18:00:00Z');
+  const day = Array.from({ length: 6 }, (_, i) => ({ rideId: `r${i}`, start: t + i * 60_000, minutes: 40, from: 'OPERATING' }));
+  // The first four went down before a fifth was: breakdowns, live.
+  assert.equal(liveKindAt(day[0], day), 'breakdown');
+  assert.equal(liveKindAt(day[3], day), 'breakdown');
+  assert.equal(liveKindAt(day[4], day), 'hold');
+  assert.equal(liveKindAt({ ...day[5], from: 'CLOSED' }, day), 'opening');
+});

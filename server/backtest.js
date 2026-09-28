@@ -8,7 +8,7 @@
 // they need be, much less means they are overconfident. The other numbers
 // are how wide the ranges are and how far off the middle guess was.
 
-import { isResolved } from './episodes.js';
+import { isResolved, isLateOpening, CLUSTER_WINDOW_MS, CLUSTER_MIN_RIDES } from './episodes.js';
 import { estimate, afterClearing } from './predict.js';
 import { learnTraits, causeOf, clearedAt, clearanceOffsets } from './causes.js';
 
@@ -33,19 +33,47 @@ function score(rows) {
   };
 }
 
+// The kind the live app would have given this outage at the moment it went
+// down. The archive's own kind is decided with hindsight (rides that went
+// down up to ten minutes later count toward a hold), but live, the first
+// rides of a hold are breakdowns until five are down, and their first alert
+// quotes a breakdown range. Scoring with the hindsight kind flattered holds.
+//   dayEps: every episode that day, any kind
+export function liveKindAt(ep, dayEps) {
+  if (isLateOpening(ep)) return 'opening';
+  const together = new Set();
+  for (const o of dayEps) {
+    if (isLateOpening(o) || o.start > ep.start || ep.start - o.start > CLUSTER_WINDOW_MS) continue;
+    if (o.start + o.minutes * 60_000 < ep.start) continue; // already back up
+    together.add(o.rideId);
+  }
+  return together.size >= CLUSTER_MIN_RIDES ? 'hold' : 'breakdown';
+}
+
 // history: { [parkId]: episode[] }; tls: { [parkId]: { thunder, rain } }
 // Returns { [group]: score } where groups compare the ordinary estimate with
 // the weather-aware one on the same outages, at the same moment.
 export function backtest(history, tls = {}) {
   const rows = {};
   const add = (group, r) => (rows[group] ??= []).push(r);
+  // Every park's archive before a day, for the pools that reach past this
+  // park (holds and late openings fall back to all parks, as they do live).
+  const clean = Object.fromEntries(Object.entries(history).map(([p, all]) =>
+    [p, all.filter((ep) => ep.kind !== 'blip' && ep.date).sort((a, b) => a.start - b.start)]));
+  const pastAll = new Map();
+  const everyPark = (day) => {
+    if (!pastAll.has(day)) pastAll.set(day, Object.fromEntries(Object.entries(clean).map(([p, e]) => [p, e.filter((ep) => ep.date < day)])));
+    return pastAll.get(day);
+  };
   for (const [parkId, all] of Object.entries(history)) {
     const tl = tls[parkId] || { thunder: [], rain: [] };
-    const eps = all.filter((ep) => ep.kind !== 'blip' && ep.date).sort((a, b) => a.start - b.start);
+    const eps = clean[parkId];
     const days = [...new Set(eps.map((ep) => ep.date))].sort();
     for (const day of days) {
-      const past = eps.filter((ep) => ep.date < day);
+      const pastHistory = everyPark(day);
+      const past = pastHistory[parkId];
       if (!past.length) continue;
+      const dayAll = all.filter((ep) => ep.date === day);
       const traits = learnTraits(past, tl);
       const offsets = { lightning: clearanceOffsets(past, traits, tl, 'lightning'), rain: clearanceOffsets(past, traits, tl, 'rain') };
       const withoutWeather = past.filter((ep) => !(ep.kind === 'breakdown' && causeOf(ep, traits, tl)));
@@ -56,13 +84,14 @@ export function backtest(history, tls = {}) {
         // the top it never got its answer and says nothing.
         const actual = isResolved(ep) ? ep.minutes : Infinity;
         const known = (est) => isResolved(ep) || ep.minutes > (est.p75 ?? est.p50);
-        const cause = causeOf(ep, traits, tl);
+        const kind = liveKindAt(ep, dayAll);
+        const cause = causeOf({ ...ep, kind }, traits, tl);
         // At the moment it went down.
-        const old = estimate({ [parkId]: past }, parkId, ep.rideId, 0, ep.kind);
-        if (old?.p50 != null && known(old)) add(`${cause || ep.kind}: when it went down, old`, row(old, actual));
+        const old = estimate(pastHistory, parkId, ep.rideId, 0, kind);
+        if (old?.p50 != null && known(old)) add(`${cause || kind}: when it went down, old`, row(old, actual));
         if (!cause) {
-          const cleaner = estimate({ [parkId]: withoutWeather }, parkId, ep.rideId, 0, ep.kind);
-          if (cleaner?.p50 != null && known(cleaner)) add(`${ep.kind}: when it went down, weather outages left out`, row(cleaner, actual));
+          const cleaner = estimate({ ...pastHistory, [parkId]: withoutWeather }, parkId, ep.rideId, 0, kind);
+          if (cleaner?.p50 != null && known(cleaner)) add(`${kind}: when it went down, weather outages left out`, row(cleaner, actual));
           continue;
         }
         if (!isResolved(ep)) continue; // the weather-cleared stage needs a reopening time
@@ -72,7 +101,7 @@ export function backtest(history, tls = {}) {
         if (c?.state !== 'passed' || c.end <= ep.start) continue;
         const elapsed = (c.end - ep.start) / 60_000;
         const afterClear = (stop - c.end) / 60_000;
-        const oldThen = estimate({ [parkId]: past }, parkId, ep.rideId, elapsed, ep.kind);
+        const oldThen = estimate(pastHistory, parkId, ep.rideId, elapsed, kind);
         if (oldThen?.p50 != null) add(`${cause}: when the weather cleared, old`, row(oldThen, afterClear));
         const neu = afterClearing(offsets[cause], ep.rideId, 0, cause);
         if (neu?.p50 != null) add(`${cause}: when the weather cleared, new (${neu.basis === 'rule' ? '30-min rule' : 'learned'})`, row(neu, afterClear));
