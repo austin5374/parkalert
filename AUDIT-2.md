@@ -4,6 +4,60 @@ Date: 2026-09-28. Branch `audit-2`, from `main` at `4b63cd2`. Written before any
 
 The standard is Apple's own apps: Maps and Find My for sheets, Weather for data, Settings for lists and switches, Mail for pull-to-refresh and swipe actions. Anything that works differently from them, feels slower, looks slightly off, reads awkwardly or leaves a guest unsure what happened counts as a finding.
 
+## Resolution
+
+Every finding has been fixed, one commit per fix (70 commits), with tests where it made sense. Lint and tests passed after every commit, and the suite went from **154 to 176 tests**. The findings below are left as they were written; this table records what happened to each.
+
+After the fixes, the app was driven end to end in the emulated iPhone against a fresh local server, with no console errors:
+- First run and a test push.
+- A 6-ride hold arriving through the poller. Its push opens the hold sheet, and a ride from there has a back button.
+- Back closes the sheet.
+- A ride link opened on a phone with no saved trip.
+- Pause and resume.
+- A park switch and its Undo.
+- Leaving and its Undo.
+- An offline reload through the service worker.
+
+| ID | Commit | | ID | Commit | | ID | Commit |
+|---|---|---|---|---|---|---|---|
+| A1 | `18afb87` | | C8 | `fe00436` | | F4 | `ae1d913` |
+| A2 | `b0769c4` | | C9 | `99fed64` | | F5 | `d77d503` |
+| A3 | `e801af0` | | C10 | `bf361d4` | | F6 | `4933ea5` |
+| A4 | `e801af0` | | D1 | `c8332f7` | | G1 | `1520edf` |
+| A5 | `b0769c4` | | D2 | `932c049` | | G2 | `bb6e94b` |
+| A6 | `531c0fd` | | D3 | `0afd2b0` | | G3 | `8fa8737` |
+| A7 | `d94df30` | | D4 | `f3ff884`, `2bdde30` | | G4 | `bb6e94b`, `42a5dc7` |
+| A8 | `d94df30` | | D5 | `455c7a9` | | H1 | `c7b7c1a` |
+| A9 | `861423e` | | D6 | `f1d8fa5`, `c04fc9a` | | H2 | `3500a90` |
+| B1 | `78606e4` | | D7 | `4811344` | | H3 | `de7a40e` |
+| B2 | `1b11ccb` | | D8 | `96f51a8` | | H4 | `3c4c80a` |
+| B3 | `7b8e34f` | | D9 | `c58b537` | | I1 | `028ed6d` |
+| B4 | `7b8e34f` | | D10 | `ee4e2ff` | | I2 | `eb19bff` |
+| C1 | `b4d4d61` | | D11 | `4226dd1` | | I3 | `b21f297` |
+| C2 | `f764f90` | | D12 | `223a1fd` | | J1 | `85717fd` |
+| C3 | `4fa43b8` | | E1 | `cc8c9be` | | J2 | `d718206` |
+| C4 | `5d127ff` | | E2 | `74c36a6` | | J3 | `613d346` |
+| C5 | `71722d7` | | E3 | `492563b` | | K1 | `e1f7cf9` |
+| C6 | `ed8948b` | | E4 | `cbeacda` | | K2 | `9853bda` |
+| C7 | `c751d91` | | E5 | `07848fc` | | L1 | `b4fa35f` |
+| | | | E6 | `492563b` | | M1 | `7a2f8b4` |
+| | | | F1 | `02269c4` | | N1 | `42a5dc7` |
+| | | | F2 | `89fa567` | | O1 | `96b3955` |
+| | | | F3 | `ec75987` | | S3 | `5231ec7` |
+
+**Suspected and real-iPhone items.** What could be fixed without a phone was fixed; each of these still needs a real iPhone in standalone mode to confirm.
+- **R1:** push links now carry the trip code (`78606e4`). If iOS opens them in Safari, the right trip and ride still open there.
+- **R2:** Dynamic Type is read through `-apple-system-body` on iOS (`6ce4f97`, `06e98dc`).
+- **R3:** a document touch listener enables press states everywhere (`5ffdaea`).
+- **R4:** the root bounce is off (`5450366`).
+- **R5:** launch screens are added in light and dark (`a4159b5`). The status-bar style is unchanged (`default`): `black-translucent` would put white text over the light theme, so the dark-mode status bar is left for a device check.
+- **R6:** live refreshes wait for a scroll to settle (`d94df30`).
+- **R7:** the topic copy fallback is fixed (`342ac32`).
+- **R8:** no change needed. The chart sits 32 px in from the screen edge, clear of Safari's back-swipe zone.
+- **R9:** covered by the version check (D4).
+- **S1:** covered by M1.
+- **S2:** no change. The drag follows the finger 1:1 from `pointerdown`; the 20 px measured was Chrome's touch slop.
+
 ## How this was tested
 
 - `npm ci` and `npm run check`: lint is clean and **154 of 154 tests pass**.
