@@ -765,6 +765,9 @@ function hoursText() {
 // browser's own text size applies as before. Checked again on return,
 // since the setting can change while the app is in the background.
 function syncDynamicType() {
+  // Mac Safari knows the font too, but its body size (13px) isn't a
+  // reader's setting and would shrink the whole app.
+  if (platform !== 'ios' || navigator.maxTouchPoints === 0) return;
   const probe = document.createElement('span');
   probe.style.font = '-apple-system-body';
   if (!probe.style.font) return; // not an Apple browser
