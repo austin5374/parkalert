@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { remaining, estimate, describe, classifyLive, MIN_SAMPLES } from '../server/predict.js';
-import { applyLiveData } from '../server/poller.js';
+import { applyLiveData, MISSING_POLLS, CLOSED_OUTAGE_MS } from '../server/poller.js';
 
 const ep = (minutes, extra = {}) => ({ rideId: 'a', minutes, endedAs: 'OPERATING', kind: 'breakdown', ...extra });
 const eps = (list, extra) => list.map((m) => ep(m, extra));
@@ -103,4 +103,73 @@ test('the poller remembers what a ride went DOWN from, across polls', () => {
   ({ rides } = applyLiveData({}, att('CLOSED'), 0));
   ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
   assert.equal(rides.a.downFrom, 'CLOSED');
+});
+
+test('a ride missing from one response keeps its outage clock, and is dropped if it stays gone', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }, { id: 'b', name: 'B', status: 'OPERATING', waitTime: 5 }];
+  let { rides } = applyLiveData({}, att('OPERATING'), 0);
+  ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
+  const onlyB = att('DOWN').slice(1);
+  let events;
+  ({ rides, events } = applyLiveData(rides, onlyB, 120_000));
+  assert.equal(rides.a.status, 'DOWN', 'kept while missing');
+  assert.deepEqual(events, []);
+  ({ rides, events } = applyLiveData(rides, att('DOWN'), 180_000));
+  assert.equal(rides.a.downSince, 60_000, 'same outage when it reappears');
+  assert.deepEqual(events, []);
+  for (let i = 0; i < MISSING_POLLS + 1; i++) ({ rides } = applyLiveData(rides, onlyB, 240_000 + i * 60_000));
+  assert.equal(rides.a, undefined, 'gone after several polls');
+});
+
+test('estimates pick up newly archived days', () => {
+  const history = { P: eps([10, 10, 10, 10, 10, 10]) };
+  assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').p50, 10);
+  history.P.push(...eps([90, 90, 90, 90, 90, 90, 90])); // the nightly sync appends in place
+  assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').p50, 90);
+  history.P = history.P.slice(6); // a prune replaces the array
+  assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').n, 7);
+});
+
+test('a delayed opening uses past delayed openings, falling back to other parks', () => {
+  const openings = eps([30, 35, 40, 45, 50, 55], { kind: 'opening' });
+  const breakdowns = eps([5, 5, 5, 5, 5, 5, 5, 5, 5]);
+  const here = estimate({ P: [...openings, ...breakdowns] }, 'P', 'z', 0, 'opening');
+  assert.equal(here.basis, 'park');
+  assert.ok(here.p50 >= 30, 'not pulled down by breakdowns');
+  assert.equal(estimate({ P: breakdowns, Q: openings }, 'P', 'z', 0, 'opening').basis, 'all parks');
+});
+
+test('a ride that never opened and then opens is a late opening, not "back up"', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }];
+  let { rides } = applyLiveData({}, att('CLOSED'), 0);
+  ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
+  let events;
+  ({ events } = applyLiveData(rides, att('OPERATING'), 41 * 60_000));
+  assert.deepEqual([events[0].type, events[0].late, events[0].downtimeMs], ['UP', true, 40 * 60_000]);
+  ({ rides } = applyLiveData({}, att('OPERATING'), 0));
+  ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
+  ({ events } = applyLiveData(rides, att('OPERATING'), 120_000));
+  assert.equal(events[0].late, false);
+});
+
+test('a down ride that closes says so, and reopening later is "back up" with the whole outage', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }];
+  const H = 3600_000;
+  let rides, events;
+  ({ rides } = applyLiveData({}, att('OPERATING'), 0));
+  ({ rides } = applyLiveData(rides, att('DOWN'), H));
+  ({ rides, events } = applyLiveData(rides, att('CLOSED'), 2 * H));
+  assert.deepEqual([events[0].type, events[0].downtimeMs], ['CLOSED', H]);
+  assert.equal(rides.a.closedWhileDown, true);
+  ({ rides, events } = applyLiveData(rides, att('CLOSED'), 3 * H));
+  assert.deepEqual(events, []);
+  ({ events } = applyLiveData(rides, att('OPERATING'), 4 * H));
+  assert.deepEqual([events[0].type, events[0].downtimeMs, events[0].late], ['UP', 3 * H, false]);
+  // Reopening the next morning is a new day, not the end of that outage.
+  ({ events } = applyLiveData(rides, att('OPERATING'), H + CLOSED_OUTAGE_MS + 1));
+  assert.deepEqual(events, []);
+  // A ride that was simply closed says nothing when it opens.
+  ({ rides } = applyLiveData({}, att('CLOSED'), 0));
+  ({ events } = applyLiveData(rides, att('OPERATING'), H));
+  assert.deepEqual(events, []);
 });

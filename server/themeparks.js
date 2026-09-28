@@ -1,4 +1,6 @@
-const BASE = 'https://api.themeparks.wiki/v1';
+import { getPark } from './parks.js';
+import { localDate } from './time.js';
+import { THEMEPARKS_BASE as BASE, THEMEPARKS_API_KEY } from './config.js';
 
 const USER_AGENT = 'ParkAlert/1.0 (personal ride-status notifier)';
 
@@ -19,7 +21,7 @@ async function getJSON(path) {
 // (hourly limit spent), or a plain error for anything else.
 export async function fetchParkHistory(parkId, date) {
   const headers = { 'User-Agent': USER_AGENT };
-  if (process.env.THEMEPARKS_API_KEY) headers['x-api-key'] = process.env.THEMEPARKS_API_KEY;
+  if (THEMEPARKS_API_KEY) headers['x-api-key'] = THEMEPARKS_API_KEY;
   const res = await fetch(`${BASE}/entity/${parkId}/history?date=${date}`, {
     headers,
     signal: AbortSignal.timeout(60000),
@@ -52,22 +54,23 @@ export async function fetchLiveAttractions(parkId) {
 
 // Today's hours (park-local) + timezone.
 export async function fetchSchedule(parkId) {
-  return parseSchedule(await getJSON(`/entity/${parkId}/schedule`));
+  return parseSchedule(await getJSON(`/entity/${parkId}/schedule`), Date.now(), getPark(parkId)?.timezone);
 }
 
 // Pure so it can be tested. closingTime is the regular close; lastCloseTime is
 // when the last guests leave, which on a party night (Mickey's Not-So-Scary
 // Halloween Party runs 7pm to midnight after a 6pm close) is hours later.
 // Auto-mute must use lastCloseTime or party guests silently get no alerts.
-export function parseSchedule(data, now = Date.now()) {
-  const timezone = data.timezone || 'America/New_York';
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(now));
+export function parseSchedule(data, now = Date.now(), fallbackZone = 'America/New_York') {
+  const timezone = data.timezone || fallbackZone;
+  const today = localDate(now, timezone);
   const entries = (data.schedule || []).filter((s) => s.date === today && s.closingTime);
   const regular = entries.find((s) => s.type === 'OPERATING');
   const late = entries
     .filter((s) => s.type === 'OPERATING' || s.type === 'TICKETED_EVENT')
     .sort((a, b) => Date.parse(b.closingTime) - Date.parse(a.closingTime))[0];
-  const lateEvent = late && late !== regular && regular && Date.parse(late.closingTime) > Date.parse(regular.closingTime)
+  // An event that runs past regular hours, or a day that is only an event.
+  const lateEvent = late && late !== regular && (!regular || Date.parse(late.closingTime) > Date.parse(regular.closingTime))
     ? late
     : null;
   return {

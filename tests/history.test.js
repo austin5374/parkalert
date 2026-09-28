@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { daysToFetch, localDate } from '../server/history.js';
+import { daysToFetch } from '../server/history.js';
+import { localDate } from '../server/time.js';
 
 const NY = 'America/New_York';
 const LA = 'America/Los_Angeles';

@@ -1,14 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from './config.js';
 
-// Data lives on an attached volume when one exists (Railway injects
-// RAILWAY_VOLUME_MOUNT_PATH automatically), falling back to ./data locally.
-const DATA_DIR =
-  process.env.DATA_DIR ||
-  process.env.RAILWAY_VOLUME_MOUNT_PATH ||
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const TRIPS_FILE = path.join(DATA_DIR, 'trips.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
@@ -21,21 +15,26 @@ function load(file, fallback) {
   }
 }
 
-function saveAtomic(file, obj) {
+function saveAtomic(file, obj, indent) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 1));
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, indent));
   fs.renameSync(tmp, file);
 }
 
-// trips: { [code]: { code, topic, parkId, watched, mute, rideMutes, createdAt } }
-//   watched: null = all rides, or array of ride ids
+// trips: { [code]: { code, topic, parkId, watched, watchedByPark, mute, rideMutes, createdAt, lastSeenAt } }
+//   watched: null = all rides, or array of ride ids (for the current park)
+//   watchedByPark: { [parkId]: watched } saved when hopping away from a park
 //   mute: null, or { until: epoch-ms | null } (null until = muted indefinitely)
 //   rideMutes: { [rideId]: true }
+//   lastSeenAt: last dashboard load, written at most hourly (see touchTrip)
 export const trips = load(TRIPS_FILE, {});
 
-// parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides } }
-//   rides: { [rideId]: { name, status, since, downSince, waitTime } }
+// parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides, recent, waits } }
+//   rides: { [rideId]: { name, status, waitTime, since, downSince, downFrom, missed? } }
+//     downFrom: the status it went DOWN from; missed: polls it has been absent
+//   recent: today's transitions, newest first (see recordRecent in poller.js)
+//   waits: { [rideId]: [[epoch-ms, minutes | null], ...] } (see recordWaits)
 export const parkState = load(STATE_FILE, {});
 
 // history: { fetched: { [parkId]: [YYYY-MM-DD, ...] }, episodes: { [parkId]: episode[] } }
@@ -43,15 +42,33 @@ export const parkState = load(STATE_FILE, {});
 //   episodes: see server/episodes.js
 export const history = load(HISTORY_FILE, { fetched: {}, episodes: {} });
 
+// State and history are large and only ever read by the app, so they are
+// written compactly; trips.json stays readable for a person poking at it.
 export function saveHistory() {
   saveAtomic(HISTORY_FILE, history);
 }
 
 export function saveTrips() {
-  saveAtomic(TRIPS_FILE, trips);
+  saveAtomic(TRIPS_FILE, trips, 1);
 }
 
+// Every park's poll lands within the same second or so, and each used to
+// rewrite the whole file; now one write a moment later covers them all.
+let stateTimer = null;
 export function saveState() {
+  if (stateTimer) return;
+  stateTimer = setTimeout(() => {
+    stateTimer = null;
+    saveAtomic(STATE_FILE, parkState);
+  }, 1000);
+  stateTimer.unref();
+}
+
+// Write any pending state now, e.g. on shutdown.
+export function flushState() {
+  if (!stateTimer) return;
+  clearTimeout(stateTimer);
+  stateTimer = null;
   saveAtomic(STATE_FILE, parkState);
 }
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSchedule } from '../server/themeparks.js';
-import { groupMessage, recordRecent, GROUP_MIN } from '../server/poller.js';
+import { groupMessage, groupOutlook, recordRecent, GROUP_MIN } from '../server/poller.js';
 import { isTripActive, TRIP_IDLE_MS } from '../server/store.js';
 
 // Magic Kingdom on 2026-09-27 as the API returned it: early entry, a 6pm
@@ -59,4 +59,32 @@ test('a trip untouched for three weeks stops being polled until it is opened aga
   assert.equal(isTripActive({ createdAt: now - TRIP_IDLE_MS - 1 }, now), false);
   assert.equal(isTripActive({ createdAt: now - TRIP_IDLE_MS - 1, lastSeenAt: now - 1000 }, now), true);
   assert.equal(isTripActive({ createdAt: now - 1000 }, now), true);
+});
+
+test('a day that is only a ticketed event reports the event, and alerts run until it ends', () => {
+  const s = parseSchedule({
+    timezone: 'America/New_York',
+    schedule: [{ date: '2026-09-27', type: 'TICKETED_EVENT', description: 'After Hours', openingTime: '2026-09-27T19:00:00-04:00', closingTime: '2026-09-27T23:00:00-04:00' }],
+  }, noonSept27);
+  assert.equal(s.closingTime, null);
+  assert.equal(s.lastCloseTime, '2026-09-27T23:00:00-04:00');
+  assert.deepEqual(s.lateEvent, { name: 'After Hours', closingTime: '2026-09-27T23:00:00-04:00' });
+});
+
+test('several late openings at once are one "now open" push', () => {
+  assert.equal(groupMessage('UP', ['A', 'B', 'C'], 'EPCOT', null, { late: true }).title, '3 rides are now open');
+});
+
+test('a grouped push speaks for the kind of outage most of its rides share', () => {
+  const hold = { kind: 'hold', text: 'Usually back in 45 to 105 min' };
+  const breakdown = { kind: 'breakdown', text: 'Usually back in 10 to 30 min' };
+  assert.equal(groupOutlook([breakdown, hold, hold, hold]), hold);
+  assert.equal(groupOutlook([hold, breakdown, breakdown]), breakdown);
+  assert.equal(groupOutlook([hold, breakdown, { kind: 'opening' }]), null);
+});
+
+test('rides closing together are one push', () => {
+  const m = groupMessage('CLOSED', ['A', 'B', 'C'], 'EPCOT', null);
+  assert.equal(m.title, '3 rides have closed');
+  assert.equal(m.message, 'A, B, C\nThey may not reopen today · EPCOT');
 });

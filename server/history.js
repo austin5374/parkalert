@@ -5,11 +5,10 @@ import { PARKS } from './parks.js';
 import { fetchParkHistory } from './themeparks.js';
 import { extractEpisodes } from './episodes.js';
 import { history, saveHistory } from './store.js';
+import { HISTORY_DAYS as WINDOW_DAYS } from './config.js';
+import { localDate } from './time.js';
 
 const SYNC_INTERVAL_MS = 60 * 60_000;
-// How far back to try. The archive refuses anything older than the key allows
-// (7 days anonymous, 30 with a free key), so this is only a ceiling.
-const WINDOW_DAYS = Number(process.env.HISTORY_DAYS) || (process.env.THEMEPARKS_API_KEY ? 30 : 7);
 // Episodes older than this are dropped. Ride reliability drifts with
 // refurbishments, so a year is plenty.
 const KEEP_DAYS = 365;
@@ -20,10 +19,6 @@ const DAY_SETTLE_HOURS = 6;
 const BUDGET_FLOOR = 2;
 
 const DAY_MS = 24 * 3600_000;
-
-export function localDate(ts, timezone) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(ts));
-}
 
 function addDays(date, n) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);

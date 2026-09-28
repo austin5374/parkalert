@@ -2,8 +2,6 @@
 // local outage archive and the live park state, so they can be tested alone.
 import { isResolved } from './episodes.js';
 
-const DAY_MS = 24 * 3600_000;
-
 const median = (xs) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -15,12 +13,17 @@ const real = (ep) => ep.kind !== 'blip';
 
 // Wait-time samples, recorded only when the value changes. null means the ride
 // was not posting a wait (down, closed), which the chart draws as a gap.
+// gapFrom: when polling had stopped, the time it stopped; the series gets a
+// null there so the chart shows a gap instead of a stale wait.
 export const WAIT_KEEP_MS = 18 * 3600_000;
-export function recordWaits(waits = {}, rides, now = Date.now()) {
+export function recordWaits(waits = {}, rides, now = Date.now(), gapFrom = null) {
   const next = {};
   for (const [id, r] of Object.entries(rides)) {
     const value = r.status === 'OPERATING' ? r.waitTime ?? null : null;
     const series = (waits[id] || []).filter(([t]) => now - t < WAIT_KEEP_MS);
+    if (gapFrom !== null && series.length && series[series.length - 1][1] !== null && gapFrom < now) {
+      series.push([gapFrom, null]);
+    }
     const last = series[series.length - 1];
     if (!last || last[1] !== value) series.push([now, value]);
     next[id] = series;
@@ -55,12 +58,12 @@ export function rideHistory(episodes, rideId, fetchedDates) {
 // Today's transitions for one ride, oldest first.
 export function rideToday(recent = [], rideId, dayStart) {
   return recent.filter((e) => e.id === rideId && e.at >= dayStart).sort((a, b) => a.at - b.at)
-    .map(({ type, at, downtimeMs }) => ({ type, at, downtimeMs }));
+    .map(({ type, at, downtimeMs, late }) => ({ type, at, downtimeMs, ...(late ? { late } : {}) }));
 }
 
 // Park-wide summary: which rides have been least reliable lately, and how long
 // a typical breakdown here lasts.
-export function parkSummary(episodes, fetchedDates, names, now = Date.now(), days = 7) {
+export function parkSummary(episodes, fetchedDates, names, days = 7) {
   const dates = new Set([...new Set(fetchedDates)].sort().slice(-days));
   const window = episodes.filter((ep) => dates.has(ep.date) && real(ep));
   const byRide = new Map();
@@ -83,16 +86,3 @@ export function parkSummary(episodes, fetchedDates, names, now = Date.now(), day
       .map((r) => ({ ...r, minutes: Math.round(r.minutes) })),
   };
 }
-
-// Midnight in the park's zone, as epoch ms, for "today" filters.
-export function parkDayStart(timezone, now = Date.now()) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric',
-    }).formatToParts(new Date(now)).map((p) => [p.type, Number(p.value)])
-  );
-  const sinceMidnight = ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000;
-  return now - sinceMidnight - (now % 1000);
-}
-
-export { DAY_MS };

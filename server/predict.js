@@ -18,12 +18,30 @@ export const RIDE_MIN_SAMPLES = 8;
 // or counted as reopenings, which would bias them shorter still.
 // Returns null when fewer than MIN_SAMPLES outages lasted this long.
 export function remaining(episodes, elapsedMin) {
-  const atRisk = episodes.filter((ep) => ep.minutes > elapsedMin);
-  if (atRisk.length < MIN_SAMPLES) return null;
+  return remainingSorted([...episodes].sort(byMinutes), elapsedMin);
+}
 
-  // One sorted sweep: a year of park-wide history is thousands of outages and
-  // this runs on every dashboard refresh.
-  const sorted = [...atRisk].sort((a, b) => a.minutes - b.minutes);
+const byMinutes = (a, b) => a.minutes - b.minutes;
+
+// Index of the first episode that lasted longer than `min`, in a list sorted
+// by minutes: everything from there on is still "at risk" at `min`.
+function firstAbove(sorted, min) {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid].minutes > min) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+// remaining() over a list already sorted by minutes. One sweep, no sorting:
+// a year of park-wide history is thousands of outages and this runs for every
+// down ride on every dashboard refresh.
+function remainingSorted(all, elapsedMin) {
+  const sorted = all.slice(firstAbove(all, elapsedMin));
+  if (sorted.length < MIN_SAMPLES) return null;
   const quantiles = { p25: null, p50: null, p75: null };
   const targets = [['p25', 0.25], ['p50', 0.5], ['p75', 0.75]];
   let survival = 1;
@@ -40,9 +58,42 @@ export function remaining(episodes, elapsedMin) {
   }
   return {
     ...quantiles,
-    n: atRisk.length,
-    stayedDownShare: atRisk.filter(stayedDown).length / atRisk.length,
+    n: sorted.length,
+    stayedDownShare: sorted.filter(stayedDown).length / sorted.length,
   };
+}
+
+// Each park's archive grouped by kind, then by ride, every list sorted by
+// minutes. Built once per archive change (a new day appends, a prune
+// replaces the array) instead of filtering and sorting on every estimate.
+const EMPTY = { all: [], byRide: new Map() };
+const indexes = new WeakMap(); // episodes array -> { length, kinds: Map(kind -> { all, byRide }) }
+function byKind(episodes, kind) {
+  let idx = indexes.get(episodes);
+  if (!idx || idx.length !== episodes.length) {
+    idx = { length: episodes.length, kinds: new Map() };
+    for (const ep of [...episodes].sort(byMinutes)) {
+      let k = idx.kinds.get(ep.kind);
+      if (!k) idx.kinds.set(ep.kind, (k = { all: [], byRide: new Map() }));
+      k.all.push(ep);
+      let r = k.byRide.get(ep.rideId);
+      if (!r) k.byRide.set(ep.rideId, (r = []));
+      r.push(ep);
+    }
+    indexes.set(episodes, idx);
+  }
+  return idx.kinds.get(kind) || EMPTY;
+}
+
+// Every park's episodes of one kind, sorted; reused until any park's changes.
+const pooled = new WeakMap(); // history -> { [kind]: { parts, list } }
+function everywhere(history, kind) {
+  const parts = Object.values(history).map((eps) => byKind(eps, kind).all);
+  const cached = pooled.get(history)?.[kind];
+  if (cached && cached.parts.length === parts.length && cached.parts.every((p, i) => p === parts[i])) return cached.list;
+  const list = parts.flat().sort(byMinutes);
+  pooled.set(history, { ...pooled.get(history), [kind]: { parts, list } });
+  return list;
 }
 
 // Which kind of outage is this live DOWN ride? Same rules the history
@@ -70,20 +121,22 @@ export function classifyLive(rides, rideId) {
 // else the park's. A hold is a park-wide event, so it pools the park. Rarer
 // kinds fall back to every park when this one has not seen enough of them.
 export function estimate(history, parkId, rideId, elapsedMin, kind) {
-  const park = (history[parkId] || []).filter((ep) => ep.kind === kind);
-  const everywhere = () => Object.values(history).flat().filter((ep) => ep.kind === kind);
-  const ride = ['ride', park.filter((ep) => ep.rideId === rideId), RIDE_MIN_SAMPLES];
+  const park = byKind(history[parkId] || [], kind);
+  // Pools are built only if reached: most estimates stop at the ride or park.
+  const ride = ['ride', () => park.byRide.get(rideId) || [], RIDE_MIN_SAMPLES];
+  const all = ['all parks', () => everywhere(history, kind)];
   const pools = {
-    breakdown: [ride, ['park', park]],
-    opening: [ride, ['park', park], ['all parks', everywhere()]],
-    hold: [['park', park], ['all parks', everywhere()]],
+    breakdown: [ride, ['park', () => park.all]],
+    opening: [ride, ['park', () => park.all], all],
+    hold: [['park', () => park.all], all],
   }[kind];
 
   let sawHistory = false;
-  for (const [basis, eps, min = MIN_SAMPLES] of pools) {
+  for (const [basis, get, min = MIN_SAMPLES] of pools) {
+    const eps = get();
     if (eps.length >= min) sawHistory = true;
-    if (eps.filter((ep) => ep.minutes > elapsedMin).length < min) continue;
-    const r = remaining(eps, elapsedMin);
+    if (eps.length - firstAbove(eps, elapsedMin) < min) continue;
+    const r = remainingSorted(eps, elapsedMin);
     if (r && r.p50 !== null) return { ...r, basis, kind };
   }
   // Enough history exists, but almost nothing in it ran this long.

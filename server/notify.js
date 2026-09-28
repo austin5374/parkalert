@@ -1,4 +1,4 @@
-const NTFY_BASE = process.env.NTFY_BASE || 'https://ntfy.sh';
+import { NTFY_BASE } from './config.js';
 
 // JSON publish API: unlike header-based publishing it supports full UTF-8.
 export async function publish(topic, { title, message, tags, priority, click }) {
@@ -24,10 +24,13 @@ export async function publish(topic, { title, message, tags, priority, click }) 
   }
 }
 
+// "<1 min", "47 min", "1 hr 5 min": the same wording as the app
+// (public/time.js), so a push and the dashboard never disagree.
 export function formatDuration(ms) {
-  const min = Math.round(ms / 60000);
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return '<1 min';
   if (min < 60) return `${min} min`;
   const h = Math.floor(min / 60);
   const m = min % 60;
-  return m ? `${h}h ${m}m` : `${h}h`;
+  return m ? `${h} hr ${m} min` : `${h} hr`;
 }
