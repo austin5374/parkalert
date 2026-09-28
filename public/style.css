@@ -476,6 +476,14 @@ html.sheet-up body { background: transparent; }
 .chart-x { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--label-2); margin-top: 0.3rem; letter-spacing: 0; }
 .chart-days { display: grid; text-align: center; font-size: 0.75rem; color: var(--label-2); margin-top: 0.35rem; letter-spacing: 0; }
 
+/* An activity indicator in a row's trailing slot. */
+.spinner {
+  width: 1.1rem; height: 1.1rem; flex: none; border-radius: 50%;
+  border: 2px solid var(--fill-strong); border-top-color: var(--label-2);
+  animation: spin 800ms linear infinite;
+}
+#setup-parks.busy .row:not(:has(.spinner)) { opacity: 0.5; pointer-events: none; }
+
 /* ---- Pull to refresh ---- */
 main { position: relative; transition: none; }
 .ptr {

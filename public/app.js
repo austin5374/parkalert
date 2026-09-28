@@ -491,7 +491,7 @@ function parkGroups(currentId, onPick) {
           <span class="row-label">${esc(parkLabel(p.name))}</span>
           ${selected ? icon('check', 'check') : icon('chevron', 'chevron')}
         </button>`);
-      row.onclick = () => onPick(p);
+      row.onclick = () => onPick(p, row);
       group.appendChild(row);
     }
     wrap.appendChild(group);
@@ -532,7 +532,7 @@ async function renderSetupParks() {
     return;
   }
   if ($('#setup-status').textContent === OFFLINE_SETUP) setupStatus('');
-  $('#setup-parks').replaceChildren(parkGroups(null, (p) => startTrip(p.id)));
+  $('#setup-parks').replaceChildren(parkGroups(null, (p, row) => startTrip(p.id, row)));
 }
 
 // Location is asked for only when the person taps for it, never on arrival.
@@ -568,13 +568,32 @@ function locate() {
   );
 }
 
-async function startTrip(parkId) {
-  try {
-    const { trip } = await api('/trips', { method: 'POST', body: { parkId } });
-    setTrip(trip.code, { firstRun: true });
-  } catch {
-    setupStatus("Can't reach ParkAlert right now. Check your connection.", true);
-  }
+// One trip per tap: a second tap (or a double tap on a slow connection)
+// while the first is on its way does nothing, and the tapped row shows a
+// spinner where its chevron was so it's clear something is happening.
+let starting = null;
+async function startTrip(parkId, row = null) {
+  if (starting) return starting;
+  const list = $('#setup-parks');
+  list.setAttribute('aria-busy', 'true');
+  list.classList.add('busy');
+  const chevron = row?.querySelector('.chevron');
+  const spinner = el('<span class="spinner" role="status" aria-label="Creating your trip"></span>');
+  chevron?.replaceWith(spinner);
+  starting = (async () => {
+    try {
+      const { trip } = await api('/trips', { method: 'POST', body: { parkId } });
+      setTrip(trip.code, { firstRun: true });
+    } catch {
+      setupStatus("Can't reach ParkAlert right now. Check your connection.", true);
+    } finally {
+      list.removeAttribute('aria-busy');
+      list.classList.remove('busy');
+      if (chevron) spinner.replaceWith(chevron);
+      starting = null;
+    }
+  })();
+  return starting;
 }
 
 function setTrip(code, { firstRun = false } = {}) {
