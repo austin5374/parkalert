@@ -1082,10 +1082,12 @@ function openPause() {
   const tz = dash.park.timezone || undefined;
   const morning = nextLocalHour(Date.now(), tz, 7);
   const thisMorning = localDay(morning, tz) === localDay(Date.now(), tz);
+  // Each option says when it ends, as Focus does.
   const options = [
     ['For 1 hour', Date.now() + 3600_000],
     ['For 3 hours', Date.now() + 3 * 3600_000],
-    [thisMorning ? 'Until 7 this morning' : 'Until tomorrow morning', morning],
+    [thisMorning ? 'Until this morning' : 'Until tomorrow morning', morning],
+    ['Until I turn them back on', null],
   ];
   const note = st.kind === 'closed'
     ? 'The park is closed, so alerts are already off until it opens.'
@@ -1099,17 +1101,22 @@ function openPause() {
   }
   const g = el('<div class="group plain"></div>');
   for (const [label, until] of options) {
-    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span></button>`);
+    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(until === morning ? fmtTime(until) : `Until ${fmtTime(until)}`)}</span>` : ''}</button>`);
     row.onclick = () => { sheet.close(); setMute({ until }); };
     g.appendChild(row);
   }
   content.appendChild(g);
+  const cancel = el('<div class="btn-stack"><button class="btn-secondary pressable" type="button">Cancel</button></div>');
+  cancel.querySelector('button').onclick = () => sheet.close();
+  content.appendChild(cancel);
   sheet.open(content);
 }
 
 function setMute(mute) {
   save((t) => { t.mute = mute; }, { mute }, (before) => {
-    const text = mute ? `Alerts paused until ${fmtUntil(mute.until)}` : 'Alerts are back on';
+    const text = !mute ? 'Alerts are back on'
+      : mute.until === null ? 'Alerts paused until you turn them back on'
+        : `Alerts paused until ${fmtUntil(mute.until)}`;
     toast(text, { label: 'Undo', run: () => save((t) => { t.mute = before.mute; }, { mute: before.mute }) });
   });
 }
