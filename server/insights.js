@@ -60,7 +60,7 @@ export function rideHistory(episodes, rideId, fetchedDates) {
 // Today's transitions for one ride, oldest first.
 export function rideToday(recent = [], rideId, dayStart) {
   return recent.filter((e) => e.id === rideId && e.at >= dayStart).sort((a, b) => a.at - b.at)
-    .map(({ type, at, downtimeMs }) => ({ type, at, downtimeMs }));
+    .map(({ type, at, downtimeMs, late }) => ({ type, at, downtimeMs, ...(late ? { late } : {}) }));
 }
 
 // Park-wide summary: which rides have been least reliable lately, and how long

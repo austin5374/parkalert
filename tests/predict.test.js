@@ -138,3 +138,16 @@ test('a delayed opening uses past delayed openings, falling back to other parks'
   assert.ok(here.p50 >= 30, 'not pulled down by breakdowns');
   assert.equal(estimate({ P: breakdowns, Q: openings }, 'P', 'z', 0, 'opening').basis, 'all parks');
 });
+
+test('a ride that never opened and then opens is a late opening, not "back up"', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }];
+  let { rides } = applyLiveData({}, att('CLOSED'), 0);
+  ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
+  let events;
+  ({ events } = applyLiveData(rides, att('OPERATING'), 41 * 60_000));
+  assert.deepEqual([events[0].type, events[0].late, events[0].downtimeMs], ['UP', true, 40 * 60_000]);
+  ({ rides } = applyLiveData({}, att('OPERATING'), 0));
+  ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
+  ({ events } = applyLiveData(rides, att('OPERATING'), 120_000));
+  assert.equal(events[0].late, false);
+});

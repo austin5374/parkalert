@@ -74,3 +74,11 @@ test('a paused trip gets nothing', async () => {
   assert.equal(sent, 0);
   assert.equal(received.length, 0);
 });
+
+test('a delayed opening says the ride is now open, and how late', async () => {
+  setup();
+  const ev = { type: 'UP', ride: { id: 'x', name: 'Seven Dwarfs Mine Train', status: 'OPERATING' }, downtimeMs: 40 * 60_000, late: true };
+  await notifyTrips(PARK, [ev], { simulated: true });
+  assert.equal(received[0].title, 'Seven Dwarfs Mine Train is now open');
+  assert.match(received[0].message, /^Opened 40 min late · Magic Kingdom/);
+});

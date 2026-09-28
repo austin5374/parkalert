@@ -588,7 +588,9 @@ function renderRecent(downIds) {
   block.appendChild(el(`<div class="group">${ups.map((e) => `
     <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
       ${icon('arrow-up', 'row-icon tint-green')}
-      <span class="row-label">${esc(e.name)}<small>Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}</small></span>
+      <span class="row-label">${esc(e.name)}<small>${e.late
+        ? `Opened at ${fmtTime(e.at)}${e.downtimeMs ? `, ${fmtDuration(e.downtimeMs)} late` : ''}`
+        : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
       ${icon('chevron', 'chevron')}
     </button>`).join('')}</div>`));
 }
@@ -986,14 +988,14 @@ function rideSheet(r, detail) {
   wrap.appendChild(el('<h2 class="section-label">Today</h2>'));
   const today = [...detail.today];
   if (down && !today.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) {
-    today.push({ type: 'DOWN', at: r.downSince });
+    today.push({ type: 'DOWN', at: r.downSince, opening: o?.kind === 'opening' });
     today.sort((a, b) => a.at - b.at);
   }
   if (today.length) {
     wrap.appendChild(el(`<div class="group">${today.map((e) => `
       <div class="row">
         ${icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
-        <span class="row-label">${e.type === 'DOWN' ? 'Went down' : 'Back up'}${e.type === 'UP' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)}</small>` : ''}</span>
+        <span class="row-label">${e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${e.type === 'UP' && e.downtimeMs ? `<small>${e.late ? `${fmtDuration(e.downtimeMs)} late` : `after ${fmtDuration(e.downtimeMs)}`}</small>` : ''}</span>
         <span class="row-detail">${fmtTime(e.at)}</span>
       </div>`).join('')}</div>`));
   } else {

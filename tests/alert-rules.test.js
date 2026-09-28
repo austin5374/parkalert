@@ -70,3 +70,7 @@ test('a day that is only a ticketed event reports the event, and alerts run unti
   assert.equal(s.lastCloseTime, '2026-09-27T23:00:00-04:00');
   assert.deepEqual(s.lateEvent, { name: 'After Hours', closingTime: '2026-09-27T23:00:00-04:00' });
 });
+
+test('several late openings at once are one "now open" push', () => {
+  assert.equal(groupMessage('UP', ['A', 'B', 'C'], 'EPCOT', null, { late: true }).title, '3 rides are now open');
+});

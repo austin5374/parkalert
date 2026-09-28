@@ -3,6 +3,7 @@ import { publish, formatDuration } from './notify.js';
 import { trips, parkState, saveState, activeParkIds, history } from './store.js';
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
+import { isLateOpening } from './episodes.js';
 import { recordWaits } from './insights.js';
 import { localDate } from './history.js';
 
@@ -39,6 +40,8 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
           type: 'UP',
           ride: { id: att.id, ...ride },
           downtimeMs: prev.downSince ? now - prev.downSince : null,
+          // It never opened on time, so it is opening late, not coming back.
+          late: isLateOpening({ from: prev.downFrom }),
         });
       }
     }
@@ -184,6 +187,14 @@ function downMessage(parkId, ev, parkName, timezone) {
 }
 
 function upMessage(ev, parkName) {
+  if (ev.late) {
+    return {
+      title: `${ev.ride.name} is now open`,
+      message: `Opened ${ev.downtimeMs ? `${formatDuration(ev.downtimeMs)} late` : 'late'} · ${parkName}`,
+      tags: 'green_circle',
+      priority: 4,
+    };
+  }
   return {
     title: `${ev.ride.name} is back up`,
     message: `Was down ${ev.downtimeMs ? formatDuration(ev.downtimeMs) : 'a while'} · ${parkName}`,
@@ -193,7 +204,8 @@ function upMessage(ev, parkName) {
 }
 
 // One push for many rides at once. Pure apart from the outlook lookup.
-export function groupMessage(type, names, parkName, outlook) {
+// late: every ride in the group is a delayed opening, now open.
+export function groupMessage(type, names, parkName, outlook, { late = false } = {}) {
   if (type === 'DOWN') {
     const lines = [listNames(names)];
     if (outlook?.kind === 'hold') lines.push(`Park-wide hold at ${parkName}`);
@@ -202,7 +214,7 @@ export function groupMessage(type, names, parkName, outlook) {
     return { title: `${names.length} rides just went down`, message: lines.join('\n'), tags: 'red_circle', priority: 3 };
   }
   return {
-    title: `${names.length} rides are back up`,
+    title: `${names.length} rides ${late ? 'are now open' : 'are back up'}`,
     message: `${listNames(names)}\n${parkName}`,
     tags: 'green_circle',
     priority: 4,
@@ -226,7 +238,8 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       const pushes =
         evs.length >= GROUP_MIN
           ? [groupMessage(type, evs.map((ev) => ev.ride.name), parkName,
-              type === 'DOWN' ? downOutlook(parkId, evs[0].ride.id, 0) : null)]
+              type === 'DOWN' ? downOutlook(parkId, evs[0].ride.id, 0) : null,
+              { late: evs.every((ev) => ev.late) })]
           : evs.map((ev) => (type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone) : upMessage(ev, parkName)));
       for (const push of pushes) {
         if (simulated) push.message += ' · SIMULATED TEST';
@@ -287,6 +300,7 @@ export function recordRecent(recent = [], events, now = Date.now()) {
     name: ev.ride.name,
     at: now,
     downtimeMs: ev.downtimeMs ?? null,
+    ...(ev.late ? { late: true } : {}),
   }));
   return [...added, ...recent].filter((e) => now - e.at < RECENT_MS).slice(0, 400);
 }

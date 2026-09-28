@@ -81,6 +81,7 @@ Almost everything opens something:
 
 - 🔴 `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
 - 🟢 `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
+- 🟢 `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
 - Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven.
 - Tapping an alert opens the app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else.
 - Pausing (1 hour, 3 hours, until tomorrow morning) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
