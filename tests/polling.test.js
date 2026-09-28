@@ -123,3 +123,23 @@ test('an estimate is written down when a ride goes down and scored when it reope
     history.episodes[PARK] = saved;
   }
 });
+
+test('single rider and Lightning Lane come through from the live queues', async () => {
+  const { parseAttraction } = await import('../server/themeparks.js');
+  const r = parseAttraction({
+    id: 'x', name: 'X', entityType: 'ATTRACTION', status: 'OPERATING',
+    queue: {
+      STANDBY: { waitTime: 45 },
+      SINGLE_ACTOR: { waitTime: null },
+      RETURN_TIME: { state: 'AVAILABLE', returnStart: '2026-09-28T15:40:00-04:00', returnEnd: '2026-09-28T16:40:00-04:00' },
+    },
+  });
+  assert.equal(r.waitTime, 45);
+  assert.equal(r.singleRider, true);
+  assert.deepEqual(r.lightningLane, { paid: false, state: 'AVAILABLE', returnStart: '2026-09-28T15:40:00-04:00' });
+  const plain = parseAttraction({ id: 'y', name: 'Y', status: 'OPERATING', queue: { STANDBY: { waitTime: 5 } } });
+  assert.equal(plain.singleRider, false);
+  assert.equal(plain.lightningLane, null);
+  const paid = parseAttraction({ id: 'z', name: 'Z', status: 'OPERATING', queue: { PAID_RETURN_TIME: { state: 'TEMP_FULL' } } });
+  assert.equal(paid.lightningLane.paid, true);
+});

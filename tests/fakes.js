@@ -61,7 +61,7 @@ export async function startFakes() {
             name: r.name,
             entityType: 'ATTRACTION',
             status: r.status,
-            queue: { STANDBY: { waitTime: r.waitTime ?? null } },
+            queue: r.queue || { STANDBY: { waitTime: r.waitTime ?? null } },
           })),
         });
       }

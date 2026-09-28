@@ -42,14 +42,29 @@ export async function fetchParkHistory(parkId, date) {
 // All attractions with live status for a park.
 export async function fetchLiveAttractions(parkId) {
   const data = await getJSON(`/entity/${parkId}/live`);
-  return (data.liveData || [])
-    .filter((e) => e.entityType === 'ATTRACTION')
-    .map((e) => ({
-      id: e.id,
-      name: e.name,
-      status: e.status || 'CLOSED',
-      waitTime: e.queue?.STANDBY?.waitTime ?? null,
-    }));
+  return (data.liveData || []).filter((e) => e.entityType === 'ATTRACTION').map(parseAttraction);
+}
+
+// One live entry. Besides the standby wait, the queues a guest decides by:
+// a single rider line, and Lightning Lane (RETURN_TIME is Multi Pass,
+// PAID_RETURN_TIME is Single Pass) with its next return time or "full".
+export function parseAttraction(e) {
+  const q = e.queue || {};
+  const ll = q.RETURN_TIME || q.PAID_RETURN_TIME;
+  return {
+    id: e.id,
+    name: e.name,
+    status: e.status || 'CLOSED',
+    waitTime: q.STANDBY?.waitTime ?? null,
+    singleRider: !!q.SINGLE_ACTOR,
+    lightningLane: ll
+      ? {
+        paid: !q.RETURN_TIME,
+        state: ll.state || null, // AVAILABLE, TEMP_FULL, FINISHED
+        returnStart: ll.returnStart || null,
+      }
+      : null,
+  };
 }
 
 // Today's hours (park-local) + timezone.

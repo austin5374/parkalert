@@ -102,6 +102,12 @@
           <svg aria-hidden="true"><use href="#i-search"/></svg>
           <input id="ride-search" type="search" placeholder="Search rides" aria-label="Search rides" autocomplete="off" enterkeyhint="search">
         </form>
+        <div class="segmented" role="group" aria-label="Show">
+          <button type="button" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-filter="open" aria-pressed="false">Open</button>
+          <button type="button" data-filter="down" aria-pressed="false">Down</button>
+          <button type="button" data-filter="following" aria-pressed="false">Alerts on</button>
+        </div>
         <div class="segmented" role="group" aria-label="Sort rides">
           <button type="button" data-sort="name" aria-pressed="true">A–Z</button>
           <button type="button" data-sort="wait" aria-pressed="false">Shortest wait</button>

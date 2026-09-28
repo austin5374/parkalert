@@ -32,6 +32,8 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
       name: att.name,
       status: att.status,
       waitTime: att.waitTime,
+      ...(att.singleRider ? { singleRider: true } : {}),
+      ...(att.lightningLane ? { lightningLane: att.lightningLane } : {}),
       since: prev && prev.status === att.status ? prev.since : now,
       downSince: null,
       downFrom: null, // status it went DOWN from; CLOSED means it never opened

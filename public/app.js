@@ -829,6 +829,21 @@ function waitBadge(r) {
   return a && !a.sentAt ? `<span class="wait-badge" title="Wait alert">${icon('timer')}≤${a.max}</span>` : '';
 }
 
+// The other lines a guest weighs: single rider, and Lightning Lane with its
+// next return time. Words, not symbols, and only where the data has them.
+function queueTags(r) {
+  if (r.status !== 'OPERATING') return [];
+  const tags = [];
+  if (r.singleRider) tags.push('Single rider');
+  const ll = r.lightningLane;
+  if (ll) {
+    const name = ll.paid ? 'Single Pass' : 'Lightning Lane';
+    if (ll.state === 'AVAILABLE' && ll.returnStart) tags.push(`${name} ${fmtTime(Date.parse(ll.returnStart))}`);
+    else if (ll.state === 'TEMP_FULL' || ll.state === 'FINISHED') tags.push(`${name} full`);
+  }
+  return tags;
+}
+
 function rideMeta(r) {
   if (r.status === 'OPERATING') return `Open${r.waitTime != null ? ` · ${r.waitTime} min wait` : ''}`;
   if (r.status === 'DOWN') return `Down ${r.downSince ? fmtDuration(Date.now() - r.downSince) : ''}`.trim();
@@ -846,6 +861,29 @@ function rideOrder(a, b) {
   return rank(a) - rank(b) || (a.waitTime ?? Infinity) - (b.waitTime ?? Infinity) || byName(a, b);
 }
 
+// Which rides to list: all, open ones, down ones, or the ones you get
+// alerts about. Remembered per phone, like the sort.
+let rideFilter = (() => { try { return localStorage.getItem('parkalert.rideFilter') || 'all'; } catch { return 'all'; } })();
+const FILTERS = {
+  all: () => true,
+  open: (r) => r.status === 'OPERATING',
+  down: (r) => r.status === 'DOWN',
+  following: (r) => isFollowing(r.id),
+};
+const FILTER_EMPTY = {
+  open: 'No rides are open right now.',
+  down: 'Nothing is down right now.',
+  following: "You aren't getting alerts about any ride. Turn some on under All.",
+};
+function setRideFilter(filter) {
+  rideFilter = FILTERS[filter] ? filter : 'all';
+  try { localStorage.setItem('parkalert.rideFilter', rideFilter); } catch {}
+  document.querySelectorAll('[data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === rideFilter)));
+  if (dash) renderRides();
+}
+document.querySelectorAll('[data-filter]').forEach((b) => { b.onclick = () => setRideFilter(b.dataset.filter); });
+setRideFilter(rideFilter);
+
 function setRideSort(sort) {
   rideSort = sort;
   try { localStorage.setItem('parkalert.rideSort', sort); } catch {}
@@ -862,7 +900,7 @@ function renderRides() {
 function drawRides() {
   const q = $('#ride-search').value.trim();
   const all = [...dash.rides].sort(rideOrder);
-  const shown = q ? all.filter((r) => matchesSearch(r.name, q)) : all;
+  const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
   const following = all.filter((r) => isFollowing(r.id)).length;
 
   $('#follow-summary').textContent = following === all.length ? `Following all ${all.length}` : `Following ${following} of ${all.length}`;
@@ -875,7 +913,7 @@ function drawRides() {
   const list = $('#rides-list');
   list.className = 'group rides';
   if (!shown.length) {
-    list.innerHTML = `<p class="no-results">No rides match “${esc(q)}”.</p>`;
+    list.innerHTML = `<p class="no-results">${q ? `No rides match “${esc(q)}”.` : esc(FILTER_EMPTY[rideFilter] || 'No rides.')}</p>`;
     return;
   }
   list.innerHTML = shown.map((r) => {
@@ -885,6 +923,7 @@ function drawRides() {
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
             <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}${icon('chevron', 'meta-chevron')}</span>
+            ${queueTags(r).length ? `<span class="tags">${queueTags(r).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}
           </span>
         </button>
         <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
@@ -1220,7 +1259,7 @@ const KIND_NOTE = {
 
 function statusLine(r) {
   if (r.status === 'DOWN' && r.downSince) return `Down for ${fmtDuration(Date.now() - r.downSince)}, since ${fmtTime(r.downSince)}`;
-  return rideMeta(r);
+  return [rideMeta(r), ...queueTags(r)].join(' · ');
 }
 
 // What a range rests on, in a few words for the card.
