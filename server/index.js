@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,17 @@ import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert
 import { LIMITS, createLimiter, clientKey, createKnownCodes } from './ratelimit.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+
+// What the app's own files add up to: stamped into index.html as it is
+// served and sent with every dashboard, so a page left open across a
+// deploy can tell it is running old code and reload.
+export const APP_VERSION = (() => {
+  const h = crypto.createHash('sha1');
+  for (const f of ['index.html', 'app.js', 'time.js', 'style.css', 'sw.js']) {
+    try { h.update(fs.readFileSync(path.join(PUBLIC_DIR, f))); } catch {}
+  }
+  return h.digest('hex').slice(0, 12);
+})();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -124,6 +136,7 @@ async function dashboard(trip) {
       lastCloseTime: schedule?.lastCloseTime || null, // when alerts stop for the day
     },
     ntfyBase: NTFY_BASE,
+    version: APP_VERSION,
     recent: (state.recent || []).filter((e) => e.at > Date.now() - 2 * 3600_000),
     lastPoll: state.lastPoll || null,
     lastError: state.lastError || null,
@@ -319,6 +332,15 @@ function serveStatic(req, res, url) {
     filePath = path.join(PUBLIC_DIR, 'index.html');
   }
   const ext = path.extname(filePath);
+  if (filePath === path.join(PUBLIC_DIR, 'index.html')) {
+    const etag = `"html-${APP_VERSION}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+      return res.end();
+    }
+    res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ETag: etag });
+    return res.end(fs.readFileSync(filePath, 'utf8').replace('__APP_VERSION__', APP_VERSION));
+  }
   // Every file revalidates. With a max-age on scripts, a phone could pair a
   // freshly deployed index.html with the previous app.js for five minutes and
   // break; an unchanged file costs a 304 and no body.

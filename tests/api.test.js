@@ -181,6 +181,15 @@ test('IPv6 clients are limited per /64, not per address', async () => {
   assert.equal(networkKey('198.51.100.4'), '198.51.100.4');
 });
 
+test('the page and the dashboard carry the same app version, so an old page can tell', async () => {
+  const trip = await newTrip();
+  const html = await (await fetch(`${base}/`)).text();
+  const version = html.match(/name="parkalert-version" content="([0-9a-f]{12})"/)?.[1];
+  assert.ok(version, 'index.html is stamped');
+  const { body } = await call('GET', `/api/trips/${trip.code}/dashboard`);
+  assert.equal(body.version, version);
+});
+
 test('right after a park switch the dashboard shows that park now, not an old snapshot', async () => {
   const { parkState } = await import('../server/store.js');
   const yesterday = Date.now() - 20 * 3600_000;

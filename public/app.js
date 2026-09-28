@@ -158,7 +158,7 @@ function toast(text, action) {
   if (action) t.querySelector('button').onclick = () => { hideToast(); action.run(); };
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, action ? 5000 : 2800);
+  toastTimer = setTimeout(hideToast, action?.sticky ? 12000 : action ? 5000 : 2800);
 }
 function hideToast() { $('#toast').classList.remove('show'); }
 
@@ -1840,6 +1840,25 @@ const fmtWeekday = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', ti
   });
 })();
 
+/* ---------- Updates ---------- */
+// A home-screen app can stay open for days. When the server says a newer
+// version is deployed, the page reloads the next time it is put away (so
+// nothing changes under the guest's finger), and offers a Reload now.
+const PAGE_VERSION = document.querySelector('meta[name=parkalert-version]')?.content;
+let updateReady = false;
+function noticeVersion(version) {
+  if (!version || !PAGE_VERSION || PAGE_VERSION.startsWith('__') || version === PAGE_VERSION || updateReady) return;
+  updateReady = true;
+  toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && updateReady) location.reload(); });
+navigator.serviceWorker?.addEventListener('controllerchange', () => {
+  if (PAGE_VERSION && !updateReady) {
+    updateReady = true;
+    toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
+  }
+});
+
 /* ---------- Data ---------- */
 // The last dashboard is kept on the phone, so opening the app with no signal
 // shows the last known rides, marked as such, instead of nothing.
@@ -1878,6 +1897,7 @@ async function fetchDashboard() {
     const next = await api(`/trips/${code}/dashboard`);
     if (code !== tripCode) return; // switched trips while this was on its way
     confirmTrip(next.trip);
+    noticeVersion(next.version);
     // A save still on its way wins over this snapshot's trip, which may
     // predate it; the save's own answer brings the trip up to date.
     if (savesPending && dash) next.trip = dash.trip;
