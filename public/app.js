@@ -1737,7 +1737,8 @@ async function showApp({ firstRun = false } = {}) {
   $('#setup').classList.add('hidden');
   $('#app').classList.remove('hidden');
   document.body.classList.remove('no-tabbar');
-  switchView('down');
+  for (const k of Object.keys(scrollByView)) delete scrollByView[k];
+  switchView('down', { top: true });
   dash ??= recallDash(tripCode);
   renderAll();
   await refresh();
@@ -1763,7 +1764,11 @@ function openPending() {
   }
 }
 
-function switchView(name) {
+// Each tab keeps its own scroll position, as in any tab bar app; only
+// tapping the tab you're already on goes back to the top.
+const scrollByView = {};
+function switchView(name, { top = false } = {}) {
+  if (name !== view) scrollByView[view] = scrollY;
   view = name;
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${name}`));
   document.querySelectorAll('.tab').forEach((t) => {
@@ -1772,7 +1777,7 @@ function switchView(name) {
     if (on) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
   });
-  window.scrollTo({ top: 0 });
+  window.scrollTo({ top: top ? 0 : scrollByView[name] || 0 });
 }
 
 /* ---------- Wire up ---------- */
