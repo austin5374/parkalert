@@ -26,7 +26,9 @@ function score(rows) {
     n: rows.length,
     inRange: round(rows.filter((r) => r.actual >= r.lo && r.actual <= r.hi).length / rows.length),
     width: round(median(rows.map((r) => r.hi - r.lo))),
-    miss: round(median(rows.map((r) => Math.abs(r.actual - r.mid)))),
+    // Distances only for outages seen reopening; one that never did is
+    // counted in the rates above but has no distance to measure.
+    miss: round(median(rows.filter((r) => Number.isFinite(r.actual)).map((r) => Math.abs(r.actual - r.mid)))),
     within7: round(rows.filter((r) => Math.abs(r.actual - r.mid) <= 7.5).length / rows.length),
   };
 }
@@ -47,26 +49,33 @@ export function backtest(history, tls = {}) {
       const traits = learnTraits(past, tl);
       const offsets = { lightning: clearanceOffsets(past, traits, tl, 'lightning'), rain: clearanceOffsets(past, traits, tl, 'rain') };
       const withoutWeather = past.filter((ep) => !(ep.kind === 'breakdown' && causeOf(ep, traits, tl)));
-      for (const ep of eps.filter((e) => e.date === day && isResolved(e))) {
+      for (const ep of eps.filter((e) => e.date === day)) {
+        // An outage that never reopened lasted at least ep.minutes. Once that
+        // is past a range's top it is a known miss, and leaving such outages
+        // out (as the live scorecard used to) flatters the method; before
+        // the top it never got its answer and says nothing.
+        const actual = isResolved(ep) ? ep.minutes : Infinity;
+        const known = (est) => isResolved(ep) || ep.minutes > (est.p75 ?? est.p50);
         const cause = causeOf(ep, traits, tl);
         // At the moment it went down.
         const old = estimate({ [parkId]: past }, parkId, ep.rideId, 0, ep.kind);
-        if (old?.p50 != null) add(`${cause || ep.kind}: when it went down, old`, row(old, ep.minutes));
+        if (old?.p50 != null && known(old)) add(`${cause || ep.kind}: when it went down, old`, row(old, actual));
         if (!cause) {
           const cleaner = estimate({ [parkId]: withoutWeather }, parkId, ep.rideId, 0, ep.kind);
-          if (cleaner?.p50 != null) add(`${ep.kind}: when it went down, weather outages left out`, row(cleaner, ep.minutes));
+          if (cleaner?.p50 != null && known(cleaner)) add(`${ep.kind}: when it went down, weather outages left out`, row(cleaner, actual));
           continue;
         }
+        if (!isResolved(ep)) continue; // the weather-cleared stage needs a reopening time
         // At the moment the weather cleared: what the app says then.
         const stop = ep.start + ep.minutes * 60_000;
         const c = clearedAt(cause, ep.start, stop, tl);
         if (c?.state !== 'passed' || c.end <= ep.start) continue;
         const elapsed = (c.end - ep.start) / 60_000;
-        const actual = (stop - c.end) / 60_000;
+        const afterClear = (stop - c.end) / 60_000;
         const oldThen = estimate({ [parkId]: past }, parkId, ep.rideId, elapsed, ep.kind);
-        if (oldThen?.p50 != null) add(`${cause}: when the weather cleared, old`, row(oldThen, actual));
+        if (oldThen?.p50 != null) add(`${cause}: when the weather cleared, old`, row(oldThen, afterClear));
         const neu = afterClearing(offsets[cause], ep.rideId, 0, cause);
-        if (neu?.p50 != null) add(`${cause}: when the weather cleared, new (${neu.basis === 'rule' ? '30-min rule' : 'learned'})`, row(neu, actual));
+        if (neu?.p50 != null) add(`${cause}: when the weather cleared, new (${neu.basis === 'rule' ? '30-min rule' : 'learned'})`, row(neu, afterClear));
       }
     }
   }
