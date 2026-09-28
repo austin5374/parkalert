@@ -2468,9 +2468,18 @@ function confirmInvite(code, trip) {
     const code = tripParam.toUpperCase();
     if (code !== tripCode) {
       const previous = tripCode;
-      setTrip(code);
-      if (previous) toast(`Showing trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
-      return;
+      // Check the linked trip still exists before leaving this phone's own
+      // trip for it; switching first and finding it gone would drop both.
+      // Offline, the check can't run, so trust the link as before.
+      let missing = false;
+      try { await api(`/trips/${code}`); } catch (err) { missing = err.status === 404; }
+      if (!missing) {
+        setTrip(code);
+        if (previous) toast(`Showing trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
+        return;
+      }
+      pendingOpen = null;
+      toast(`That alert was for trip ${code}, which no longer exists`);
     }
   }
   if (joinParam) {
