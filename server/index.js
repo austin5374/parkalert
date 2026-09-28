@@ -215,8 +215,19 @@ async function handleApi(req, res, url) {
     if ((wait = limit.push.take(who) || limit.push.take(`trip:${trip.code}`))) return tooMany(res, wait);
   }
 
+  // Phones ask every 30 seconds and most answers match the last one, so
+  // the dashboard carries an ETag (over everything but the clock) and an
+  // unchanged one is a 304 with no body: less cellular data in the park.
+  // The browser's cache does the revalidating; the app just calls fetch.
   if (trip && req.method === 'GET' && parts[3] === 'dashboard') {
-    return json(res, 200, await dashboard(trip));
+    const body = await dashboard(trip);
+    const etag = `"d-${crypto.createHash('sha1').update(JSON.stringify({ ...body, now: 0 })).digest('base64url').slice(0, 16)}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+      return res.end();
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', ETag: etag, 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify(body));
   }
 
   // Everything the ride detail sheet shows: live status, today's changes and

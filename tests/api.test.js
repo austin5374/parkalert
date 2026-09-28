@@ -190,6 +190,16 @@ test('the page and the dashboard carry the same app version, so an old page can 
   assert.equal(body.version, version);
 });
 
+test('an unchanged dashboard is a 304 with no body', async () => {
+  const trip = await newTrip();
+  const first = await fetch(`${base}/api/trips/${trip.code}/dashboard`);
+  const etag = first.headers.get('etag');
+  assert.ok(etag);
+  const again = await fetch(`${base}/api/trips/${trip.code}/dashboard`, { headers: { 'If-None-Match': etag } });
+  assert.equal(again.status, 304);
+  assert.equal((await again.text()).length, 0);
+});
+
 test('right after a park switch the dashboard shows that park now, not an old snapshot', async () => {
   const { parkState } = await import('../server/store.js');
   const yesterday = Date.now() - 20 * 3600_000;

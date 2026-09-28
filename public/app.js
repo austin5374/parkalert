@@ -714,7 +714,7 @@ function leaveTrip({ undoable = false } = {}) {
   } catch {}
   tripCode = null;
   dash = null;
-  clearInterval(refreshTimer);
+  clearTimeout(refreshTimer);
   showSetup();
   if (undoable && code) {
     const ready = localStorage.getItem(`parkalert.alertsReady.${code}`);
@@ -2066,6 +2066,19 @@ pullToRefresh($('#setup .setup'), $('#setup-ptr'), async () => {
   await renderSetupParks();
 });
 
+// The next background refresh: every 30 seconds while the park is open,
+// every 5 minutes once it has closed for the day, and none while the app is
+// out of sight (coming back refreshes at once).
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  if (!tripCode) return;
+  const closed = dash && alertState().kind === 'closed';
+  refreshTimer = setTimeout(async () => {
+    if (!document.hidden) await refresh();
+    scheduleRefresh();
+  }, closed ? 5 * 60_000 : REFRESH_MS);
+}
+
 /* ---------- Updates ---------- */
 // A home-screen app can stay open for days. When the server says a newer
 // version is deployed, the page reloads the next time it is put away (so
@@ -2169,8 +2182,7 @@ async function showApp({ firstRun = false } = {}) {
   dash ??= recallDash(tripCode);
   renderAll();
   await refresh();
-  clearInterval(refreshTimer);
-  refreshTimer = setInterval(refresh, REFRESH_MS);
+  scheduleRefresh();
   if (pendingOpen) openPending();
   else if (firstRun && dash && !alertsReady()) openAlertSetup();
 }
