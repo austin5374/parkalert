@@ -129,3 +129,25 @@ test('unknown routes are 404', async () => {
   assert.equal((await call('GET', '/api/nope')).status, 404);
   assert.equal((await call('DELETE', '/api/parks')).status, 404);
 });
+
+test('test alerts are rate limited with a Retry-After', async () => {
+  const trip = await newTrip();
+  const send = () => fetch(`${base}/api/trips/${trip.code}/test`, { method: 'POST', headers: { 'X-Forwarded-For': '203.0.113.7' } });
+  const statuses = [];
+  for (let i = 0; i < 12; i++) statuses.push((await send()).status);
+  assert.deepEqual(statuses.slice(0, 10), Array(10).fill(200));
+  const res = await send();
+  assert.equal(res.status, 429);
+  assert.ok(Number(res.headers.get('retry-after')) > 0);
+});
+
+test('guessing trip codes runs out quickly, and then even a right guess waits', async () => {
+  const trip = await newTrip();
+  const get = (code) => fetch(`${base}/api/trips/${code}`, { headers: { 'X-Forwarded-For': '203.0.113.8' } });
+  let misses = 0;
+  while ((await get('ZZZZZ2')).status === 404) misses++;
+  assert.equal(misses, 30);
+  assert.equal((await get(trip.code)).status, 429);
+  // Another client is unaffected.
+  assert.equal((await fetch(`${base}/api/trips/${trip.code}`)).status, 200);
+});

@@ -9,6 +9,7 @@ import { startPolling, pollPark, simulateTransition, downOutlook, currentSchedul
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
 import { HttpError, requireObject, parseTripPatch } from './validate.js';
+import { LIMITS, createLimiter, clientKey } from './ratelimit.js';
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -27,6 +28,13 @@ const MIME = {
 function json(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+const limit = Object.fromEntries(Object.entries(LIMITS).map(([name, cfg]) => [name, createLimiter(cfg)]));
+
+function tooMany(res, waitMs) {
+  res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
+  res.end(JSON.stringify({ error: 'too many requests, try again shortly' }));
 }
 
 function readBody(req) {
@@ -87,12 +95,16 @@ async function dashboard(trip) {
 
 async function handleApi(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
+  const who = clientKey(req);
+  let wait = limit.api.take(who);
+  if (wait) return tooMany(res, wait);
 
   if (req.method === 'GET' && url.pathname === '/api/parks') {
     return json(res, 200, { parks: PARKS });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/trips') {
+    if ((wait = limit.create.take(who))) return tooMany(res, wait);
     const body = requireObject(await readBody(req));
     if (typeof body.parkId !== 'string' || !getPark(body.parkId)) return json(res, 400, { error: 'unknown parkId' });
     const trip = createTrip(body.parkId);
@@ -100,9 +112,19 @@ async function handleApi(req, res, url) {
     return json(res, 201, { trip: tripView(trip) });
   }
 
+  // Guessing codes costs a token per miss; once they run out, even a right
+  // guess waits, so enumeration gains nothing by pressing on.
+  if (parts[1] === 'trips' && parts[2] && (wait = limit.miss.wait(who))) return tooMany(res, wait);
   const trip = parts[1] === 'trips' && parts[2] ? getTrip(parts[2]) : null;
   if (parts[1] === 'trips' && parts[2] && !trip) {
+    limit.miss.take(who);
     return json(res, 404, { error: 'trip not found' });
+  }
+
+  // Test and simulated alerts are metered per client and per trip, so
+  // neither one caller nor many can flood a trip's phones.
+  if (trip && req.method === 'POST' && (parts[3] === 'test' || parts[3] === 'simulate')) {
+    if ((wait = limit.push.take(who) || limit.push.take(`trip:${trip.code}`))) return tooMany(res, wait);
   }
 
   if (trip && req.method === 'GET' && parts[3] === 'dashboard') {

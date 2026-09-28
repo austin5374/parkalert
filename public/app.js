@@ -1330,7 +1330,9 @@ $('#join-form').onsubmit = async (e) => {
   } catch (err) {
     joinNote(err.status === 404
       ? `No trip with code ${code}. Check the letters and try again.`
-      : "Can't reach ParkAlert right now. Check your connection.", true);
+      : err.status === 429
+        ? 'Too many tries. Wait a minute, then try again.'
+        : "Can't reach ParkAlert right now. Check your connection.", true);
   }
 };
 
@@ -1348,8 +1350,8 @@ $('#row-test').onclick = async () => {
   try {
     await api(`/trips/${tripCode}/test`, { method: 'POST' });
     toast('Test alert sent. Check your notifications.');
-  } catch {
-    toast("Couldn't send the test. Try again in a moment.");
+  } catch (err) {
+    toast(err.status === 429 ? 'That was a lot of tests. Try again in a few minutes.' : "Couldn't send the test. Try again in a moment.");
   }
   d.textContent = '';
 };
