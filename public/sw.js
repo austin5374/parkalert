@@ -11,10 +11,16 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))));
-  // No skipWaiting here: a new version waits until the page says the guest
-  // is ready (tapped Reload, or put the app away), so nothing changes under
-  // a finger mid-use.
+  e.waitUntil((async () => {
+    await caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' }))));
+    // Normally a new version waits until the page says the guest is ready
+    // (tapped Reload, or put the app away), so nothing changes under a
+    // finger mid-use. Pages from before versioned caches (parkalert-v1 to
+    // v9) don't know to say so, so replacing one of those takes over at
+    // once; their page then offers Reload itself.
+    const keys = await caches.keys();
+    if (keys.some((k) => /^parkalert-v\d+$/.test(k))) await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('message', (e) => {
