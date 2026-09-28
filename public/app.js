@@ -1785,8 +1785,14 @@ function mountCharts(root) {
 }
 
 // Posted waits hold until they change, so the line steps rather than slopes.
+// The box's own padding, which is in rem and grows with the text size.
+const contentWidth = (box) => {
+  const cs = getComputedStyle(box);
+  return box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+};
+
 function waitChart(box, { waits, now }) {
-  const W = Math.max(200, box.clientWidth - 32), H = 116, top = 16, bottom = 2;
+  const W = Math.max(160, contentWidth(box)), H = 116, top = 6, bottom = 2;
   const pts = waits.map(([t, w]) => ({ t, w }));
   const t0 = pts[0].t, t1 = Math.max(now, t0 + 60_000);
   const max = niceMax(Math.max(10, ...pts.map((p) => p.w ?? 0)));
@@ -1798,11 +1804,20 @@ function waitChart(box, { waits, now }) {
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img', 'data-act': 'wait-chart' });
   svg.append(
     svgEl('line', { x1: 0, x2: W, y1: y(max), y2: y(max), class: 'grid' }),
+    svgEl('line', { x1: 0, x2: W, y1: y(max / 2), y2: y(max / 2), class: 'grid faint' }),
     svgEl('line', { x1: 0, x2: W, y1: base, y2: base, class: 'axis' })
   );
-  const maxLabel = svgEl('text', { x: 0, y: y(max) - 3, class: 'tick' });
-  maxLabel.textContent = `${max} min`;
-  svg.append(maxLabel);
+  // Hour marks every two hours on the park's clock, as Weather's hourly
+  // chart has; the labels are HTML below, so they grow with the text size.
+  const hours = [];
+  const tz = dash?.park.timezone;
+  for (let t = nextLocalHour(t0, tz, 0) - 24 * 3600_000; t <= t1; t += 3600_000) {
+    // Clear of the start time and "Now" at the ends, which are wider.
+    if (x(t) < 70 || x(t) > W - 50) continue;
+    const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date(t)));
+    if (hour % 2 === 0) hours.push(t);
+  }
+  for (const t of hours) svg.append(svgEl('line', { x1: x(t), x2: x(t), y1: base - 4, y2: base, class: 'axis' }));
 
   let line = '', area = '';
   pts.forEach((p, i) => {
@@ -1865,13 +1880,18 @@ function waitChart(box, { waits, now }) {
     }
   });
 
-  const axis = el(`<div class="chart-x"><span>${fmtTime(t0)}</span><span>Now</span></div>`);
-  box.append(readout, svg, axis);
+  const yLabels = el(`<div class="chart-y"><span>${max} min</span><span>0</span></div>`);
+  const hourLabel = (t) => new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', timeZone: tz }).format(new Date(t)).replace(':00', '');
+  const axis = el(`<div class="chart-x"><span>${fmtTime(t0)}</span>${hours.map((t) =>
+    `<span class="mid" style="left:${((x(t) / W) * 100).toFixed(1)}%">${esc(hourLabel(t))}</span>`).join('')}<span>Now</span></div>`);
+  const plot = el('<div class="chart-plot"></div>');
+  plot.append(svg, yLabels);
+  box.append(readout, plot, axis);
 }
 
 // One column per archived day: minutes down. Tap a column for that day.
 function dayBars(box, { days }) {
-  const W = Math.max(200, box.clientWidth), H = 96, base = H - 2;
+  const W = Math.max(160, contentWidth(box)), H = 96, base = H - 2;
   const max = niceMax(Math.max(10, ...days.map((d) => d.minutes)));
   const slot = W / days.length, bw = Math.min(24, slot * 0.55);
   const total = days.reduce((n, d) => n + d.outages, 0);
@@ -1904,13 +1924,18 @@ function dayBars(box, { days }) {
     hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(i); } });
     svg.append(mark, hit);
   });
-  const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${days.length},1fr)">${days.map((d) => `<span>${esc(fmtWeekday(d.date))}</span>`).join('')}</div>`);
+  // Past ten days a weekday per column collides ("MonTueWed..."), so only
+  // Mondays are labelled, with the date.
+  const many = days.length > 10;
+  const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${days.length},1fr)">${days.map((d) =>
+    `<span>${esc(!many ? fmtWeekday(d.date) : fmtWeekday(d.date) === 'Mon' ? fmtShort(d.date) : '')}</span>`).join('')}</div>`);
   box.append(readout, svg, labels);
 }
 
 const dateOnly = (d) => new Date(`${d}T12:00:00Z`);
 const fmtDate = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
 const fmtWeekday = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtShort = (d) => new Intl.DateTimeFormat(LOCALE, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
 
 /* ---------- Pull to refresh ---------- */
 // Only on touch, only from the very top, rubber-banded, and it springs home.

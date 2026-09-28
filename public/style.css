@@ -487,7 +487,6 @@ html.sheet-up body { background: transparent; }
 .chart .grid { stroke: var(--separator); stroke-width: 1; }
 .chart .axis { stroke: var(--separator); stroke-width: 1; }
 .chart text { stroke: none; }
-.chart .tick { fill: var(--label-2); font-size: 11px; letter-spacing: 0; }
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chart .area { fill: var(--accent); opacity: 0.1; stroke: none; }
 .chart .crosshair { stroke: var(--label-2); stroke-width: 1; }
@@ -499,7 +498,14 @@ html.sheet-up body { background: transparent; }
 .chart .hit { fill: transparent; stroke: none; cursor: pointer; outline: none; }
 .chart .hit:focus-visible { fill: var(--fill); }
 .chart-readout { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.5rem; font-variant-numeric: tabular-nums; min-height: 1.3em; letter-spacing: 0; }
-.chart-x { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--label-2); margin-top: 0.3rem; letter-spacing: 0; }
+.chart-x { position: relative; display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--label-2); margin-top: 0.3rem; letter-spacing: 0; }
+.chart-x .mid { position: absolute; transform: translateX(-50%); }
+.chart-plot { position: relative; margin-top: 1.1rem; }
+.chart-y { position: absolute; inset: 0; pointer-events: none; font-size: 0.75rem; color: var(--label-2); letter-spacing: 0; }
+.chart-y span { position: absolute; left: 0; }
+.chart-y span:first-child { top: -1.1rem; }
+.chart-y span:last-child { bottom: 0.15rem; left: 0.2rem; }
+.chart .grid.faint { opacity: 0.5; stroke-dasharray: 2 3; }
 .chart-days { display: grid; text-align: center; font-size: 0.75rem; color: var(--label-2); margin-top: 0.35rem; letter-spacing: 0; }
 
 /* An activity indicator in a row's trailing slot. */
