@@ -922,7 +922,7 @@ function drawRides() {
       <div class="row ride-row">
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}${icon('chevron', 'meta-chevron')}</span>
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}</span>
             ${queueTags(r).length ? `<span class="tags">${queueTags(r).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}
           </span>
         </button>
