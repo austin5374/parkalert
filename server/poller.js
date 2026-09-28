@@ -1,10 +1,12 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
 import { publish, formatDuration } from './notify.js';
 import { APP_URL } from './config.js';
-import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive, history } from './store.js';
+import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
+import { weatherOutlook, modelHistory } from './weatheroutlook.js';
+import { refreshWeather } from './weather.js';
 import { isLateOpening } from './episodes.js';
 import { recordWaits } from './insights.js';
 import { localDate } from './time.js';
@@ -184,16 +186,35 @@ function forgetHeld(parkId) {
 // What to tell people about a DOWN ride: what kind of outage it looks like,
 // and a reopen range from past outages of that kind. Shared by alerts and the
 // dashboard so both always say the same thing.
-export function downOutlook(parkId, rideId, elapsedMin) {
-  const live = classifyLive(parkState[parkId]?.rides || {}, rideId);
-  const est = estimate(history.episodes, parkId, rideId, elapsedMin, live.kind);
+// When the weather is why the ride is down, the estimate runs from when it
+// clears, and the text says where the weather stands.
+export function downOutlook(parkId, rideId, elapsedMin, now = Date.now()) {
+  const rides = parkState[parkId]?.rides || {};
+  const live = classifyLive(rides, rideId);
+  const w = weatherOutlook(parkId, rideId, rides[rideId], live.kind, now);
+  const est = w?.est ?? estimate(modelHistory(), parkId, rideId, elapsedMin, live.kind);
   return {
     ...live,
-    text: describe(est),
+    ...(w ? { cause: w.cause, weather: w.weather, clearedAt: w.clearedAt ?? null } : {}),
+    text: describeOutlook(w, est, parkState[parkId]?.timezone),
     basis: est && !est.longerThanUsual ? { from: est.basis, outages: est.n } : null,
     // Minutes from now, for the dashboard's timeline; the text is the promise.
     window: est && !est.longerThanUsual ? { lo: est.p25, hi: est.p75 } : null,
   };
+}
+
+// "Storm passed at 3:12 PM. Usually back in 20 to 35 min", or while it goes
+// on, "Lightning still nearby. ..." with a range if the archive can give one.
+export function describeOutlook(w, est, timezone) {
+  const range = describe(est);
+  if (!w) return range;
+  const lead = w.weather === 'passed'
+    ? `${w.cause === 'rain' ? 'Rain stopped' : 'Storm passed'} at ${localTime(w.clearedAt, timezone)}.`
+    : w.what === 'rain' ? 'Still raining.' : 'Lightning still nearby.';
+  const fallback = w.cause === 'rain'
+    ? 'It reopens once the rain stops and the track dries.'
+    : 'Rides reopen about 30 min after it passes.';
+  return `${lead} ${range ?? fallback}`;
 }
 
 // This many alerts of one kind in a single poll become one push. A storm hold
@@ -438,6 +459,8 @@ async function doPollPark(parkId) {
   parkState[parkId] ??= { rides: {}, timezone: getPark(parkId)?.timezone || 'America/New_York', schedule: null };
   const state = parkState[parkId];
   try {
+    // Weather is fetched alongside, and never holds up the ride poll.
+    refreshWeather(parkId);
     await refreshSchedule(parkId);
     const live = await fetchLiveAttractions(parkId);
     // An empty list for a park we know is an API hiccup, not every ride

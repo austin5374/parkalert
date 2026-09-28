@@ -75,21 +75,28 @@ export async function fetchArchiveDay(station, utcDate) {
   return out;
 }
 
-let liveRunning = false;
-export async function syncLiveWeather(now = Date.now()) {
-  if (liveRunning) return;
-  liveRunning = true;
+// Called on every poll of a park: fetches its stations' latest reports at
+// most every 5 minutes, so a park gets weather the moment someone starts
+// watching it, and none once nobody does.
+const lastLive = new Map(); // station list -> epoch ms of the last fetch
+export async function refreshWeather(parkId, now = Date.now()) {
+  const stations = stationsFor(parkId);
+  const key = stations.join(',');
+  if (!stations.length || now - (lastLive.get(key) ?? -Infinity) < LIVE_INTERVAL_MS) return;
+  lastLive.set(key, now);
   try {
-    const stations = [...new Set(activeParkIds(now).flatMap(stationsFor))];
-    if (!stations.length) return;
     const byStation = await fetchLive(stations);
     for (const [station, list] of Object.entries(byStation)) addObservations(station, list, now);
     saveWeather();
   } catch (err) {
     console.error('[weather] live reports:', err.message);
-  } finally {
-    liveRunning = false;
   }
+}
+
+// Every watched park's stations, now (tests, and the first poll's warm-up).
+export async function syncLiveWeather(now = Date.now()) {
+  lastLive.clear();
+  await Promise.all(activeParkIds(now).map((id) => refreshWeather(id, now)));
 }
 
 // UTC days of reports each station needs: the outage archive's park days,
@@ -174,8 +181,6 @@ export function spellAt(list, t) {
 export function startWeatherSync() {
   const total = Object.values(weather.obs).reduce((n, o) => n + o.length, 0);
   console.log(`[weather] ${total} report(s) loaded`);
-  syncLiveWeather();
   syncWeatherArchive();
-  setInterval(syncLiveWeather, LIVE_INTERVAL_MS).unref();
   setInterval(syncWeatherArchive, ARCHIVE_INTERVAL_MS).unref();
 }

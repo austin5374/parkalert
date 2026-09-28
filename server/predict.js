@@ -143,6 +143,54 @@ export function estimate(history, parkId, rideId, elapsedMin, kind) {
   return sawHistory ? { longerThanUsual: true, kind } : null;
 }
 
+// Weather outages are timed from when the weather cleared, not from when the
+// ride went down: that is when Disney's clock starts, so the spread is far
+// smaller than "how long do outages last".
+
+// Disney's practice: outdoor rides reopen about 30 minutes after the last
+// lightning nearby, give or take the time to restart. Used only until the
+// archive has enough storms here to say how it really goes.
+export const LIGHTNING_RULE = { p25: 30, p50: 35, p75: 45 };
+// A ride's own storms count once it has this many; else the park's.
+export const RIDE_WEATHER_MIN = 5;
+
+// Time left, given the weather cleared `sinceClearMin` ago.
+//   offsets: past { rideId, minutes, endedAs } from clearanceOffsets()
+export function afterClearing(offsets, rideId, sinceClearMin, cause) {
+  const own = offsets.filter((o) => o.rideId === rideId);
+  for (const [basis, eps, min] of [['ride', own, RIDE_WEATHER_MIN], ['park', offsets, MIN_SAMPLES]]) {
+    if (eps.filter((e) => e.minutes > sinceClearMin).length < min) continue;
+    const r = remaining(eps, sinceClearMin);
+    if (r && r.p50 !== null) return { ...r, basis, kind: 'weather' };
+  }
+  if (cause === 'lightning' && sinceClearMin < LIGHTNING_RULE.p75) {
+    const left = (m) => Math.max(1, m - sinceClearMin);
+    return { p25: left(LIGHTNING_RULE.p25), p50: left(LIGHTNING_RULE.p50), p75: left(LIGHTNING_RULE.p75), n: 0, stayedDownShare: 0, basis: 'rule', kind: 'weather' };
+  }
+  return null;
+}
+
+// Time left while the storm (or rain) is still going on: how much longer
+// spells like this one last here, plus the time to reopen once it clears.
+// Adding the quartiles overstates the spread a little, which is the honest
+// direction to be wrong in.
+//   spellEps: past spells as { minutes, endedAs }; ageMin: this one so far
+export function duringWeather(spellEps, ageMin, offsets, rideId, cause) {
+  const left = spellEps.filter((e) => e.minutes > ageMin).length >= MIN_SAMPLES ? remaining(spellEps, ageMin) : null;
+  const after = afterClearing(offsets, rideId, 0, cause);
+  if (!left || left.p50 === null || !after) return null;
+  // A quartile the data can't reach falls back to that side's median.
+  return {
+    p25: (left.p25 ?? left.p50) + (after.p25 ?? after.p50),
+    p50: left.p50 + after.p50,
+    p75: (left.p75 ?? left.p50) + (after.p75 ?? after.p50),
+    n: after.n,
+    stayedDownShare: after.stayedDownShare,
+    basis: after.basis,
+    kind: 'weather',
+  };
+}
+
 // Round so the range reads like a person said it: exact under 15 min, then to 5.
 function roundMin(m) {
   const v = Math.max(1, Math.round(m));
