@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
-import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, history } from './store.js';
+import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, parkDayStart } from './insights.js';
 import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, APP_URL } from './poller.js';
 import { startHistorySync } from './history.js';
@@ -312,4 +312,11 @@ if (isMain) {
     startPolling();
     startHistorySync();
   });
+  // Railway stops the old container with SIGTERM on every deploy.
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+      flushState();
+      process.exit(0);
+    });
+  }
 }

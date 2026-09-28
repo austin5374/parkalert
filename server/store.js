@@ -21,10 +21,10 @@ function load(file, fallback) {
   }
 }
 
-function saveAtomic(file, obj) {
+function saveAtomic(file, obj, indent) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 1));
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, indent));
   fs.renameSync(tmp, file);
 }
 
@@ -43,15 +43,33 @@ export const parkState = load(STATE_FILE, {});
 //   episodes: see server/episodes.js
 export const history = load(HISTORY_FILE, { fetched: {}, episodes: {} });
 
+// State and history are large and only ever read by the app, so they are
+// written compactly; trips.json stays readable for a person poking at it.
 export function saveHistory() {
   saveAtomic(HISTORY_FILE, history);
 }
 
 export function saveTrips() {
-  saveAtomic(TRIPS_FILE, trips);
+  saveAtomic(TRIPS_FILE, trips, 1);
 }
 
+// Every park's poll lands within the same second or so, and each used to
+// rewrite the whole file; now one write a moment later covers them all.
+let stateTimer = null;
 export function saveState() {
+  if (stateTimer) return;
+  stateTimer = setTimeout(() => {
+    stateTimer = null;
+    saveAtomic(STATE_FILE, parkState);
+  }, 1000);
+  stateTimer.unref();
+}
+
+// Write any pending state now, e.g. on shutdown.
+export function flushState() {
+  if (!stateTimer) return;
+  clearTimeout(stateTimer);
+  stateTimer = null;
   saveAtomic(STATE_FILE, parkState);
 }
 
