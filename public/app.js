@@ -91,22 +91,44 @@ async function api(path, opts = {}) {
 const patchTrip = (body) => api(`/trips/${tripCode}`, { method: 'PATCH', body });
 
 // Optimistic change with an honest rollback: the UI moves first, and if the
-// server refuses, it moves back and says so.
-async function save(apply, body, afterSave) {
+// server refuses, it moves back and says so. Saves go out one at a time, in
+// order, and a failure shows the trip exactly as the server last confirmed
+// it. Restoring a snapshot taken before this change instead used to undo
+// the wrong thing when two saves overlapped and both failed, leaving a
+// switch showing a change that was never saved.
+let confirmedTrip = null; // the trip as the server last returned it
+let savesPending = 0;
+let saveChain = Promise.resolve();
+function confirmTrip(trip) {
+  confirmedTrip = structuredClone(trip);
+}
+function save(apply, body, afterSave) {
   const before = structuredClone(dash.trip);
   apply(dash.trip);
   renderAll();
-  try {
-    const { trip } = await patchTrip(body);
-    Object.assign(dash.trip, trip);
-    afterSave?.(before);
-    return true;
-  } catch {
-    dash.trip = before;
-    renderAll();
-    toast("Couldn't save that. Check your connection and try again.");
-    return false;
-  }
+  savesPending++;
+  const run = saveChain.then(async () => {
+    try {
+      const { trip } = await patchTrip(body);
+      confirmTrip(trip);
+      // Later saves still on their way keep their optimistic changes.
+      if (savesPending === 1) {
+        Object.assign(dash.trip, trip);
+        renderAll();
+      }
+      afterSave?.(before);
+      return true;
+    } catch {
+      if (confirmedTrip) dash.trip = structuredClone(confirmedTrip);
+      renderAll();
+      toast("Couldn't save that. Check your connection and try again.");
+      return false;
+    } finally {
+      savesPending--;
+    }
+  });
+  saveChain = run.catch(() => {});
+  return run;
 }
 
 /* ---------- Toast ---------- */
@@ -1386,6 +1408,7 @@ async function setWaitAlert(rideId, max) {
     const path = `/trips/${tripCode}/wait-alerts/${encodeURIComponent(rideId)}`;
     const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: { max } });
     dash.trip = trip;
+    confirmTrip(trip);
     renderAll();
     if (sheetContext?.type === 'ride' && sheetContext.id === rideId) loadRide(rideId);
     toast(max == null ? 'Wait alert off' : `We'll tell you when it's ${max} min or less`);
@@ -1825,6 +1848,10 @@ async function fetchDashboard() {
   try {
     const next = await api(`/trips/${code}/dashboard`);
     if (code !== tripCode) return; // switched trips while this was on its way
+    confirmTrip(next.trip);
+    // A save still on its way wins over this snapshot's trip, which may
+    // predate it; the save's own answer brings the trip up to date.
+    if (savesPending && dash) next.trip = dash.trip;
     dash = next;
     offline = false;
     rememberDash(code, next);
