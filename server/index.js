@@ -5,12 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary } from './insights.js';
-import { parkDayStart } from './time.js';
+import { parkDayStart, localDate } from './time.js';
+import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
 import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
 import { PORT, NTFY_BASE, APP_URL } from './config.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
-import { HttpError, requireObject, parseTripPatch } from './validate.js';
+import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert } from './validate.js';
 import { LIMITS, createLimiter, clientKey } from './ratelimit.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -60,6 +61,8 @@ function tooMany(res, waitMs) {
 }
 
 const MAX_BODY = 100_000;
+// A park has a few dozen rides; this keeps one trip from bloating trips.json.
+const MAX_WAIT_ALERTS = 100;
 const HEALTH_STALE_MS = 5 * 60_000;
 
 // Bytes are joined before decoding, so a character split across chunks
@@ -93,9 +96,11 @@ function readBody(req) {
 // A park's time zone: from its schedule once fetched, else from the park list.
 const zoneOf = (parkId) => parkState[parkId]?.timezone || getPark(parkId)?.timezone || 'America/New_York';
 
+const parkToday = (parkId, now = Date.now()) => localDate(now, zoneOf(parkId));
+
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
-  return { code, topic, parkId, watched, mute, rideMutes };
+  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)) };
 }
 
 
@@ -241,6 +246,28 @@ async function handleApi(req, res, url) {
     if (patch.watched !== undefined) trip.watched = patch.watched;
     if (patch.mute !== undefined) trip.mute = patch.mute;
     if (patch.rideMutes !== undefined) trip.rideMutes = patch.rideMutes;
+    saveTrips();
+    return json(res, 200, { trip: tripView(trip) });
+  }
+
+  // A wait-time alert for one ride: PUT { max } sets it (replacing any, and
+  // re-arming one already sent), DELETE removes it.
+  if (trip && parts[3] === 'wait-alerts' && parts.length === 5 && (req.method === 'PUT' || req.method === 'DELETE')) {
+    let rideId;
+    try {
+      rideId = requireRideId(decodeURIComponent(parts[4]));
+    } catch {
+      return json(res, 400, { error: 'bad ride id' });
+    }
+    const today = parkToday(trip.parkId);
+    pruneWaitAlerts(trip, today);
+    const alerts = { ...trip.waitAlerts };
+    if (req.method === 'PUT') {
+      const { max } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      alerts[rideId] = { max, day: today, setAt: Date.now() };
+      if (Object.keys(alerts).length > MAX_WAIT_ALERTS) return json(res, 400, { error: 'too many wait alerts' });
+    } else delete alerts[rideId];
+    trip.waitAlerts = alerts;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });
   }

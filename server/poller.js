@@ -1,7 +1,8 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
 import { publish, formatDuration } from './notify.js';
 import { APP_URL } from './config.js';
-import { trips, parkState, saveState, activeParkIds, isTripActive, history } from './store.js';
+import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive, history } from './store.js';
+import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
 import { isLateOpening } from './episodes.js';
@@ -316,6 +317,33 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
   return { sent, skipped };
 }
 
+// Wait-time alerts are about the ride as it is now, not a transition, so they
+// are checked on every poll. A pause or the park's close holds them back
+// without using them up; one fires once, and only if the push got out.
+export async function notifyWaitAlerts(parkId, rides, now = Date.now()) {
+  const state = parkState[parkId];
+  const today = localDate(now, state?.timezone || getPark(parkId)?.timezone || 'America/New_York');
+  const parkName = getPark(parkId)?.name || 'the park';
+  let changed = false;
+  let sent = 0;
+  const targets = Object.values(trips).filter((t) => t.parkId === parkId && t.waitAlerts && isTripActive(t, now));
+  await Promise.all(targets.map(async (trip) => {
+    if (pruneWaitAlerts(trip, today)) changed = true;
+    const paused = trip.mute && (trip.mute.until === null || trip.mute.until > now);
+    if (paused || isPastClosing(state, now)) return;
+    for (const { ride, alert } of dueWaitAlerts(trip, rides, today)) {
+      if (!(await publish(trip.topic, { ...waitAlertMessage(ride, alert, parkName), click: APP_URL }))) continue;
+      alert.sentAt = now;
+      alert.sentWait = ride.waitTime;
+      changed = true;
+      sent++;
+    }
+  }));
+  if (changed) saveTrips();
+  if (sent) console.log(`[poller] ${parkName}: sent ${sent} wait alert(s)`);
+  return sent;
+}
+
 // Fire a fake transition through the real notification pipeline (fan-out, mutes,
 // closing-time auto-mute all apply). Never touches real ride state.
 export async function simulateTransition(trip, type) {
@@ -439,7 +467,10 @@ async function doPollPark(parkId) {
     // Every poll, so an alert held by the cooldown goes out once it passes.
     const news = events.filter((ev) => ev.type !== 'CLOSED' || closingIsNews(state, now));
     const toSend = gateEvents(parkId, news, rides, now);
-    if (toSend.length) await notifyTrips(parkId, toSend);
+    await Promise.all([
+      toSend.length ? notifyTrips(parkId, toSend) : null,
+      notifyWaitAlerts(parkId, rides, now),
+    ]);
   } catch (err) {
     state.lastError = err.message;
     console.error(`[poller] poll failed for ${parkId}:`, err.message);
