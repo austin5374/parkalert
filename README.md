@@ -1,4 +1,4 @@
-# ParkAlert 🎢
+# ParkAlert
 
 Mobile-first PWA that pings your phone the moment a Disney ride goes down or comes back up, with how long it was down and, when it goes down, how long outages like it usually last. When a storm is why, it watches the weather and times the reopening from when the storm passes. It can also ping you when a ride's wait drops to what you'll stand in line for. Built for two phones sharing one trip.
 
@@ -24,7 +24,7 @@ You need **Node 22 or newer** (CI runs 22 and 24) and git. Nothing else.
 ```sh
 git clone https://github.com/austin5374/parkalert.git
 cd parkalert
-npm install        # only installs ESLint; the app itself needs nothing
+npm ci             # only installs ESLint; the app itself needs nothing
 npm start          # http://localhost:3000
 ```
 
@@ -115,7 +115,7 @@ No environment variables are required.
 | `HEALTH_TOKEN` | none | Unlocks the per-park detail in `/api/health`. |
 | `PORT` | `3000` | Set by Railway. |
 
-**Cost**: the server uses about 90 MB of RAM (measured on Node 22), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
+**Cost**: the server uses about 80 to 90 MB of RAM (measured on Node 22 and 24 in September 2026, with a week of archive), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
 
 ## Simulating a transition (testing pushes)
 
@@ -133,28 +133,29 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 1. Open the app and pick your park, or tap **Use my location**. Location is only asked for when you tap it.
 2. A short setup sheet opens: install the free **ntfy** app, subscribe to your trip (one tap on Android; copy and paste on iPhone), then send a test and confirm it arrived. Until you do, the header says **Set up alerts** instead of **Alerts on**, so a phone that will never be pinged is obvious.
 3. Add it to your home screen for the full-screen experience: Trip tab → **Add to Home Screen** (Chrome offers its own install prompt; on iPhone the sheet shows where Safari's menu item is).
-4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip switches trips with an Undo.
+4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip asks first, and an invite opened with no signal is kept until the phone reconnects.
 
-The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, sorted A–Z or by shortest wait. **Trip** holds the code, alert setup, pause, park and leave.
+The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort (A–Z or shortest wait). A ride with a single rider line or Lightning Lane says so, with the next return time. **Trip** holds the code, alert setup, pause, park and leave.
 
 Almost everything opens something:
 
 - **Any ride** (a down card, a row in Rides, a "back up" row) opens its sheet: the reopen range with the likely clock times and how it was worked out, a wait alert (pick 10 to 60 min; you get one push when the posted wait drops that low, today only), a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages). Rides with a wait alert set carry a timer badge in the Rides list.
 - **The park name** opens today's hours (including evening events), counts for right now and today, the rides with the most outages this week, and how the reopen estimates have done here over the last 14 days.
 - **A park-wide hold** opens the rides caught in it and how long holds usually last.
-- **Pull down** on any list to refresh.
+- **Pull down** on a tab to refresh; it says "Updated just now", or why it couldn't. A sheet whose data fails to load offers Try again.
+- **Back** closes a sheet, or steps back to the hold or park sheet a ride was opened from. Ride sheets open halfway; drag up for the rest.
 
 With no signal, the app still opens: it shows the last rides it saw, marked `Offline · as of 3:42 PM`, and catches up by itself when the connection is back.
 
 ### Notifications
 
-- 🔴 `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
-- 🟢 `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
-- ⛔ `Space Mountain has closed` with `Down since 2:10 PM, now closed. It may not reopen today` when a down ride switches to CLOSED in the middle of the day (not before opening or around closing, when that is just the park's hours). If it reopens within 8 hours you get `is back up` with the whole outage.
-- ⏱️ `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
-- 🟢 `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
-- Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are.
-- Tapping an alert opens the app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else.
+- `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
+- `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
+- `Space Mountain has closed` with `Down since 2:10 PM, now closed. It may not reopen today` when a down ride switches to CLOSED in the middle of the day (not before opening or around closing, when that is just the park's hours). If it reopens within 8 hours you get `is back up` with the whole outage.
+- `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
+- `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
+- Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are, and a grouped "back up" says how long they were down. A ride still down when the rest of its hold reopens stays in the hold, with the hold's estimate.
+- Tapping an alert opens what it is about: the ride's sheet, the hold, or Down now. The link carries the trip code, so it opens the right trip even where it lands in Safari rather than the home-screen app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else. Pushes carry no emoji tags; the title says what happened.
 - Pausing (1 hour, 3 hours, until 7am on the park's clock) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
 - Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
