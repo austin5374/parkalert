@@ -59,7 +59,7 @@ server/
   weatheroutlook.js  ties the above to a live down ride
   scorecard.js    scores each estimate when its ride reopens
   backtest.js     scores the method against the archive (npm run backtest)
-  insights.js     numbers for the ride and park detail sheets
+  insights.js     numbers for the ride and park detail pages
   store.js        JSON persistence, trip codes
   validate.js     request validation
   ratelimit.js    per-client token buckets
@@ -135,15 +135,15 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 3. Add it to your home screen for the full-screen experience: Trip tab → **Add to Home Screen** (Chrome offers its own install prompt; on iPhone the sheet shows where Safari's menu item is).
 4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip asks first, and an invite opened with no signal is kept until the phone reconnects.
 
-The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort (A–Z or shortest wait). A ride with a single rider line or Lightning Lane says so, with the next return time. **Trip** holds the code, alert setup, pause, park and leave.
+The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort toggle beside the search field (A–Z, or shortest posted wait first). A ride with a single rider line or Lightning Lane says so, with the next return time. **Trip** holds the code, alert setup, pause, park and leave.
 
 Almost everything opens something:
 
-- **Any ride** (a down card, a row in Rides, a "back up" row) opens its sheet: the reopen range with the likely clock times and how it was worked out, a wait alert (pick 10 to 60 min; you get one push when the posted wait drops that low, today only), a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages). Rides with a wait alert set carry a timer badge in the Rides list.
+- **Any ride** (a down card, a row in Rides, a "back up" row) opens its page, which slides in from the right: the reopen range with the likely clock times and how it was worked out, a wait alert (pick 10 to 60 min; you get one push when the posted wait drops that low, today only), a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages). Rides with a wait alert set carry a timer badge in the Rides list.
 - **The park name** opens today's hours (including evening events), counts for right now and today, the rides with the most outages this week, and how the reopen estimates have done here over the last 14 days.
 - **A park-wide hold** opens the rides caught in it and how long holds usually last.
-- **Pull down** on a tab to refresh; it says "Updated just now", or why it couldn't. A sheet whose data fails to load offers Try again.
-- **Back** closes a sheet, or steps back to the hold or park sheet a ride was opened from. Ride sheets open halfway; drag up for the rest.
+- **Pull down** on a tab to refresh; it says "Updated just now", or why it couldn't. A page whose data fails to load offers Try again.
+- **Back** (the chevron, the browser's or Android's, or a swipe from the left edge) steps back a page, to the hold or park a ride was opened from, then to the tab. Each page has its own address (`/ride/<id>`, `/park`, `/hold`). Sheets are only for short tasks (pause, park, leave, alert setup) and close with Back, a swipe down or a tap outside.
 
 With no signal, the app still opens: it shows the last rides it saw, marked `Offline · as of 3:42 PM`, and catches up by itself when the connection is back.
 
@@ -155,7 +155,7 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 - `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
 - `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
 - Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are, and a grouped "back up" says how long they were down. A ride still down when the rest of its hold reopens stays in the hold, with the hold's estimate.
-- Tapping an alert opens what it is about: the ride's sheet, the hold, or Down now. The link carries the trip code, so it opens the right trip even where it lands in Safari rather than the home-screen app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else. Pushes carry no emoji tags; the title says what happened.
+- Tapping an alert opens what it is about: the ride's page, the hold, or Down now. The link carries the trip code, so it opens the right trip even where it lands in Safari rather than the home-screen app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else. Pushes carry no emoji tags; the title says what happened.
 - Pausing (1 hour, 3 hours, until 7am on the park's clock) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
 - Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
@@ -187,11 +187,11 @@ Disney closes outdoor rides while there is lightning within about 10 miles and r
 
 **Only the rides the weather shuts count.** A ride is weather-exposed once the archive shows it going down in a park-wide hold or as a storm arrived on two or more days, so indoor rides that keep running through storms never get storm estimates. Some rides also close for rain with no lightning, and stay closed until the track dries: Test Track is known by name, and others are learned the same way from outages that start in rain.
 
-**How the estimate works.** While the storm (or, for a rain ride, the rain) goes on, the range is how long storms here usually last plus how long after one this ride usually reopens, and the ride sheet says "Lightning still nearby" or "Still raining". Once it has passed, the range is timed from when it passed: "Storm passed at 3:12 PM. Usually back in 25 to 35 min", from that ride's own past storms once it has 5, else the park's, else the 30-minute rule. Weather outages are also taken out of the breakdown history, so a storm day no longer stretches every breakdown estimate.
+**How the estimate works.** While the storm (or, for a rain ride, the rain) goes on, the range is how long storms here usually last plus how long after one this ride usually reopens, and the ride page says "Lightning still nearby" or "Still raining". Once it has passed, the range is timed from when it passed: "Storm passed at 3:12 PM. Usually back in 25 to 35 min", from that ride's own past storms once it has 5, else the park's, else the 30-minute rule. Weather outages are also taken out of the breakdown history, so a storm day no longer stretches every breakdown estimate.
 
-**How close it gets.** After a storm passes, the ranges should be tight (about 10 minutes wide on test data) because the reopening follows a rule. The park sheet shows how wide they really run. Before it passes, nobody knows when a storm will end, so the range is wider. Breakdowns stay wide (often 20 minutes or more) because a sensor fault and a stuck vehicle look the same from outside; no data this app can see says which it is.
+**How close it gets.** After a storm passes, the ranges should be tight (about 10 minutes wide on test data) because the reopening follows a rule. The park page shows how wide they really run. Before it passes, nobody knows when a storm will end, so the range is wider. Breakdowns stay wide (often 20 minutes or more) because a sensor fault and a stuck vehicle look the same from outside; no data this app can see says which it is.
 
-**Checking it.** Each estimate is written down when it is made (when the ride goes down, and again when the weather clears) and scored when the ride reopens. The park sheet shows the last 14 days: how many reopenings, how often inside the range, and how wide the ranges were. About half inside is right for a range that is the middle half; much more means ranges are wider than they need be. `npm run backtest` does the same over the whole archive.
+**Checking it.** Each estimate is written down when it is made (when the ride goes down, and again when the weather clears) and scored when the ride reopens. The park page shows the last 14 days: how many reopenings, how often inside the range, and how wide the ranges were. About half inside is right for a range that is the middle half; much more means ranges are wider than they need be. `npm run backtest` does the same over the whole archive.
 
 ## API
 

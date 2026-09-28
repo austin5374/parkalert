@@ -339,14 +339,17 @@ function addBack(onBack, url) {
 function leave(entry, closeNow) {
   if (!entry || entry.done) return;
   entry.done = true;
+  const i = backStack.indexOf(entry);
+  if (i !== -1) backStack.splice(i, 1);
   closeNow?.();
   quietPops++;
   history.back();
 }
 addEventListener('popstate', () => {
+  // Our own history.back()/go(): the layers are already closed and their
+  // entries already off backStack.
   if (quietPops) {
     quietPops--;
-    backStack.pop();
     return;
   }
   const entry = backStack.pop();
@@ -639,6 +642,15 @@ const pages = (() => {
     refresh() { stack.forEach(draw); },
     get top() { return stack[stack.length - 1] || null; },
     get depth() { return stack.length; },
+    // Everything off at once, no animation (the trip changed underneath).
+    clear() {
+      if (!stack.length) return;
+      const n = stack.length;
+      for (const p of [...stack]) { p.entry.done = true; remove(p); }
+      backStack.splice(backStack.length - n, n);
+      quietPops++;
+      history.go(-n);
+    },
   };
 })();
 
@@ -772,6 +784,7 @@ async function startTrip(parkId, row = null) {
 }
 
 function setTrip(code, { firstRun = false } = {}) {
+  pages.clear();
   if (code.toUpperCase() !== tripCode) {
     // Never show one trip's rides under another trip's code.
     dash = null;
@@ -786,6 +799,7 @@ function setTrip(code, { firstRun = false } = {}) {
 // the phone too, so a shared phone keeps no trace of the topic, and
 // rejoining starts clean. A toast offers the way back.
 function leaveTrip({ undoable = false } = {}) {
+  pages.clear();
   const code = tripCode;
   try {
     localStorage.removeItem('parkalert.trip');
@@ -1133,22 +1147,27 @@ function rideMeta(r) {
 // rides by posted wait, then down ones, then closed. Remembered per phone.
 let rideSort = (() => { try { return localStorage.getItem('parkalert.rideSort') || 'name'; } catch { return 'name'; } })();
 const byName = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name));
-// A running ride that posts no wait (a train, a walk-through, a show) is a
-// walk-on, so it sorts first, not after the 90-minute waits.
+// Rides posting a wait come first, shortest first: that's what someone
+// sorting by wait is after. Attractions that post no wait (shows, walk-
+// throughs, a train) follow, then rides that are down, then closed ones.
 function rideOrder(a, b) {
   if (rideSort !== 'wait') return byName(a, b);
-  const rank = (r) => (r.status === 'OPERATING' ? 0 : r.status === 'DOWN' ? 1 : 2);
+  const rank = (r) => (r.status === 'OPERATING' ? (r.waitTime != null ? 0 : 1) : r.status === 'DOWN' ? 2 : 3);
   return rank(a) - rank(b) || (a.waitTime ?? 0) - (b.waitTime ?? 0) || byName(a, b);
 }
 
 // Which rides to list: all, open ones, down ones, or the ones you get
 // alerts about. Remembered per phone, like the sort.
 let rideFilter = (() => { try { return localStorage.getItem('parkalert.rideFilter') || 'all'; } catch { return 'all'; } })();
+// A ride switched off under "With alerts" stays in the list until the
+// filter, the search or the tab changes, as in Settings, so a mis-tap can
+// be switched straight back instead of vanishing from under the finger.
+const keepListed = new Set();
 const FILTERS = {
   all: () => true,
   open: (r) => r.status === 'OPERATING',
   down: (r) => r.status === 'DOWN',
-  following: (r) => isFollowing(r.id),
+  following: (r) => isFollowing(r.id) || keepListed.has(r.id),
 };
 const FILTER_EMPTY = {
   open: 'No rides are open right now.',
@@ -1157,6 +1176,7 @@ const FILTER_EMPTY = {
 };
 function setRideFilter(filter) {
   rideFilter = FILTERS[filter] ? filter : 'all';
+  keepListed.clear();
   try { localStorage.setItem('parkalert.rideFilter', rideFilter); } catch {}
   document.querySelectorAll('[data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === rideFilter)));
   if (dash) renderRides();
@@ -1167,10 +1187,12 @@ setRideFilter(rideFilter);
 function setRideSort(sort) {
   rideSort = sort;
   try { localStorage.setItem('parkalert.rideSort', sort); } catch {}
-  document.querySelectorAll('[data-sort]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sort === sort)));
+  const btn = $('#btn-sort');
+  btn.innerHTML = `${icon('sort')}<span>${sort === 'wait' ? 'Wait' : 'A–Z'}</span>`;
+  btn.setAttribute('aria-label', sort === 'wait' ? 'Sorted by shortest wait. Sort A to Z instead' : 'Sorted A to Z. Sort by shortest wait instead');
   if (dash) renderRides();
 }
-document.querySelectorAll('[data-sort]').forEach((b) => { b.onclick = () => setRideSort(b.dataset.sort); });
+$('#btn-sort').onclick = () => { haptic(); setRideSort(rideSort === 'wait' ? 'name' : 'wait'); };
 setRideSort(rideSort);
 
 function renderRides() {
@@ -1259,6 +1281,7 @@ $('#rides-list').addEventListener('click', (e) => {
 // two different ways; following now clears any leftover per-ride mute too.
 function toggleFollow(rideId) {
   haptic();
+  if (rideFilter === 'following') keepListed.add(rideId);
   const all = dash.rides.map((r) => r.id);
   const on = isFollowing(rideId);
   let watched = dash.trip.watched === null ? all : [...dash.trip.watched];
@@ -2326,6 +2349,7 @@ function openPending() {
 const scrollByView = {};
 function switchView(name, { top = false } = {}) {
   if (name !== view) scrollByView[view] = scrollY;
+  if (name !== view && keepListed.size) { keepListed.clear(); if (dash) renderRides(); }
   view = name;
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${name}`));
   document.querySelectorAll('.tab').forEach((t) => {
@@ -2420,7 +2444,7 @@ $('#btn-share').onclick = async () => {
   }
 };
 
-$('#ride-search').addEventListener('input', () => dash && renderRides());
+$('#ride-search').addEventListener('input', () => { keepListed.clear(); if (dash) renderRides(); });
 // Return, or starting to scroll the results, puts the keyboard away, as in
 // the Settings and Mail search fields. The search itself stays.
 $('#search-form').addEventListener('submit', (e) => {

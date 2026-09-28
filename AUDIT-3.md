@@ -26,6 +26,27 @@ Date: 2026-09-28. `main` at `12f717a`. Reviewed by reading all of `public/app.js
 3. Fix `fitTitle`, give the service worker one versioned cache (all files from one version), turn on compression, and add skeletons.
 4. Re-test on a real iPhone from the home screen after each step.
 
-## Not yet done
-- No code changed. Findings 1-3 were reproduced in Chrome; 4-8 come from reading the code and measuring.
-- Not yet reviewed in depth: the server-side changes from PRs #1-#5 (weather, scorecard, wait alerts), accessibility, and the full CSS.
+
+## Resolution
+
+All eight root causes are fixed on branch `ux-rebuild`. Each was re-checked in Chrome after the change.
+
+| # | Fix | Checked |
+|---|---|---|
+| 1 | `morph()` patches the DOM in place, keyed by `data-key` (and `data-ride` and `data-id`, with the attribute kept in the key) | Down cards, the pill, ride switches, page switches and the wait chart all survive ticks, saves and refreshes |
+| 2 | Same patcher; switches keep their element, so the CSS slide runs | The switch element is the same node after a toggle |
+| 3 | The page-recede transform on `#app` is gone | The tab bar stays at the bottom with pages and sheets open |
+| 4 | Ride, park and hold details are pages: slide in, back chevron naming the previous screen, `/ride/<id>`, `/park` and `/hold` addresses, Back, and swipe from the left edge. The sheet keeps short tasks only | Three stacked pages unwind by Back and by the chevron; a sheet over a page closes first; the address returns to `/` |
+| 5 | `fitTitle()` only runs when the title, pill label, width or text size changes | |
+| 6 | Service worker: one cache per version, filled whole at install, served as a set. A new version waits for Reload or for the app to be put away | |
+| 7 | Static files are served from memory, gzipped | `app.js` goes from 110 KB to 35 KB on the wire |
+| 8 | Skeletons while loading; tabs switch instantly | |
+
+Found and fixed during the second pass:
+- The Rides tab stacked two full-width segmented controls. Sort is now a toggle beside search.
+- "Shortest wait" listed shows and walk-throughs (no posted wait) first. Rides with a posted wait now come first.
+- Under "With alerts", switching a ride off made its row vanish from under the finger. It now stays until the filter, the search or the tab changes.
+- Switching trips with a page open left the old trip's ride on screen. Pages now close first.
+- An animation left running while the app was hidden never finished, because frames don't run. Motion now lands at once while the app is hidden.
+
+The server features were read for correctness (wait alerts, schedule, estimates) and are covered by the existing tests. No new server defects were found.

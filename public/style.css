@@ -634,3 +634,13 @@ main { position: relative; transition: none; }
 .sk-card { display: flex; flex-direction: column; }
 @keyframes sk-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+
+/* Search with its sort toggle beside it. */
+.search-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem var(--gutter) 0; }
+.search-row .search { flex: 1; margin: 0; }
+.sort-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 0.25rem; min-height: 2.25rem; padding: 0 0.7rem;
+  border-radius: 0.65rem; background: var(--fill); color: var(--accent); font-size: 0.9375rem; font-weight: 600;
+}
+.sort-btn svg { width: 1.05rem; height: 1.05rem; stroke-width: 2; }
+.sort-btn:active { opacity: 0.6; transition: none; }
