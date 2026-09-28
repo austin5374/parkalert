@@ -88,3 +88,11 @@ test('rides closing together are one push', () => {
   assert.equal(m.title, '3 rides have closed');
   assert.equal(m.message, 'A, B, C\nThey may not reopen today · EPCOT');
 });
+
+test('a grouped "back up" says how long the rides were down, like a single one', () => {
+  const m = (ms, opts = {}) => groupMessage('UP', ['A', 'B', 'C'], 'EPCOT', null, { downtimes: ms, ...opts }).message;
+  assert.equal(m([40, 42, 43].map((x) => x * 60_000)), 'A, B, C\nDown about 42 min · EPCOT');
+  assert.equal(m([8, 30, 65].map((x) => x * 60_000)), 'A, B, C\nDown 8 min to 1 hr 5 min · EPCOT');
+  assert.equal(m([null, null, null]), 'A, B, C\nEPCOT');
+  assert.equal(m([20, 21, 22].map((x) => x * 60_000), { late: true }), 'A, B, C\nOpened about 21 min late · EPCOT');
+});

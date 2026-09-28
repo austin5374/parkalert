@@ -324,8 +324,21 @@ export function groupOutlook(outlooks) {
   return n * 2 >= outlooks.length ? outlooks.find((o) => o.kind === kind) : null;
 }
 
+// How long a group of rides was out, the way a single "back up" says it:
+// "Down 12 min" when they agree to within a few minutes (a hold always
+// does), else the spread, "Down 8 min to 1 hr 5 min".
+function groupDowntime(ms, late) {
+  const known = ms.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  if (!known.length) return null;
+  const lo = known[0];
+  const hi = known[known.length - 1];
+  const span = hi - lo <= 5 * 60_000 ? `about ${formatDuration(known[known.length >> 1])}` : `${formatDuration(lo)} to ${formatDuration(hi)}`;
+  return late ? `Opened ${span} late` : `Down ${span}`;
+}
+
 // late: every ride in the group is a delayed opening, now open.
-export function groupMessage(type, names, parkName, outlook, { late = false } = {}) {
+// downtimes: each ride's downtimeMs, for "back up" and "now open" groups.
+export function groupMessage(type, names, parkName, outlook, { late = false, downtimes = [] } = {}) {
   if (type === 'CLOSED') {
     return {
       title: `${names.length} rides have closed`,
@@ -341,9 +354,10 @@ export function groupMessage(type, names, parkName, outlook, { late = false } = 
     if (outlook?.text) lines.push(outlook.text);
     return { title: `${names.length} rides just went down`, message: lines.join('\n'), tags: 'red_circle', priority: 3 };
   }
+  const took = groupDowntime(downtimes, late);
   return {
     title: `${names.length} rides ${late ? 'are now open' : 'are back up'}`,
-    message: `${listNames(names)}\n${parkName}`,
+    message: `${listNames(names)}\n${took ? `${took} · ` : ''}${parkName}`,
     tags: 'green_circle',
     priority: 4,
   };
@@ -372,7 +386,10 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       if (evs.length >= GROUP_MIN) {
         const outlook = type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null;
         pushes = [{
-          ...groupMessage(type, evs.map((ev) => ev.ride.name), parkName, outlook, { late: evs.every((ev) => ev.late) }),
+          ...groupMessage(type, evs.map((ev) => ev.ride.name), parkName, outlook, {
+            late: evs.every((ev) => ev.late),
+            downtimes: evs.map((ev) => ev.downtimeMs),
+          }),
           click: appLink(trip, { view: outlook?.kind === 'hold' ? 'hold' : 'down' }),
         }];
       } else {
