@@ -85,7 +85,7 @@ Almost everything opens something:
 - Tapping an alert opens the app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else.
 - Pausing (1 hour, 3 hours, until tomorrow morning) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight.
-- Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is suppressed (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones; the dashboard always shows live truth.
+- Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
 - Follow list: every ride by default. It is shared across the trip, and each park keeps its own, so hopping parks and back restores it.
 
 ## Reopen estimates

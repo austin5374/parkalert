@@ -76,18 +76,61 @@ export function isTripMuted(trip, rideId, state, now = Date.now()) {
 }
 
 // Anti-flicker: a ride flapping OPERATING/DOWN on consecutive polls would
-// otherwise push up to 60 alerts/hour to every phone. Suppress a repeat of the
-// same ride+direction within the cooldown; the dashboard still shows live truth.
-const NOTIFY_COOLDOWN_MS = 5 * 60_000;
+// otherwise push up to 60 alerts/hour to every phone. A repeat of the same
+// ride+direction within the cooldown is held back, not dropped: once the
+// cooldown passes, it goes out if the ride is still that way and the last
+// alert about it said otherwise. Dropping it outright meant a ride that went
+// down, came back, and went down again a minute later for an hour left every
+// phone saying "back up".
+export const NOTIFY_COOLDOWN_MS = 5 * 60_000;
 const lastNotified = new Map(); // "parkId:rideId:type" -> epoch ms
+const lastSent = new Map(); // "parkId:rideId" -> type of the last alert sent
+const held = new Map(); // "parkId:rideId" -> { parkId, ev } held back by the cooldown
 
-export function cooldownOk(key, now = Date.now()) {
-  if (now - (lastNotified.get(key) || 0) < NOTIFY_COOLDOWN_MS) return false;
+function cooldownOk(key, now) {
+  if (now - (lastNotified.get(key) ?? -Infinity) < NOTIFY_COOLDOWN_MS) return false;
   lastNotified.set(key, now);
   if (lastNotified.size > 500) {
     for (const [k, ts] of lastNotified) if (now - ts >= NOTIFY_COOLDOWN_MS) lastNotified.delete(k);
   }
   return true;
+}
+
+// The status a ride must still have for a held alert to still be true.
+const STILL = { DOWN: 'DOWN', UP: 'OPERATING' };
+
+// Decide which of this poll's transitions to alert on now, and release any
+// held-back alert whose cooldown has passed. rides: the park's current state.
+export function gateEvents(parkId, events, rides, now = Date.now()) {
+  const out = [];
+  const send = (ev) => {
+    lastSent.set(`${parkId}:${ev.ride.id}`, ev.type);
+    out.push(ev);
+  };
+  for (const ev of events) {
+    const key = `${parkId}:${ev.ride.id}`;
+    held.delete(key); // a newer transition supersedes anything held
+    if (cooldownOk(`${key}:${ev.type}`, now)) send(ev);
+    else {
+      held.set(key, { parkId, ev });
+      console.log(`[poller] cooldown: holding ${ev.type} ${ev.ride.name}`);
+    }
+  }
+  for (const [key, { parkId: p, ev }] of held) {
+    if (p !== parkId || events.some((e) => `${parkId}:${e.ride.id}` === key)) continue;
+    if (now - (lastNotified.get(`${key}:${ev.type}`) ?? -Infinity) < NOTIFY_COOLDOWN_MS) continue;
+    held.delete(key);
+    const ride = rides[ev.ride.id];
+    if (ride?.status !== STILL[ev.type] || lastSent.get(key) === ev.type) continue;
+    cooldownOk(`${key}:${ev.type}`, now);
+    send({ ...ev, ride: { id: ev.ride.id, ...ride } });
+  }
+  return out;
+}
+
+// Held alerts belong to the snapshot they came from; after a gap they are stale.
+function forgetHeld(parkId) {
+  for (const [key, h] of held) if (h.parkId === parkId) held.delete(key);
 }
 
 // What to tell people about a DOWN ride: what kind of outage it looks like,
@@ -121,8 +164,11 @@ function listNames(names, max = 5) {
 }
 
 function downMessage(parkId, ev, parkName, timezone) {
-  const outlook = downOutlook(parkId, ev.ride.id, 0);
-  const lines = [`Went down at ${localTime(Date.now(), timezone)} · ${parkName}`];
+  // A held-back alert goes out after the fact, so both the time and the
+  // estimate come from when the ride actually went down.
+  const since = ev.ride.downSince ?? Date.now();
+  const outlook = downOutlook(parkId, ev.ride.id, (Date.now() - since) / 60_000);
+  const lines = [`Went down at ${localTime(since, timezone)} · ${parkName}`];
   if (outlook.kind === 'hold') lines.push(`Park-wide hold: ${outlook.rides} rides closed at once`);
   if (outlook.text) lines.push(outlook.text);
   // Emoji comes from the ntfy tag (red_circle/green_circle), which apps render as a title prefix.
@@ -155,21 +201,16 @@ export function groupMessage(type, names, parkName, outlook) {
   };
 }
 
+// Push events to every trip at the park, honouring each trip's mutes. The
+// anti-flicker gate (gateEvents) runs before this, in the poller.
 export async function notifyTrips(parkId, events, { simulated = false } = {}) {
   const state = parkState[parkId];
   const parkName = getPark(parkId)?.name || 'the park';
-  const fresh = simulated
-    ? events
-    : events.filter((ev) => {
-        if (cooldownOk(`${parkId}:${ev.ride.id}:${ev.type}`)) return true;
-        console.log(`[poller] cooldown: suppressed ${ev.type} ${ev.ride.name}`);
-        return false;
-      });
   let sent = 0;
   let skipped = 0;
   for (const trip of Object.values(trips).filter((t) => t.parkId === parkId)) {
-    const mine = fresh.filter((ev) => !isTripMuted(trip, ev.ride.id, state));
-    skipped += fresh.length - mine.length;
+    const mine = events.filter((ev) => !isTripMuted(trip, ev.ride.id, state));
+    skipped += events.length - mine.length;
     for (const type of ['DOWN', 'UP']) {
       const evs = mine.filter((ev) => ev.type === type);
       if (!evs.length) continue;
@@ -272,6 +313,7 @@ async function doPollPark(parkId) {
     const baseline = isBaseline(state.lastPoll, now);
     if (baseline && state.lastPoll) {
       console.log(`[poller] ${getPark(parkId)?.name || parkId}: last snapshot is ${Math.round((now - state.lastPoll) / 60_000)} min old, starting afresh`);
+      forgetHeld(parkId);
     }
     const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now);
     state.rides = rides;
@@ -287,8 +329,10 @@ async function doPollPark(parkId) {
         `[poller] ${getPark(parkId)?.name || parkId}:`,
         events.map((e) => `${e.type} ${e.ride.name}`).join(', ')
       );
-      await notifyTrips(parkId, events);
     }
+    // Every poll, so an alert held by the cooldown goes out once it passes.
+    const toSend = gateEvents(parkId, events, rides, now);
+    if (toSend.length) await notifyTrips(parkId, toSend);
   } catch (err) {
     state.lastError = err.message;
     console.error(`[poller] poll failed for ${parkId}:`, err.message);
