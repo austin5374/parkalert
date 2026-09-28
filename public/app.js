@@ -608,6 +608,12 @@ function renderRecent(downIds) {
 }
 
 /* ---------- Rides ---------- */
+// A small marker in the Rides list for a ride with a wait alert still to go off.
+function waitBadge(r) {
+  const a = dash.trip.waitAlerts?.[r.id];
+  return a && !a.sentAt ? `<span class="wait-badge" title="Wait alert">${icon('timer')}≤${a.max}</span>` : '';
+}
+
 function rideMeta(r) {
   if (r.status === 'OPERATING') return `Open${r.waitTime != null ? ` · ${r.waitTime} min wait` : ''}`;
   if (r.status === 'DOWN') return `Down ${r.downSince ? fmtDuration(Date.now() - r.downSince) : ''}`.trim();
@@ -663,7 +669,7 @@ function drawRides() {
       <div class="row ride-row">
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${icon('chevron', 'meta-chevron')}</span>
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}${icon('chevron', 'meta-chevron')}</span>
           </span>
         </button>
         <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
@@ -964,6 +970,60 @@ async function loadRide(rideId) {
   }
 }
 
+// Wait alert: "tell me when the wait is at most N". Only limits under the
+// current posted wait are offered, since one at or over it would go off at
+// once; a ride that isn't posting a wait can take any of them.
+const WAIT_CHOICES = [10, 15, 20, 30, 45, 60];
+
+function waitAlertBlock(r) {
+  const alert = dash.trip.waitAlerts?.[r.id];
+  const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
+  const armed = alert && !alert.sentAt;
+  let choices = WAIT_CHOICES.filter((m) => posted == null || m < posted);
+  if (armed && !choices.includes(alert.max)) choices = [...choices, alert.max].sort((a, b) => a - b);
+  const state = armed
+    ? `You'll get an alert when the wait is ${alert.max} min or less.`
+    : alert?.sentAt
+      ? `Sent at ${fmtTime(alert.sentAt)}, when the wait was ${alert.sentWait} min. Pick a limit to be told again.`
+      : posted != null && !choices.length
+        ? `The wait is only ${posted} min right now.`
+        : posted != null
+          ? `It's ${posted} min now. Tell me when it's at most:`
+          : 'Tell me when it is running with a wait of at most:';
+  const box = el(`
+    <div>
+      <h2 class="section-label">Wait alert</h2>
+      <div class="group padded wait-alert">
+        <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
+        ${choices.length ? `<div class="chips" role="group" aria-label="Wait alert limit">
+          ${choices.map((m) => `<button class="chip pressable" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}">${m} min</button>`).join('')}
+          ${armed ? '<button class="chip pressable" type="button" data-act="wait-off">Off</button>' : ''}
+        </div>` : ''}
+      </div>
+      <p class="footnote">Goes to everyone on this trip, once, and only today.</p>
+    </div>`);
+  box.querySelectorAll('.chip').forEach((b) => {
+    b.onclick = () => {
+      const m = b.dataset.act.slice(5);
+      setWaitAlert(r.id, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
+    };
+  });
+  return box;
+}
+
+async function setWaitAlert(rideId, max) {
+  try {
+    const path = `/trips/${tripCode}/wait-alerts/${encodeURIComponent(rideId)}`;
+    const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: { max } });
+    dash.trip = trip;
+    renderAll();
+    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) loadRide(rideId);
+    toast(max == null ? 'Wait alert off' : `We'll tell you when it's ${max} min or less`);
+  } catch {
+    toast("Couldn't save that. Check your connection and try again.");
+  }
+}
+
 function rideSheet(r, detail) {
   const o = detail ? detail.outlook : r.outlook;
   const down = r.status === 'DOWN' && r.downSince;
@@ -998,6 +1058,7 @@ function rideSheet(r, detail) {
     e.currentTarget.setAttribute('aria-checked', String(isFollowing(r.id)));
   };
   wrap.appendChild(follow);
+  wrap.appendChild(waitAlertBlock(r));
 
   if (!detail) {
     wrap.appendChild(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
