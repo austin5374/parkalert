@@ -3,6 +3,7 @@ import { publish, formatDuration } from './notify.js';
 import { trips, parkState, saveState, activeParkIds, history } from './store.js';
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
+import { recordWaits } from './insights.js';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -214,8 +215,9 @@ async function refreshSchedule(parkId) {
 }
 
 // Recent transitions, newest first, so someone opening the app from an alert
-// can see what happened even if the ride is already back up.
-const RECENT_MS = 4 * 3600_000;
+// can see what happened even if the ride is already back up. Kept for a whole
+// park day so each ride's detail sheet can list what it did today.
+const RECENT_MS = 18 * 3600_000;
 export function recordRecent(recent = [], events, now = Date.now()) {
   const added = events.map((ev) => ({
     type: ev.type,
@@ -224,7 +226,7 @@ export function recordRecent(recent = [], events, now = Date.now()) {
     at: now,
     downtimeMs: ev.downtimeMs ?? null,
   }));
-  return [...added, ...recent].filter((e) => now - e.at < RECENT_MS).slice(0, 60);
+  return [...added, ...recent].filter((e) => now - e.at < RECENT_MS).slice(0, 400);
 }
 
 // Coalesce concurrent polls of the same park (interval tick vs. trip create /
@@ -250,6 +252,7 @@ async function doPollPark(parkId) {
     const { rides, events } = applyLiveData(state.rides, live);
     state.rides = rides;
     state.recent = recordRecent(state.recent, events);
+    state.waits = recordWaits(state.waits, rides);
     state.lastPoll = Date.now();
     state.lastError = null;
     saveState();

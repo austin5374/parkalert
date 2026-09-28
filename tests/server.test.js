@@ -46,9 +46,9 @@ test('many rides at once become one push that names them', () => {
   assert.equal(up.message, 'A, B, C\nEPCOT');
 });
 
-test('recent transitions keep the newest first and drop anything past four hours', () => {
-  const t = 10 * 3600_000;
-  const old = [{ type: 'DOWN', id: 'x', name: 'X', at: t - 5 * 3600_000 }];
+test('recent transitions keep the newest first and drop anything older than a park day', () => {
+  const t = 30 * 3600_000;
+  const old = [{ type: 'DOWN', id: 'x', name: 'X', at: t - 19 * 3600_000 }];
   const ev = { type: 'UP', ride: { id: 'a', name: 'A' }, downtimeMs: 60_000 };
   const r = recordRecent(old, [ev], t);
   assert.deepEqual(r, [{ type: 'UP', id: 'a', name: 'A', at: t, downtimeMs: 60_000 }]);

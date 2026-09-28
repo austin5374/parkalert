@@ -220,7 +220,15 @@ const sheet = (() => {
   scrim.addEventListener('click', () => close());
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
-  return { open, close: () => close(), get isOpen() { return isOpen; } };
+  // Swap content in place (live refresh) without losing the reader's scroll position.
+  function update(content) {
+    if (!isOpen) return;
+    const top = body.scrollTop;
+    body.replaceChildren(content);
+    body.scrollTop = top;
+  }
+
+  return { open, update, close: () => close(), get isOpen() { return isOpen; } };
 })();
 
 function sheetHead(title, html) {
@@ -413,10 +421,12 @@ function downCard(r) {
     following ? '' : 'Not following',
   ].filter(Boolean).join(' · ');
   return `
-    <article class="card ${following ? '' : 'unfollowed'}">
+    <article class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="button" tabindex="0"
+             aria-label="${esc(r.name)}, down ${fmtDuration(Date.now() - r.downSince)}. Show details">
       <div class="card-top">
         <h3 class="card-title">${esc(r.name)}</h3>
         <span class="elapsed">${fmtDuration(Date.now() - r.downSince)}</span>
+        ${icon('chevron', 'chevron')}
       </div>
       <p class="card-sub">${since}</p>
       ${timeline(r)}
@@ -454,7 +464,9 @@ function renderDown() {
     const holds = down.filter((r) => r.outlook?.kind === 'hold');
     const rest = down.filter((r) => r.outlook?.kind !== 'hold');
     if (holds.length) {
-      list.appendChild(el(`<p class="hold-header">${icon('bolt')}<span>Park-wide hold · ${holds.length} rides</span></p>`));
+      const hdr = el(`<button class="hold-header pressable" type="button">${icon('bolt')}<span>Park-wide hold · ${holds.length} rides</span>${icon('chevron', 'chevron')}</button>`);
+      hdr.onclick = () => openHold();
+      list.appendChild(hdr);
       list.appendChild(el(`<div class="cards">${holds.map(downCard).join('')}</div>`));
     }
     if (rest.length) {
@@ -479,10 +491,11 @@ function renderRecent(downIds) {
   if (!ups.length) return;
   block.appendChild(el('<h2 class="section-label">Back up recently</h2>'));
   block.appendChild(el(`<div class="group">${ups.map((e) => `
-    <div class="row recent-row">
+    <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
       ${icon('arrow-up', 'row-icon tint-green')}
       <span class="row-label">${esc(e.name)}<small>Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}</small></span>
-    </div>`).join('')}</div>`));
+      ${icon('chevron', 'chevron')}
+    </button>`).join('')}</div>`));
 }
 
 /* ---------- Rides ---------- */
@@ -516,9 +529,11 @@ function renderRides() {
     const on = isFollowing(r.id);
     return `
       <div class="row ride-row">
-        <span class="row-label">${esc(r.name)}
-          <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}</span>
-        </span>
+        <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
+          <span class="row-label">${esc(r.name)}
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${icon('chevron', 'meta-chevron')}</span>
+          </span>
+        </button>
         <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
                 aria-label="Alerts for ${esc(r.name)}"></button>
       </div>`;
@@ -723,6 +738,425 @@ function openAlertSetup() {
   sheet.open(content);
 }
 
+/* ---------- Detail sheets ---------- */
+// What the open sheet is showing, so a background refresh can bring it up to date.
+let sheetContext = null;
+
+function openSheet(content, context) {
+  sheetContext = context;
+  sheet.open(content, { onClose: () => { sheetContext = null; } });
+  mountCharts($('#sheet-body'));
+}
+
+function updateSheet(content) {
+  sheet.update(content);
+  mountCharts($('#sheet-body'));
+}
+
+const KIND_NOTE = {
+  hold: 'Several rides went down together, which usually means lightning nearby or another park-wide hold. These run longer than a breakdown, and the rides tend to reopen together.',
+  opening: 'This ride did not open on time. Delayed openings are estimated from past delayed openings, not breakdowns.',
+};
+
+function statusLine(r) {
+  if (r.status === 'DOWN' && r.downSince) return `Down for ${fmtDuration(Date.now() - r.downSince)}, since ${fmtTime(r.downSince)}`;
+  return rideMeta(r);
+}
+
+function estimateExplainer(o) {
+  if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past one here, so there is no honest range to give.' : '';
+  const kind = { hold: 'park-wide holds', opening: 'delayed openings' }[o.kind] || 'breakdowns';
+  const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
+  return `Based on ${o.basis.outages} past ${kind} ${where} that lasted at least as long as this one has so far. The middle half of them reopened within the range above.`;
+}
+
+async function openRide(rideId) {
+  const r = dash?.rides.find((x) => x.id === rideId);
+  if (!r) return;
+  // Open at once with what is already known; the history fills in a moment later.
+  openSheet(rideSheet(r, null), { type: 'ride', id: rideId });
+  await loadRide(rideId);
+}
+
+async function loadRide(rideId) {
+  try {
+    const detail = await api(`/trips/${tripCode}/rides/${encodeURIComponent(rideId)}`);
+    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) updateSheet(rideSheet(detail.ride, detail));
+  } catch {
+    if (sheetContext?.id === rideId) {
+      const note = $('#sheet-body [data-loading]');
+      if (note) note.textContent = "Couldn't load this ride's history. Pull down on the list to retry.";
+    }
+  }
+}
+
+function rideSheet(r, detail) {
+  const o = detail ? detail.outlook : r.outlook;
+  const down = r.status === 'DOWN' && r.downSince;
+  const wrap = el(`<div class="ride-sheet">${sheetHead(r.name, esc(statusLine(r)))}</div>`);
+  wrap.querySelector('.sheet-head p').classList.toggle('tint-red', !!down);
+
+  if (down) {
+    const w = o?.window;
+    const clock = w && w.lo != null
+      ? `Likely back between ${fmtTime(Date.now() + w.lo * 60000)} and ${fmtTime(Date.now() + (w.hi ?? w.lo * 2) * 60000)}`
+      : '';
+    wrap.appendChild(el(`
+      <div class="group padded outlook-block">
+        ${o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
+        ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
+        <p class="big-outlook">${esc(o?.text || 'Not enough history to estimate yet')}</p>
+        ${clock ? `<p class="clock">${esc(clock)}</p>` : ''}
+        ${timeline({ ...r, outlook: o })}
+        ${o?.text ? `<p class="explain">${esc(estimateExplainer(o))}</p>` : ''}
+        ${KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
+      </div>`));
+  }
+
+  const follow = el(`
+    <div class="group ${down ? 'spaced-sm' : ''}"><div class="row">
+      ${icon('bell', 'row-icon tint-accent')}
+      <span class="row-label">Alerts for this ride</span>
+      <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}"></button>
+    </div></div>`);
+  follow.querySelector('.switch').onclick = (e) => {
+    toggleFollow(r.id);
+    e.currentTarget.setAttribute('aria-checked', String(isFollowing(r.id)));
+  };
+  wrap.appendChild(follow);
+
+  if (!detail) {
+    wrap.appendChild(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
+    return wrap;
+  }
+
+  // Wait times today
+  const numeric = detail.waits.filter(([, v]) => v != null);
+  if (numeric.length) {
+    wrap.appendChild(el('<h2 class="section-label">Wait times today</h2>'));
+    const box = el('<div class="group padded" data-chart="wait"></div>');
+    box._data = { waits: detail.waits, now: detail.now };
+    wrap.appendChild(box);
+    wrap.appendChild(el('<p class="footnote">Drag across the chart to see the wait at any time. Gaps are when it was down or closed.</p>'));
+  }
+
+  // Today. If the ride went down before today's log begins, the live
+  // down-since time still says when, so show that rather than nothing.
+  wrap.appendChild(el('<h2 class="section-label">Today</h2>'));
+  const today = [...detail.today];
+  if (down && !today.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) {
+    today.push({ type: 'DOWN', at: r.downSince });
+    today.sort((a, b) => a.at - b.at);
+  }
+  if (today.length) {
+    wrap.appendChild(el(`<div class="group">${today.map((e) => `
+      <div class="row">
+        ${icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
+        <span class="row-label">${e.type === 'DOWN' ? 'Went down' : 'Back up'}${e.type === 'UP' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)}</small>` : ''}</span>
+        <span class="row-detail">${fmtTime(e.at)}</span>
+      </div>`).join('')}</div>`));
+  } else {
+    wrap.appendChild(el('<div class="group plain"><div class="row"><span class="row-label muted">No outages so far today</span></div></div>'));
+  }
+
+  // History
+  const h = detail.history;
+  if (h.archivedDays) {
+    wrap.appendChild(el(`<h2 class="section-label">Last ${h.days.length} days</h2>`));
+    const stats = el(`
+      <div class="group padded">
+        <div class="stats">
+          <div><p class="stat-label">Outages</p><p class="stat-value">${h.days.reduce((n, d) => n + d.outages, 0)}</p></div>
+          <div><p class="stat-label">Typical</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'n/a'}</p></div>
+          <div><p class="stat-label">Longest</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'n/a'}</p></div>
+        </div>
+        <div data-chart="days"></div>
+      </div>`);
+    stats.querySelector('[data-chart]')._data = { days: h.days };
+    wrap.appendChild(stats);
+    if (h.last.length) {
+      wrap.appendChild(el('<h2 class="section-label">Recent outages</h2>'));
+      wrap.appendChild(el(`<div class="group plain">${h.last.map((ep) => `
+        <div class="row">
+          <span class="row-label">${esc(fmtDay(ep.start))}<small>${esc([
+            { hold: 'Park-wide hold', opening: 'Delayed opening' }[ep.kind],
+            ep.reopened ? '' : "Didn't reopen that day",
+          ].filter(Boolean).join(' · ') || `Went down at ${fmtTime(ep.start)}`)}</small></span>
+          <span class="row-detail">${ep.reopened ? '' : 'at least '}${fmtDuration(ep.minutes * 60000)}</span>
+        </div>`).join('')}</div>`));
+    }
+    wrap.appendChild(el(`<p class="footnote">Outage history comes from the ThemeParks.wiki archive, ${h.archivedDays} days so far and growing nightly.</p>`));
+  }
+  wrap.appendChild(el('<div style="height:1rem"></div>'));
+  return wrap;
+}
+
+function fmtDay(ts) {
+  return new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: dash?.park.timezone }).format(new Date(ts));
+}
+
+async function openParkInfo() {
+  if (!dash) return;
+  openSheet(parkSheet(null), { type: 'park' });
+  await loadPark();
+}
+
+async function loadPark() {
+  try {
+    const info = await api(`/trips/${tripCode}/park`);
+    if (sheetContext?.type === 'park') updateSheet(parkSheet(info));
+  } catch {}
+}
+
+function parkSheet(info) {
+  const downNow = dash.rides.filter((r) => r.status === 'DOWN').length;
+  const wrap = el(`<div>${sheetHead(parkLabel(dash.park.name), esc(hoursText()))}</div>`);
+  const { openingTime: open, closingTime: close, lateEvent } = dash.park;
+  if (open || close) {
+    wrap.appendChild(el(`<div class="group plain">
+      ${open ? `<div class="row"><span class="row-label">Opens</span><span class="row-detail">${fmtTime(Date.parse(open))}</span></div>` : ''}
+      ${close ? `<div class="row"><span class="row-label">Closes</span><span class="row-detail">${fmtTime(Date.parse(close))}</span></div>` : ''}
+      ${lateEvent ? `<div class="row"><span class="row-label">${esc(lateEvent.name)}<small>Alerts keep going until it ends</small></span><span class="row-detail">until ${fmtTime(Date.parse(lateEvent.closingTime))}</span></div>` : ''}
+    </div>`));
+  }
+  wrap.appendChild(el(`<div class="group padded spaced-sm"><div class="stats">
+    <div><p class="stat-label">Down now</p><p class="stat-value">${downNow}</p></div>
+    <div><p class="stat-label">Outages today</p><p class="stat-value">${info ? info.today.downs : '…'}</p></div>
+    <div><p class="stat-label">Typical outage</p><p class="stat-value">${info?.week.typicalBreakdownMinutes != null ? fmtDuration(info.week.typicalBreakdownMinutes * 60000) : info ? 'n/a' : '…'}</p></div>
+  </div></div>`));
+  if (info?.week.leastReliable.length) {
+    wrap.appendChild(el(`<h2 class="section-label">Most outages, last ${info.week.days} days</h2>`));
+    wrap.appendChild(el(`<div class="group plain">${info.week.leastReliable.map((r) => `
+      <button class="row pressable" type="button" data-ride="${esc(r.id)}">
+        <span class="row-label">${esc(r.name)}<small>${r.outages} outage${r.outages === 1 ? '' : 's'}, ${fmtDuration(r.minutes * 60000)} down in total</small></span>
+        ${icon('chevron', 'chevron')}
+      </button>`).join('')}</div>`));
+    if (info.week.holdDays) {
+      wrap.appendChild(el(`<p class="footnote">Park-wide holds happened on ${info.week.holdDays} of those ${info.week.days} days.</p>`));
+    }
+  }
+  wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on any list to refresh.</p>`));
+  wrap.appendChild(el('<div style="height:1rem"></div>'));
+  return wrap;
+}
+
+function openHold() {
+  const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold');
+  const text = holds[0]?.outlook?.text;
+  const wrap = el(`<div>${sheetHead('Park-wide hold', esc(KIND_NOTE.hold))}</div>`);
+  if (text) wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">${esc(text)}</p><p class="explain">${esc(estimateExplainer(holds[0].outlook))}</p></div>`));
+  wrap.appendChild(el(`<h2 class="section-label">${holds.length} rides in this hold</h2>`));
+  wrap.appendChild(el(`<div class="group plain">${holds.map((r) => `
+    <button class="row pressable" type="button" data-ride="${esc(r.id)}">
+      <span class="row-label">${esc(r.name)}<small>Down since ${fmtTime(r.downSince)}</small></span>
+      <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
+      ${icon('chevron', 'chevron')}
+    </button>`).join('')}</div>`));
+  wrap.appendChild(el('<div style="height:1rem"></div>'));
+  openSheet(wrap, { type: 'hold' });
+}
+
+// Any element carrying a ride id opens that ride, wherever it sits.
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.switch')) return;
+  const t = e.target.closest('[data-ride]');
+  if (t) openRide(t.dataset.ride);
+});
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('article[data-ride]')) {
+    e.preventDefault();
+    openRide(e.target.dataset.ride);
+  }
+});
+
+/* ---------- Charts ---------- */
+// Round an axis top up to a number a person would say.
+function niceMax(v) {
+  for (const s of [10, 15, 20, 30, 45, 60, 90, 120, 180, 240]) if (v <= s) return s;
+  return Math.ceil(v / 60) * 60;
+}
+
+const SVG = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs = {}) {
+  const n = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+}
+
+function mountCharts(root) {
+  for (const box of root.querySelectorAll('[data-chart]')) {
+    if (box._mounted || !box._data) continue;
+    box._mounted = true;
+    if (box.dataset.chart === 'wait') waitChart(box, box._data);
+    if (box.dataset.chart === 'days') dayBars(box, box._data);
+  }
+}
+
+// Posted waits hold until they change, so the line steps rather than slopes.
+function waitChart(box, { waits, now }) {
+  const W = Math.max(200, box.clientWidth - 32), H = 116, top = 16, bottom = 2;
+  const pts = waits.map(([t, w]) => ({ t, w }));
+  const t0 = pts[0].t, t1 = Math.max(now, t0 + 60_000);
+  const max = niceMax(Math.max(10, ...pts.map((p) => p.w ?? 0)));
+  const x = (t) => ((t - t0) / (t1 - t0)) * W;
+  const y = (w) => top + (1 - w / max) * (H - top - bottom);
+  const base = H - bottom;
+
+  const readout = el('<p class="chart-readout" aria-live="polite"></p>');
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img' });
+  svg.append(
+    svgEl('line', { x1: 0, x2: W, y1: y(max), y2: y(max), class: 'grid' }),
+    svgEl('line', { x1: 0, x2: W, y1: base, y2: base, class: 'axis' })
+  );
+  const maxLabel = svgEl('text', { x: 0, y: y(max) - 3, class: 'tick' });
+  maxLabel.textContent = `${max} min`;
+  svg.append(maxLabel);
+
+  let line = '', area = '';
+  pts.forEach((p, i) => {
+    if (p.w == null) return;
+    const x0 = x(p.t), x1 = x(i + 1 < pts.length ? pts[i + 1].t : t1), yy = y(p.w);
+    const joined = i > 0 && pts[i - 1].w != null;
+    line += `${joined ? 'L' : 'M'}${x0.toFixed(1)},${yy.toFixed(1)} H${x1.toFixed(1)} `;
+    area += `M${x0.toFixed(1)},${base} V${yy.toFixed(1)} H${x1.toFixed(1)} V${base} Z `;
+  });
+  svg.append(svgEl('path', { d: area, class: 'area' }), svgEl('path', { d: line, class: 'line' }));
+
+  const cross = svgEl('line', { y1: top, y2: base, class: 'crosshair', visibility: 'hidden' });
+  const dot = svgEl('circle', { r: 4, class: 'dot-mark', visibility: 'hidden' });
+  svg.append(cross, dot);
+
+  const at = (t) => {
+    let i = 0;
+    while (i + 1 < pts.length && pts[i + 1].t <= t) i++;
+    return pts[i];
+  };
+  const show = (t, fromUser) => {
+    const p = at(t);
+    readout.textContent = `${fromUser ? fmtTime(t) : 'Now'} · ${p.w == null ? 'not running' : `${p.w} min wait`}`;
+    cross.setAttribute('x1', x(t)); cross.setAttribute('x2', x(t));
+    cross.setAttribute('visibility', fromUser ? 'visible' : 'hidden');
+    if (p.w != null) {
+      dot.setAttribute('cx', x(t)); dot.setAttribute('cy', y(p.w));
+      dot.setAttribute('visibility', 'visible');
+    } else dot.setAttribute('visibility', 'hidden');
+  };
+  const latest = pts[pts.length - 1];
+  svg.setAttribute('aria-label', `Wait times today, from ${fmtTime(t0)} to now. Now ${latest.w == null ? 'not running' : `${latest.w} minutes`}.`);
+  show(t1, false);
+
+  // Scrub: the crosshair follows the finger along X; vertical drags still scroll.
+  let cursor = t1;
+  const fromEvent = (e) => {
+    const r = svg.getBoundingClientRect();
+    return t0 + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (t1 - t0);
+  };
+  svg.addEventListener('pointerdown', (e) => { svg.setPointerCapture(e.pointerId); cursor = fromEvent(e); show(cursor, true); });
+  svg.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) { cursor = fromEvent(e); show(cursor, true); }
+  });
+  svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') show(t1, false); });
+  svg.addEventListener('keydown', (e) => {
+    const step = (t1 - t0) / 40;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      cursor = Math.min(t1, Math.max(t0, cursor + (e.key === 'ArrowRight' ? step : -step)));
+      show(cursor, true);
+    }
+  });
+
+  const axis = el(`<div class="chart-x"><span>${fmtTime(t0)}</span><span>Now</span></div>`);
+  box.append(readout, svg, axis);
+}
+
+// One column per archived day: minutes down. Tap a column for that day.
+function dayBars(box, { days }) {
+  const W = Math.max(200, box.clientWidth), H = 96, base = H - 2;
+  const max = niceMax(Math.max(10, ...days.map((d) => d.minutes)));
+  const slot = W / days.length, bw = Math.min(24, slot * 0.55);
+  const total = days.reduce((n, d) => n + d.outages, 0);
+  const summary = `${total} outage${total === 1 ? '' : 's'} over ${days.length} days · tap a day`;
+
+  const readout = el(`<p class="chart-readout" aria-live="polite">${esc(summary)}</p>`);
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', role: 'group', 'aria-label': 'Minutes down per day' });
+  svg.append(svgEl('line', { x1: 0, x2: W, y1: base + 0.5, y2: base + 0.5, class: 'axis' }));
+  const bars = [];
+  let selected = -1;
+  const select = (i) => {
+    selected = selected === i ? -1 : i;
+    bars.forEach((b, j) => b.classList.toggle('dim', selected !== -1 && j !== selected));
+    if (selected === -1) { readout.textContent = summary; return; }
+    const d = days[i];
+    readout.textContent = `${fmtDate(d.date)} · ${d.outages ? `${d.outages} outage${d.outages === 1 ? '' : 's'}, ${fmtDuration(d.minutes * 60000)} down` : 'no outages'}`;
+  };
+  days.forEach((d, i) => {
+    const cx = slot * i + slot / 2, x0 = cx - bw / 2;
+    const h = d.minutes ? Math.max(4, (d.minutes / max) * (H - 12)) : 0;
+    const r = Math.min(4, h / 2, bw / 2);
+    const mark = h
+      ? svgEl('path', { class: 'bar', d: `M${x0},${base} V${base - h + r} Q${x0},${base - h} ${x0 + r},${base - h} H${x0 + bw - r} Q${x0 + bw},${base - h} ${x0 + bw},${base - h + r} V${base} Z` })
+      : svgEl('rect', { class: 'bar empty', x: x0, y: base - 2, width: bw, height: 2, rx: 1 });
+    bars.push(mark);
+    // The whole slot is the hit target, far bigger than a thin column.
+    const hit = svgEl('rect', { x: slot * i, y: 0, width: slot, height: H, class: 'hit', tabindex: '0', role: 'button',
+      'aria-label': `${fmtDate(d.date)}: ${d.outages} outages, ${d.minutes} minutes down` });
+    hit.addEventListener('click', () => select(i));
+    hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(i); } });
+    svg.append(mark, hit);
+  });
+  const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${days.length},1fr)">${days.map((d) => `<span>${esc(fmtWeekday(d.date))}</span>`).join('')}</div>`);
+  box.append(readout, svg, labels);
+}
+
+const dateOnly = (d) => new Date(`${d}T12:00:00Z`);
+const fmtDate = (d) => new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtWeekday = (d) => new Intl.DateTimeFormat([], { weekday: 'short', timeZone: 'UTC' }).format(dateOnly(d));
+
+/* ---------- Pull to refresh ---------- */
+// Only on touch, only from the very top, rubber-banded, and it springs home.
+(() => {
+  const main = $('main'), ptr = $('#ptr');
+  const THRESHOLD = 64, HOLD = 52;
+  let start = null, pull = 0, busy = false, anim = null;
+  const paint = (v) => {
+    pull = v;
+    main.style.transform = v ? `translateY(${v}px)` : '';
+    ptr.style.opacity = String(Math.min(1, v / THRESHOLD));
+    ptr.style.transform = `translateY(${v / 2 - 30}px) rotate(${v * 4}deg)`;
+    ptr.classList.toggle('armed', v >= THRESHOLD);
+  };
+  const settle = (to, done) => {
+    anim?.stop();
+    if (reducedMotion()) { paint(to); done?.(); return; }
+    anim = spring({ from: pull, to, damping: 1, response: 0.3, onUpdate: paint, onDone: done });
+  };
+  main.addEventListener('touchstart', (e) => {
+    if (busy || sheet.isOpen || scrollY > 0 || e.touches.length > 1) return;
+    anim?.stop();
+    start = e.touches[0].clientY;
+  }, { passive: true });
+  main.addEventListener('touchmove', (e) => {
+    if (start == null) return;
+    const dy = e.touches[0].clientY - start;
+    if (dy <= 0) { if (pull) paint(0); return; }
+    if (e.target.closest('.chart')) { start = null; return; }
+    e.preventDefault();
+    paint(rubberband(dy, 480, 0.55));
+  }, { passive: false });
+  main.addEventListener('touchend', async () => {
+    if (start == null) return;
+    start = null;
+    if (pull < THRESHOLD) { settle(0); return; }
+    busy = true;
+    ptr.classList.add('spinning');
+    navigator.vibrate?.(8);
+    settle(HOLD);
+    await refresh();
+    ptr.classList.remove('spinning');
+    settle(0, () => { busy = false; });
+  });
+})();
+
 /* ---------- Data ---------- */
 async function refresh() {
   if (!tripCode) return;
@@ -739,6 +1173,8 @@ async function refresh() {
     if (!dash) $('#park-meta').textContent = 'Offline. Waiting for a connection…';
   }
   renderAll();
+  if (!offline && sheetContext?.type === 'ride') loadRide(sheetContext.id);
+  if (!offline && sheetContext?.type === 'park') loadPark();
 }
 
 /* ---------- Screens & navigation ---------- */
@@ -813,6 +1249,7 @@ $('#join-form').onsubmit = async (e) => {
   }
 };
 
+$('#btn-park').onclick = openParkInfo;
 $('#btn-alerts').onclick = () => (alertState().kind === 'setup' ? openAlertSetup() : openPause());
 $('#row-setup').onclick = openAlertSetup;
 $('#row-pause').onclick = openPause;

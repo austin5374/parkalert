@@ -25,6 +25,7 @@
   --chrome: rgba(242, 242, 247, 0.78);
   --toast: rgba(255, 255, 255, 0.94);
   --sheet: #f2f2f7;
+  --sheet-group: #ffffff;
   --scrim: rgba(0, 0, 0, 0.32);
   --shadow: 0 10px 40px rgba(0, 0, 0, 0.14);
   --radius: 0.75rem;
@@ -54,6 +55,7 @@
     --chrome: rgba(18, 18, 20, 0.74);
     --toast: rgba(52, 52, 56, 0.95);
     --sheet: #1c1c1e;
+    --sheet-group: #2c2c2e;
     --scrim: rgba(0, 0, 0, 0.5);
     --shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     --press: rgba(255, 255, 255, 0.08);
@@ -72,6 +74,7 @@ body {
   font-size: 1.0625rem;
   letter-spacing: -0.01em;
   min-height: 100dvh;
+  overscroll-behavior-y: contain; /* the app's own pull-to-refresh, not a page reload */
 }
 button, input { font: inherit; color: inherit; letter-spacing: inherit; }
 button { background: none; border: none; cursor: pointer; text-align: left; }
@@ -161,10 +164,13 @@ a, a:visited { color: var(--accent); }
   box-shadow: 0 0.5px 0 var(--separator);
 }
 .nav-inner { display: flex; align-items: flex-end; gap: 0.75rem; padding: 0 var(--gutter); max-width: 40rem; margin: 0 auto; }
-.nav-titles { flex: 1; min-width: 0; }
+.nav-titles { flex: 1; min-width: 0; border-radius: 0.5rem; }
+.nav-titles:active { opacity: 0.6; }
+.nav-meta { display: flex; align-items: center; gap: 0.2rem; }
+.nav-meta .meta-chevron { transform: rotate(90deg); }
 .nav .large-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-meta { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
-.nav-meta.warn { color: var(--orange); }
+#park-meta.warn { color: var(--orange); }
 
 .pill {
   display: inline-flex; align-items: center; gap: 0.35rem; flex: none;
@@ -200,6 +206,9 @@ main {
 .card-outlook { font-size: 0.9375rem; margin-top: 0.55rem; }
 .card-foot { font-size: 0.8125rem; color: var(--label-2); margin-top: 0.15rem; letter-spacing: 0; }
 .card.unfollowed { opacity: 0.6; }
+.card { cursor: pointer; }
+.card:active { transform: scale(0.98); background: color-mix(in srgb, var(--surface) 88%, var(--label)); }
+.card .chevron { align-self: center; margin-right: -0.3rem; }
 
 /* How far into a typical outage this one is: elapsed in red, the usual
    reopening window shaded ahead of it. */
@@ -212,10 +221,12 @@ main {
 .timeline .window::before { content: ''; position: absolute; inset: 0; border-left: 2px solid var(--accent); opacity: 0.6; }
 
 .hold-header {
-  display: flex; align-items: center; gap: 0.4rem; color: var(--orange);
+  display: flex; align-items: center; gap: 0.4rem; color: var(--orange); width: 100%;
   font-size: 0.9375rem; font-weight: 600; padding: 0.4rem var(--gutter) 0.55rem;
 }
 .hold-header svg { width: 1.1rem; height: 1.1rem; }
+.hold-header .chevron { color: var(--orange); opacity: 0.7; width: 0.8rem; height: 0.8rem; }
+.hold-header:active { opacity: 0.6; }
 .cards + .section-label { padding-top: 1.4rem; }
 
 .empty { text-align: center; padding: 3.5rem 2rem 1.5rem; }
@@ -224,7 +235,8 @@ main {
 .empty p { color: var(--label-2); line-height: 1.4; }
 .empty + .group { margin-top: 1.2rem; }
 
-.recent-row .row-label small { display: block; font-size: 0.875rem; color: var(--label-2); margin-top: 0.05rem; }
+.row-label small { display: block; font-size: 0.875rem; color: var(--label-2); margin-top: 0.05rem; letter-spacing: 0; }
+.row-label.muted { color: var(--label-2); }
 
 /* ---- Rides ---- */
 .search {
@@ -252,6 +264,13 @@ main {
 .dot.DOWN { background: var(--red); }
 .meta.DOWN { color: var(--red); }
 .group.rides .row + .row::before { left: var(--gutter); }
+.ride-row { padding: 0 var(--gutter) 0 0; gap: 0.5rem; }
+.row-main {
+  flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center;
+  padding: 0.6rem 0.25rem 0.6rem var(--gutter);
+}
+.row-main:active { background: var(--press); }
+.meta-chevron { width: 0.7rem; height: 0.7rem; stroke-width: 2.6; color: var(--label-3); margin-left: 0.1rem; }
 .no-results { padding: 1.4rem var(--gutter); color: var(--label-2); text-align: center; }
 
 /* Switch: the familiar on/off control, one per ride. */
@@ -372,11 +391,60 @@ main {
 .toast button { color: var(--accent); font-weight: 600; flex: none; }
 .no-tabbar .toast { bottom: calc(env(safe-area-inset-bottom) + 1.2rem); }
 
+/* ---- Detail sheets ---- */
+.group.padded { padding: 0.9rem var(--gutter) 1rem; }
+.group.spaced-sm { margin-top: 1rem; }
+.sheet-head p.tint-red { color: var(--red); }
+.kind-tag { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8125rem; font-weight: 600; color: var(--label-2); margin-bottom: 0.35rem; letter-spacing: 0.01em; }
+.kind-tag.hold { color: var(--orange); }
+.kind-tag svg { width: 0.95rem; height: 0.95rem; }
+.big-outlook { font-size: 1.375rem; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
+.clock { color: var(--label-2); margin-top: 0.2rem; font-size: 0.9375rem; }
+.explain { color: var(--label-2); font-size: 0.875rem; line-height: 1.4; margin-top: 0.75rem; letter-spacing: 0; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.stat-label { font-size: 0.8125rem; color: var(--label-2); letter-spacing: 0; }
+.stat-value { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.015em; margin-top: 0.1rem; }
+.stats + [data-chart] { margin-top: 1rem; }
+
+/* ---- Charts: one accent hue, hairline axes, text in text colors ---- */
+.chart { display: block; width: 100%; height: auto; touch-action: pan-y; overflow: visible; outline: none; }
+.chart:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.chart .grid { stroke: var(--separator); stroke-width: 1; }
+.chart .axis { stroke: var(--separator); stroke-width: 1; }
+.chart text { stroke: none; }
+.chart .tick { fill: var(--label-2); font-size: 11px; letter-spacing: 0; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chart .area { fill: var(--accent); opacity: 0.1; stroke: none; }
+.chart .crosshair { stroke: var(--label-2); stroke-width: 1; }
+.chart .dot-mark { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.sheet .chart .dot-mark { stroke: var(--sheet-group); }
+.chart .bar { fill: var(--accent); stroke: none; transition: opacity 150ms ease; }
+.chart .bar.empty { fill: var(--fill-strong); }
+.chart .bar.dim { opacity: 0.3; }
+.chart .hit { fill: transparent; stroke: none; cursor: pointer; outline: none; }
+.chart .hit:focus-visible { fill: var(--fill); }
+.chart-readout { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.5rem; font-variant-numeric: tabular-nums; min-height: 1.3em; letter-spacing: 0; }
+.chart-x { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--label-2); margin-top: 0.3rem; letter-spacing: 0; }
+.chart-days { display: grid; text-align: center; font-size: 0.75rem; color: var(--label-2); margin-top: 0.35rem; letter-spacing: 0; }
+
+/* ---- Pull to refresh ---- */
+main { position: relative; transition: none; }
+.ptr {
+  position: absolute; left: 50%; top: 0; margin-left: -0.9rem; width: 1.8rem; height: 1.8rem;
+  opacity: 0; pointer-events: none; color: var(--label-2);
+}
+.ptr svg { width: 100%; height: 100%; stroke-width: 2.2; stroke-dasharray: 40 14; }
+.ptr.armed { color: var(--accent); }
+.ptr.spinning svg { animation: spin 700ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ---- Accessibility preferences ---- */
 @media (prefers-reduced-motion: reduce) {
   .view { animation: none; }
   .pressable, .pressable:active { transform: none !important; }
   .switch::after, .toast { transition-duration: 1ms; }
+  .ptr.spinning svg { animation-duration: 2.4s; }
+  .card:active { transform: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .nav.scrolled, .tabbar, .toast { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }

@@ -70,6 +70,13 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 
 The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with a "Back up recently" list below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search. **Trip** holds the code, alert setup, pause, park and leave.
 
+Almost everything opens something:
+
+- **Any ride** (a down card, a row in Rides, a "back up" row) opens its sheet: the reopen range with the likely clock times and how it was worked out, a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages).
+- **The park name** opens today's hours (including evening events), counts for right now and today, and the rides with the most outages this week.
+- **A park-wide hold** opens the rides caught in it and how long holds usually last.
+- **Pull down** on any list to refresh.
+
 ### Notifications
 
 - 🔴 `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`

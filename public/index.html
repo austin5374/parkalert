@@ -74,10 +74,10 @@
   <div id="app" class="screen hidden">
     <header class="nav" id="nav">
       <div class="nav-inner">
-        <div class="nav-titles">
+        <button class="nav-titles pressable" id="btn-park" type="button" aria-haspopup="dialog">
           <h1 id="park-name" class="large-title">ParkAlert</h1>
-          <p id="park-meta" class="nav-meta" aria-live="polite"></p>
-        </div>
+          <p class="nav-meta"><span id="park-meta" aria-live="polite"></span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
+        </button>
         <button id="btn-alerts" class="pill pressable" type="button" aria-haspopup="dialog">
           <svg><use href="#i-bell"/></svg><span>Alerts on</span>
         </button>
@@ -85,6 +85,7 @@
     </header>
 
     <main>
+      <div id="ptr" class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>
       <section id="view-down" class="view" aria-label="Down now">
         <div id="down-list"></div>
         <div id="recent-block"></div>
@@ -100,7 +101,7 @@
           <button id="btn-follow-all" class="text-btn" type="button"></button>
         </div>
         <div class="group" id="rides-list"></div>
-        <p class="footnote" id="rides-foot">Alerts go out when a ride you follow goes down or comes back up.</p>
+        <p class="footnote" id="rides-foot">Tap a ride for its wait times and outage history. The switch controls whether you get alerts about it.</p>
       </section>
 
       <section id="view-trip" class="view hidden" aria-label="Trip">

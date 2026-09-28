@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
-import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip } from './store.js';
+import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, history } from './store.js';
+import { rideHistory, rideToday, parkSummary, parkDayStart } from './insights.js';
 import { startPolling, pollPark, simulateTransition, downOutlook, APP_URL } from './poller.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
@@ -104,6 +105,40 @@ async function handleApi(req, res, url) {
 
   if (trip && req.method === 'GET' && parts[3] === 'dashboard') {
     return json(res, 200, await dashboard(trip));
+  }
+
+  // Everything the ride detail sheet shows: live status, today's changes and
+  // wait times, and this ride's record in the outage archive.
+  if (trip && req.method === 'GET' && parts[3] === 'rides' && parts[4]) {
+    const state = parkState[trip.parkId] || {};
+    const ride = state.rides?.[parts[4]];
+    if (!ride) return json(res, 404, { error: 'ride not found' });
+    const now = Date.now();
+    const dayStart = parkDayStart(state.timezone || 'America/New_York', now);
+    return json(res, 200, {
+      ride: { id: parts[4], ...ride },
+      outlook: ride.status === 'DOWN' && ride.downSince
+        ? downOutlook(trip.parkId, parts[4], (now - ride.downSince) / 60_000)
+        : null,
+      today: rideToday(state.recent, parts[4], dayStart),
+      waits: (state.waits?.[parts[4]] || []).filter(([t]) => t >= dayStart),
+      history: rideHistory(history.episodes[trip.parkId] || [], parts[4], history.fetched[trip.parkId] || []),
+      now,
+    });
+  }
+
+  if (trip && req.method === 'GET' && parts[3] === 'park') {
+    const state = parkState[trip.parkId] || {};
+    const names = Object.fromEntries(Object.entries(state.rides || {}).map(([id, r]) => [id, r.name]));
+    const dayStart = parkDayStart(state.timezone || 'America/New_York');
+    const today = (state.recent || []).filter((e) => e.at >= dayStart);
+    return json(res, 200, {
+      today: {
+        downs: today.filter((e) => e.type === 'DOWN').length,
+        rides: new Set(today.filter((e) => e.type === 'DOWN').map((e) => e.id)).size,
+      },
+      week: parkSummary(history.episodes[trip.parkId] || [], history.fetched[trip.parkId] || [], names),
+    });
   }
 
   if (trip && req.method === 'GET' && parts.length === 3) {
