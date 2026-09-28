@@ -12,7 +12,7 @@
     "check": "npm run lint && npm test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

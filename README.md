@@ -11,13 +11,13 @@ ThemeParks.wiki API ──(poll every 60s)──▶ Node server ──(on status
                                              └──▶ serves the PWA dashboard (down rides, watch list, mutes)
 ```
 
-- **No runtime dependencies.** Plain Node 18+ (`fetch` built in). Deploys to Railway in minutes; runs anywhere Node runs. ESLint is the only dev dependency, for `npm run lint`.
+- **No runtime dependencies.** Plain Node 22+. Deploys to Railway in minutes; runs anywhere Node runs. ESLint is the only dev dependency, for `npm run lint`.
 - **Storage**: flat JSON files (trips, last-known ride state, past outages). Locally in `data/`; on Railway on an attached volume so it survives restarts *and* redeploys.
 - **Push**: each trip gets a unique [ntfy.sh](https://ntfy.sh) topic (`parkalert-<code>-<random>`). The server POSTs to it on transitions; phones subscribe via the ntfy app (or ntfy web). No accounts anywhere.
 
 ## Getting started
 
-You need **Node 18 or newer** (CI runs 18, 22 and 24) and git. Nothing else.
+You need **Node 22 or newer** (CI runs 22 and 24) and git. Nothing else.
 
 ```sh
 git clone https://github.com/austin5374/parkalert.git
