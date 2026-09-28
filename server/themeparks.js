@@ -70,7 +70,8 @@ export function parseSchedule(data, now = Date.now(), fallbackZone = 'America/Ne
   const late = entries
     .filter((s) => s.type === 'OPERATING' || s.type === 'TICKETED_EVENT')
     .sort((a, b) => Date.parse(b.closingTime) - Date.parse(a.closingTime))[0];
-  const lateEvent = late && late !== regular && regular && Date.parse(late.closingTime) > Date.parse(regular.closingTime)
+  // An event that runs past regular hours, or a day that is only an event.
+  const lateEvent = late && late !== regular && (!regular || Date.parse(late.closingTime) > Date.parse(regular.closingTime))
     ? late
     : null;
   return {

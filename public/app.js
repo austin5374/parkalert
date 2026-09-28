@@ -404,16 +404,17 @@ function leaveTrip() {
 function alertState() {
   const m = dash.trip.mute;
   if (m && (m.until === null || m.until > Date.now())) return { kind: 'paused', until: m.until };
-  const close = dash.park.lateEvent?.closingTime || dash.park.closingTime;
+  // The same rule the server mutes by: the day's last close, events included.
+  const close = dash.park.lastCloseTime || dash.park.lateEvent?.closingTime || dash.park.closingTime;
   if (close && Date.now() > Date.parse(close)) return { kind: 'closed' };
   if (!alertsReady()) return { kind: 'setup' };
   return { kind: 'on' };
 }
 
 function hoursText() {
-  const { openingTime: open, closingTime: close, lateEvent } = dash.park;
+  const { openingTime: open, closingTime: close, lateEvent, lastCloseTime } = dash.park;
   const now = Date.now();
-  const lastClose = lateEvent?.closingTime || close;
+  const lastClose = lastCloseTime || lateEvent?.closingTime || close;
   if (open && now < Date.parse(open)) return `Opens ${fmtTime(Date.parse(open))}`;
   if (lastClose && now > Date.parse(lastClose)) return 'Closed for the day';
   if (close && now < Date.parse(close)) {

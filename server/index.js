@@ -112,6 +112,7 @@ async function dashboard(trip) {
       openingTime: schedule?.openingTime || null,
       closingTime: schedule?.closingTime || null,
       lateEvent: schedule?.lateEvent || null,
+      lastCloseTime: schedule?.lastCloseTime || null, // when alerts stop for the day
     },
     ntfyBase: NTFY_BASE,
     recent: (state.recent || []).filter((e) => e.at > Date.now() - 2 * 3600_000),

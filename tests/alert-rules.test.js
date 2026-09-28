@@ -60,3 +60,13 @@ test('a trip untouched for three weeks stops being polled until it is opened aga
   assert.equal(isTripActive({ createdAt: now - TRIP_IDLE_MS - 1, lastSeenAt: now - 1000 }, now), true);
   assert.equal(isTripActive({ createdAt: now - 1000 }, now), true);
 });
+
+test('a day that is only a ticketed event reports the event, and alerts run until it ends', () => {
+  const s = parseSchedule({
+    timezone: 'America/New_York',
+    schedule: [{ date: '2026-09-27', type: 'TICKETED_EVENT', description: 'After Hours', openingTime: '2026-09-27T19:00:00-04:00', closingTime: '2026-09-27T23:00:00-04:00' }],
+  }, noonSept27);
+  assert.equal(s.closingTime, null);
+  assert.equal(s.lastCloseTime, '2026-09-27T23:00:00-04:00');
+  assert.deepEqual(s.lateEvent, { name: 'After Hours', closingTime: '2026-09-27T23:00:00-04:00' });
+});
