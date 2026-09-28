@@ -243,7 +243,9 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
   let sent = 0;
   let skipped = 0;
   const targets = only ? [only] : Object.values(trips).filter((t) => t.parkId === parkId && isTripActive(t));
-  for (const trip of targets) {
+  // Trips are sent to side by side, so one slow delivery doesn't hold up the
+  // rest; each trip's own pushes still go out in order.
+  await Promise.all(targets.map(async (trip) => {
     const mine = events.filter((ev) => !isTripMuted(trip, ev.ride.id, state));
     skipped += events.length - mine.length;
     for (const type of ['DOWN', 'UP']) {
@@ -260,7 +262,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
         if (await publish(trip.topic, { ...push, click: APP_URL })) sent++;
       }
     }
-  }
+  }));
   return { sent, skipped };
 }
 
@@ -395,10 +397,10 @@ async function doPollPark(parkId) {
   }
 }
 
+// Parks are independent, so they are polled side by side: a slow response
+// or slow alert delivery at one park never delays another's alerts.
 async function pollAll() {
-  for (const parkId of activeParkIds()) {
-    await pollPark(parkId);
-  }
+  await Promise.all(activeParkIds().map((parkId) => pollPark(parkId)));
 }
 
 export function startPolling() {

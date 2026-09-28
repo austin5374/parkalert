@@ -9,12 +9,16 @@ import os from 'node:os';
 import path from 'node:path';
 
 const received = [];
+const slowTopics = new Set(); // deliveries to these take a second
 const ntfy = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    received.push(JSON.parse(body));
-    res.end('{}');
+    const msg = JSON.parse(body);
+    setTimeout(() => {
+      received.push({ ...msg, at: Date.now() });
+      res.end('{}');
+    }, slowTopics.has(msg.topic) ? 1000 : 0);
   });
 });
 
@@ -87,4 +91,17 @@ test('a trip nobody has opened in three weeks gets no pushes', async () => {
   const events = setup({ down: 1, trip: { lastSeenAt: Date.now() - 22 * 24 * 3600_000, createdAt: 0 } });
   const { sent } = await notifyTrips(PARK, events, { simulated: true });
   assert.equal(sent, 0);
+});
+
+test('one slow phone does not hold up the others', async () => {
+  const events = setup({ down: 1 });
+  // The slow phone comes first, so sending in turn would make the other wait.
+  slowTopics.add('t-a');
+  trips.BBBBBB = { ...trips.AAAAAA, code: 'BBBBBB', topic: 't-b' };
+  const start = Date.now();
+  const { sent } = await notifyTrips(PARK, events, { simulated: true });
+  slowTopics.clear();
+  assert.equal(sent, 2);
+  const fast = received.find((m) => m.topic === 't-b');
+  assert.ok(fast.at - start < 500, `fast trip waited ${fast.at - start} ms`);
 });
