@@ -4,7 +4,7 @@ import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
-import { estimate, describe, classifyLive, clusterLive } from './predict.js';
+import { estimate, describe, shownWindow, classifyLive, clusterLive } from './predict.js';
 import { weatherOutlook, modelHistory } from './weatheroutlook.js';
 import { refreshWeather } from './weather.js';
 import { isLateOpening } from './episodes.js';
@@ -236,8 +236,8 @@ export function downOutlook(parkId, rideId, elapsedMin, now = Date.now()) {
     ...(w ? { cause: w.cause, weather: w.weather, clearedAt: w.clearedAt ?? null } : {}),
     text: describeOutlook(w, est, parkState[parkId]?.timezone),
     basis: est && !est.longerThanUsual ? { from: est.basis, outages: est.n } : null,
-    // Minutes from now, for the dashboard's timeline; the text is the promise.
-    window: est && !est.longerThanUsual ? { lo: est.p25, hi: est.p75 } : null,
+    // Minutes from now, rounded exactly as the text is: the text is the promise.
+    window: shownWindow(est),
   };
 }
 

@@ -208,6 +208,16 @@ function roundMin(m) {
   return v < 15 ? v : Math.round(v / 5) * 5;
 }
 
+// The range as guests read it, in minutes from now: the same rounding as the
+// text, so the card's bar, the sheet's clock times and the scorecard all
+// measure what the alert said, not the unrounded quartiles behind it.
+export function shownWindow(est) {
+  if (!est || est.longerThanUsual) return null;
+  const lo = roundMin(est.p25 ?? est.p50);
+  const hi = est.p75 === null || est.p75 === undefined ? null : roundMin(est.p75);
+  return hi !== null && hi > lo ? { lo, hi } : { lo: roundMin(est.p50), hi: null };
+}
+
 // One short line for a push notification or the dashboard, or null.
 export function describe(est) {
   if (!est) return null;

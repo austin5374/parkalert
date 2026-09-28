@@ -188,3 +188,12 @@ test('a ride still down when the rest of its hold reopens stays in the hold', as
   ({ rides } = applyLiveData(rides, live([6]), t + 90 * 60_000));
   assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'breakdown' });
 });
+
+test('the window is the range as the text states it', async () => {
+  const { shownWindow } = await import('../server/predict.js');
+  const est = { p25: 11.3, p50: 20, p75: 37.8, stayedDownShare: 0 };
+  assert.equal(describe(est), 'Usually back in 11 to 40 min');
+  assert.deepEqual(shownWindow(est), { lo: 11, hi: 40 });
+  assert.deepEqual(shownWindow({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), { lo: 30, hi: null });
+  assert.equal(shownWindow({ longerThanUsual: true }), null);
+});
