@@ -841,9 +841,9 @@ function renderRides() {
 }
 
 function drawRides() {
-  const q = $('#ride-search').value.trim().toLowerCase();
+  const q = $('#ride-search').value.trim();
   const all = [...dash.rides].sort(rideOrder);
-  const shown = q ? all.filter((r) => r.name.toLowerCase().includes(q)) : all;
+  const shown = q ? all.filter((r) => matchesSearch(r.name, q)) : all;
   const following = all.filter((r) => isFollowing(r.id)).length;
 
   $('#follow-summary').textContent = following === all.length ? `Following all ${all.length}` : `Following ${following} of ${all.length}`;
