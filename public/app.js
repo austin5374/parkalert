@@ -436,7 +436,9 @@ const sheet = (() => {
     // the nearest detent to where the flick would come to rest.
     const low = medium || 0;
     if (to > low + (h - low) * 0.45) return close(v);
-    rest = medium && to > medium / 2 ? medium : 0;
+    const next = medium && to > medium / 2 ? medium : 0;
+    if (next !== rest) haptic(); // settling into another detent
+    rest = next;
     // Settling back after a flick carries its momentum, so a little give reads right.
     animateTo(rest, v, Math.abs(v) > 300 ? 0.82 : 1);
   }
@@ -1095,6 +1097,7 @@ $('#rides-list').addEventListener('click', (e) => {
 // One control per ride. The old star (watch) and bell (mute) did the same job
 // two different ways; following now clears any leftover per-ride mute too.
 function toggleFollow(rideId) {
+  haptic();
   const all = dash.rides.map((r) => r.id);
   const on = isFollowing(rideId);
   let watched = dash.trip.watched === null ? all : [...dash.trip.watched];
@@ -1483,6 +1486,7 @@ function waitAlertBlock(r) {
     </div>`);
   box.querySelectorAll('.chip').forEach((b) => {
     b.onclick = () => {
+      haptic();
       const m = b.dataset.act.slice(5);
       setWaitAlert(r.id, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
     };
@@ -1777,8 +1781,12 @@ function waitChart(box, { waits, now }) {
     while (i + 1 < pts.length && pts[i + 1].t <= t) i++;
     return pts[i];
   };
+  let lastShown = null;
   const show = (t, fromUser) => {
     const p = at(t);
+    // A tick each time the finger crosses onto a different reading.
+    if (fromUser && lastShown !== null && p !== lastShown) haptic();
+    lastShown = fromUser ? p : null;
     readout.textContent = `${fromUser ? fmtTime(t) : 'Now'} · ${p.w == null ? 'not running' : `${p.w} min wait`}`;
     cross.setAttribute('x1', x(t)); cross.setAttribute('x2', x(t));
     cross.setAttribute('visibility', fromUser ? 'visible' : 'hidden');
