@@ -497,9 +497,8 @@ function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
   const since = o.kind === 'opening' ? `Delayed opening since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
-  const where = { ride: 'of this ride', park: 'at this park' }[o.basis?.from] || 'across all parks';
   const foot = [
-    o.basis ? `From ${o.basis.outages} past outages ${where}` : '',
+    basisLine(o),
     following ? '' : 'Not following',
   ].filter(Boolean).join(' · ');
   return `
@@ -943,7 +942,29 @@ function statusLine(r) {
   return rideMeta(r);
 }
 
+// What a range rests on, in a few words for the card.
+function basisLine(o) {
+  if (!o?.basis) return '';
+  if (o.cause) {
+    if (o.basis.from === 'rule') return 'From the 30-minute lightning rule';
+    return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
+  }
+  const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
+  return `From ${o.basis.outages} past outages ${where}`;
+}
+
+const WEATHER_NOTE = {
+  lightning: "Outdoor rides close while there's lightning nearby and reopen about 30 minutes after the last of it, once they've been checked. The storm's end comes from the automated weather stations nearest the park.",
+  rain: 'This ride closes in rain as well as lightning and reopens once the rain has stopped and the track has dried. The rain comes from the automated weather stations nearest the park.',
+};
+
 function estimateExplainer(o) {
+  if (o?.cause) {
+    if (!o.basis) return 'ParkAlert has not seen enough weather closures here to put a range on this one yet.';
+    if (o.basis.from === 'rule') return 'Until ParkAlert has seen enough storms here to learn how this ride really goes, this uses the 30-minute rule: most reopen 30 to 45 minutes after the storm passes.';
+    const what = o.cause === 'rain' ? 'rain closures' : 'storms';
+    return `Timed from when the ${o.cause === 'rain' ? 'rain stopped' : 'storm passed'}, not from when the ride went down: based on ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. The middle half of them reopened within the range above.`;
+  }
   if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past one here, so there is no honest range to give.' : '';
   const kind = { hold: 'park-wide holds', opening: 'delayed openings' }[o.kind] || 'breakdowns';
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
@@ -1037,13 +1058,14 @@ function rideSheet(r, detail) {
       : '';
     wrap.appendChild(el(`
       <div class="group padded outlook-block">
-        ${o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
+        ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · park-wide hold' : ''}</p>`
+          : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
         ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
         <p class="big-outlook">${esc(o?.text || 'Not enough history to estimate yet')}</p>
         ${clock ? `<p class="clock">${esc(clock)}</p>` : ''}
         ${timeline({ ...r, outlook: o })}
         ${o?.text ? `<p class="explain">${esc(estimateExplainer(o))}</p>` : ''}
-        ${KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
+        ${o?.cause ? `<p class="explain">${esc(WEATHER_NOTE[o.cause])}</p>` : KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
       </div>`));
   }
 
