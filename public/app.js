@@ -1391,8 +1391,13 @@ function holdSheet() {
   const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold');
   const text = holds[0]?.outlook?.text;
   const wrap = el(`<div>${sheetHead('Park-wide hold', esc(KIND_NOTE.hold))}</div>`);
+  if (!holds.length) {
+    // Left open while the rides came back: say so rather than go blank.
+    wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">The hold is over</p><p class="explain">Every ride in it is running again or has closed. They're listed under Back up recently on Down now.</p></div>`));
+    return wrap;
+  }
   if (text) wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">${esc(text)}</p><p class="explain">${esc(estimateExplainer(holds[0].outlook))}</p></div>`));
-  wrap.appendChild(el(`<h2 class="section-label">${holds.length} rides in this hold</h2>`));
+  wrap.appendChild(el(`<h2 class="section-label">${holds.length} ride${holds.length === 1 ? '' : 's'} still in this hold</h2>`));
   wrap.appendChild(el(`<div class="group plain">${holds.map((r) => `
     <button class="row pressable" type="button" data-ride="${esc(r.id)}">
       <span class="row-label">${esc(r.name)}<small>Down since ${fmtTime(r.downSince)}</small></span>
@@ -1657,6 +1662,7 @@ async function fetchDashboard() {
   renderAll();
   if (!offline && sheetContext?.type === 'ride') loadRide(sheetContext.id);
   if (!offline && sheetContext?.type === 'park') loadPark();
+  if (sheetContext?.type === 'hold') updateSheet(holdSheet());
 }
 
 /* ---------- Screens & navigation ---------- */
@@ -1843,6 +1849,7 @@ setInterval(() => {
   if (!dash || document.hidden) return;
   renderHeader();
   renderDown();
+  if (sheetContext?.type === 'hold') updateSheet(holdSheet());
 }, TICK_MS);
 
 /* ---------- Boot ---------- */
