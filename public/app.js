@@ -1859,6 +1859,15 @@ $('#btn-share').onclick = async () => {
 };
 
 $('#ride-search').addEventListener('input', () => dash && renderRides());
+// Return, or starting to scroll the results, puts the keyboard away, as in
+// the Settings and Mail search fields. The search itself stays.
+$('#search-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('#ride-search').blur();
+});
+addEventListener('touchmove', () => {
+  if (document.activeElement === $('#ride-search')) $('#ride-search').blur();
+}, { passive: true });
 
 /* ---------- Install ---------- */
 // Chrome (Android, desktop) offers its own install prompt, which it hands us

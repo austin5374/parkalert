@@ -98,10 +98,10 @@
       </section>
 
       <section id="view-rides" class="view hidden" aria-label="Rides">
-        <label class="search">
-          <svg><use href="#i-search"/></svg>
-          <input id="ride-search" type="search" placeholder="Search rides" autocomplete="off" enterkeyhint="search">
-        </label>
+        <form class="search" id="search-form" role="search" action="#">
+          <svg aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="ride-search" type="search" placeholder="Search rides" aria-label="Search rides" autocomplete="off" enterkeyhint="search">
+        </form>
         <div class="segmented" role="group" aria-label="Sort rides">
           <button type="button" data-sort="name" aria-pressed="true">A–Z</button>
           <button type="button" data-sort="wait" aria-pressed="false">Shortest wait</button>
