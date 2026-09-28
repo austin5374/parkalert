@@ -26,7 +26,7 @@ export default [
   },
   {
     files: ['public/app.js'],
-    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly' } },
+    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly', fmtDuration: 'readonly' } },
   },
   {
     files: ['public/sw.js'],

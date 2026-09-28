@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const ctx = vm.createContext({ Intl, Date, Object, Number, String });
+const ctx = vm.createContext({ Intl, Date, Object, Number, String, Math });
 vm.runInContext(fs.readFileSync(new URL('../public/time.js', import.meta.url), 'utf8'), ctx);
 const { nextLocalHour, localDay } = ctx;
 const NY = 'America/New_York';
@@ -35,4 +35,13 @@ test('the morning after the clocks go back is still 7am', () => {
 test('the calendar day is local to the zone', () => {
   assert.equal(localDay(Date.parse('2026-09-28T02:00:00Z'), NY), '2026-09-27');
   assert.equal(localDay(Date.parse('2026-09-28T12:00:00Z'), NY), '2026-09-28');
+});
+
+test('durations read the same in the app as in pushes', async () => {
+  const { formatDuration } = await import('../server/notify.js');
+  const cases = [[10_000, '<1 min'], [60_000, '1 min'], [47 * 60_000, '47 min'], [60 * 60_000, '1 hr'], [65 * 60_000, '1 hr 5 min'], [-5, '<1 min']];
+  for (const [ms, text] of cases) {
+    assert.equal(ctx.fmtDuration(ms), text, `app ${ms}`);
+    assert.equal(formatDuration(ms), text, `push ${ms}`);
+  }
 });

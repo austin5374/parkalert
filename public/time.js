@@ -1,6 +1,16 @@
 /* Park-clock helpers. A classic script like app.js and loaded before it, so
    these are plain globals; nothing here touches the DOM, so tests can run it. */
-/* exported localDay, nextLocalHour */
+/* exported localDay, nextLocalHour, fmtDuration */
+
+// "<1 min", "47 min", "1 hr 5 min". server/notify.js says it the same way,
+// so a push and the app never describe one outage differently.
+function fmtDuration(ms) {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return '<1 min';
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return m ? `${h} hr ${m} min` : `${h} hr`;
+}
 
 // The wall-clock reading in a zone: { year, month, day, hour, minute, second }.
 function localParts(ts, timeZone) {

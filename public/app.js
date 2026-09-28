@@ -61,13 +61,6 @@ function fmtUntil(ts) {
   return `${weekday} at ${fmtTime(ts)}`;
 }
 
-function fmtDuration(ms) {
-  const min = Math.max(0, Math.round(ms / 60000));
-  if (min < 60) return `${min} min`;
-  const h = Math.floor(min / 60), m = min % 60;
-  return m ? `${h} hr ${m} min` : `${h} hr`;
-}
-
 function sortKey(name) {
   return name.replace(/^[^a-z0-9]+/i, '').replace(/^the\s+/i, '').toLowerCase();
 }
