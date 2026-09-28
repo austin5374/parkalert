@@ -5,13 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, parkDayStart } from './insights.js';
-import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, APP_URL } from './poller.js';
+import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
+import { PORT, NTFY_BASE, APP_URL } from './config.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
 import { HttpError, requireObject, parseTripPatch } from './validate.js';
 import { LIMITS, createLimiter, clientKey } from './ratelimit.js';
 
-const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 const MIME = {
@@ -96,7 +96,6 @@ function tripView(trip) {
   return { code, topic, parkId, watched, mute, rideMutes };
 }
 
-const NTFY_BASE = process.env.NTFY_BASE || 'https://ntfy.sh';
 
 async function dashboard(trip) {
   touchTrip(trip);

@@ -1,4 +1,4 @@
-const NTFY_BASE = process.env.NTFY_BASE || 'https://ntfy.sh';
+import { NTFY_BASE } from './config.js';
 
 // JSON publish API: unlike header-based publishing it supports full UTF-8.
 export async function publish(topic, { title, message, tags, priority, click }) {

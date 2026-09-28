@@ -1,5 +1,6 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
 import { publish, formatDuration } from './notify.js';
+import { APP_URL } from './config.js';
 import { trips, parkState, saveState, activeParkIds, isTripActive, history } from './store.js';
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
@@ -158,12 +159,6 @@ export function downOutlook(parkId, rideId, elapsedMin) {
     window: est && !est.longerThanUsual ? { lo: est.p25, hi: est.p75 } : null,
   };
 }
-
-// Tapping an alert opens the app instead of the ntfy inbox. Railway sets
-// RAILWAY_PUBLIC_DOMAIN; PUBLIC_URL overrides it anywhere else.
-export const APP_URL =
-  process.env.PUBLIC_URL ||
-  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null);
 
 // This many alerts of one kind in a single poll become one push. A storm hold
 // closes ~11 rides inside two minutes; eleven buzzes in a row reads as a bug.

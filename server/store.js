@@ -1,14 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from './config.js';
 
-// Data lives on an attached volume when one exists (Railway injects
-// RAILWAY_VOLUME_MOUNT_PATH automatically), falling back to ./data locally.
-const DATA_DIR =
-  process.env.DATA_DIR ||
-  process.env.RAILWAY_VOLUME_MOUNT_PATH ||
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const TRIPS_FILE = path.join(DATA_DIR, 'trips.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');

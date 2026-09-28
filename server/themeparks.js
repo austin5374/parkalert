@@ -1,7 +1,5 @@
 import { getPark } from './parks.js';
-
-// Overridable so tests (or a caching mirror) can stand in for the real API.
-const BASE = process.env.THEMEPARKS_BASE || 'https://api.themeparks.wiki/v1';
+import { THEMEPARKS_BASE as BASE, THEMEPARKS_API_KEY } from './config.js';
 
 const USER_AGENT = 'ParkAlert/1.0 (personal ride-status notifier)';
 
@@ -22,7 +20,7 @@ async function getJSON(path) {
 // (hourly limit spent), or a plain error for anything else.
 export async function fetchParkHistory(parkId, date) {
   const headers = { 'User-Agent': USER_AGENT };
-  if (process.env.THEMEPARKS_API_KEY) headers['x-api-key'] = process.env.THEMEPARKS_API_KEY;
+  if (THEMEPARKS_API_KEY) headers['x-api-key'] = THEMEPARKS_API_KEY;
   const res = await fetch(`${BASE}/entity/${parkId}/history?date=${date}`, {
     headers,
     signal: AbortSignal.timeout(60000),
