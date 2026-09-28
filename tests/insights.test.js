@@ -76,3 +76,12 @@ test("on daylight-saving days the park's day still starts at midnight", () => {
   // Mar 8 2026: clocks go forward at 2am. 3pm EDT is 14 hours after midnight EST.
   assert.equal(new Date(parkDayStart('America/New_York', Date.parse('2026-03-08T19:00:00Z'))).toISOString(), '2026-03-08T05:00:00.000Z');
 });
+
+test('"last 7 days" figures come from those 7 days only', () => {
+  const dates = ['2026-08-01', ...Array.from({ length: 7 }, (_, i) => `2026-09-2${i}`)];
+  const h = rideHistory([ep('2026-08-01', 180), ep('2026-09-21', 10), ep('2026-09-24', 20)], 'a', dates);
+  assert.equal(h.outages, 2);
+  assert.equal(h.longestMinutes, 20);
+  assert.equal(h.typicalMinutes, 15);
+  assert.equal(h.archivedDays, 8);
+});

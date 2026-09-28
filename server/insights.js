@@ -41,11 +41,14 @@ export function outageDays(episodes, rideId, fetchedDates, days = 7) {
   });
 }
 
-export function rideHistory(episodes, rideId, fetchedDates) {
-  const mine = episodes.filter((ep) => ep.rideId === rideId && real(ep));
+// The ride's record over the same recent archive days the day chart shows,
+// so "Last 7 days" never quotes a typical or longest outage from months ago.
+export function rideHistory(episodes, rideId, fetchedDates, days = 7) {
+  const recent = new Set([...new Set(fetchedDates)].sort().slice(-days));
+  const mine = episodes.filter((ep) => ep.rideId === rideId && real(ep) && recent.has(ep.date));
   const resolved = mine.filter(isResolved).map((ep) => ep.minutes);
   return {
-    days: outageDays(episodes, rideId, fetchedDates),
+    days: outageDays(episodes, rideId, fetchedDates, days),
     archivedDays: new Set(fetchedDates).size,
     outages: mine.length,
     typicalMinutes: resolved.length ? Math.round(median(resolved)) : null,
