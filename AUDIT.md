@@ -1,6 +1,41 @@
 # ParkAlert audit
 
-Date: 2026-09-28. Branch: `claude/relaxed-rubin-y01a6g` at `3c205b2`. No code has been changed.
+Date: 2026-09-28. Branch: `claude/relaxed-rubin-y01a6g` at `3c205b2`. Written before any code changed; the findings below are as found. The resolution table records what happened to each.
+
+## Resolution
+
+All findings were fixed, each in its own commit with tests where it made sense. Lint, tests (47 → 114) and a smoke run of the real app passed after every commit. Answers to the questions: the description is right; H4 holds alerts back instead of dropping them; the linter is ESLint 9 (dev-only; 10 would need Node 20.19+); colours and the title were changed; delayed openings say "now open, N min late"; a down ride that closes sends "has closed"; `/simulate` stays public but rate-limited; idle trips stop getting pushes and nothing is deleted.
+
+| ID | Commit | | ID | Commit |
+|---|---|---|---|---|
+| H1 | `76aba65` | | L1 | `134893a` |
+| H2 | `9159be2` | | L2 | `43d779f` |
+| H3 | `cfc2dab` | | L3 | `4d83317` |
+| H4 | `6d968a2` | | L4 | `61652d7` |
+| M1 | `bbe8b6d` | | L5 | `05982a9` |
+| M2 | `9785d72` | | L6 | `b8cc83d` |
+| M3 | `624b202` | | L7 | `0a4355d` |
+| M4 | `05782ce` | | L8 | `caef9e6` |
+| M5 | `6e97fb6` | | L9 | `6b4d700` |
+| M6 | `fe40611` | | L10 | `3335806` |
+| M7 | `ad8646e` | | L11 | `da9ebd8` |
+| M8 | `0cde60e` | | L12 | `5bd8986` |
+| M9 | `bb1c61c` | | L13 | `8428058` (with the new icon) |
+| M10 | `a93862e` | | L14 | `4d6ed3c` |
+| M11 | `0ba42b1` | | L15 | `cbb2c9c` |
+| M12 | `c189e0d`, plus tests in each fix | | L16 | `adfa4fb` |
+| | | | L17 | `d450dd9`, `3a53c83`, `d9c0914`, `4acd0b8` |
+| | | | L18 | `46bf7cf` |
+| | | | L19 | `46093cd` (lint, private), `f59e72d` (CI) |
+| | | | L20 | `828a4f6` |
+
+Found while fixing, not in the audit:
+- `/simulate` pushed to every trip at the park, not just the caller's (`c52374e`).
+- The cooldown treated "never alerted" as "alerted at time zero" (fixed in `6d968a2`).
+
+Improvements done: F2 "has closed" alert (`2ead0b9`), I1 offline last-known rides (`5e2a4ea`), I2 health (`46bf7cf`), I3 CI (`f59e72d`), I4 sort by shortest wait (`ac17714`), I6 park-clock times (`9785d72`), F6 Add to Home Screen (`1fa0d80`). Left for a decision: I5, F1, F3, F4, F5.
+
+---
 
 ## What the app is (as I read it)
 
