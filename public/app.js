@@ -76,9 +76,13 @@ const alertsReadyKey = () => `parkalert.alertsReady.${tripCode}`;
 const alertsReady = () => localStorage.getItem(alertsReadyKey()) === '1';
 
 /* ---------- API ---------- */
+// Park signal can stall a request indefinitely; give up and say so instead.
+const API_TIMEOUT_MS = 15_000;
+
 async function api(path, opts = {}) {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout?.(API_TIMEOUT_MS),
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
@@ -1301,14 +1305,38 @@ const fmtWeekday = (d) => new Intl.DateTimeFormat([], { weekday: 'short', timeZo
 })();
 
 /* ---------- Data ---------- */
-async function refresh() {
-  if (!tripCode) return;
+// Refreshes come from the timer, the tab coming back, going online, pull to
+// refresh and saves. Only one runs at a time, so answers can't land out of
+// order; asking during one queues a single follow-up that sees the latest
+// state, and everyone waiting gets that.
+let refreshing = null;
+let refreshAgain = false;
+function refresh() {
+  if (refreshing) {
+    refreshAgain = true;
+    return refreshing;
+  }
+  refreshing = (async () => {
+    do {
+      refreshAgain = false;
+      await fetchDashboard();
+    } while (refreshAgain);
+  })().finally(() => { refreshing = null; });
+  return refreshing;
+}
+
+async function fetchDashboard() {
+  const code = tripCode;
+  if (!code) return;
   try {
-    dash = await api(`/trips/${tripCode}/dashboard`);
+    const next = await api(`/trips/${code}/dashboard`);
+    if (code !== tripCode) return; // switched trips while this was on its way
+    dash = next;
     offline = false;
   } catch (err) {
+    if (code !== tripCode) return;
     if (err.status === 404) {
-      toast(`Trip ${tripCode} no longer exists`);
+      toast(`Trip ${code} no longer exists`);
       leaveTrip();
       return;
     }
