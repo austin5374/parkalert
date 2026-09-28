@@ -375,7 +375,7 @@ main {
 .grabber-zone { flex: none; display: flex; justify-content: center; padding: 0.45rem 0 0.35rem; touch-action: none; cursor: grab; }
 .grabber { width: 2.3rem; height: 0.3rem; border-radius: 999px; background: var(--label-3); }
 .sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.sheet-head { padding: 0.4rem var(--gutter) 0.9rem; touch-action: none; }
+.sheet-head { padding: 0.4rem var(--gutter) 0.9rem; }
 .sheet-head p { color: var(--label-2); margin-top: 0.3rem; font-size: 0.9375rem; line-height: 1.4; }
 .sheet .group { background: var(--surface); }
 @media (prefers-color-scheme: dark) { .sheet .group { background: var(--surface-2); } }

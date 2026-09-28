@@ -219,27 +219,22 @@ const sheet = (() => {
   // Drag: 1:1 with the finger from where it grabbed, rubber-banded above the
   // top, and on release the flick's projected resting point decides.
   let drag = null;
-  function down(e) {
-    if (e.button > 0 || !isOpen) return;
-    if (e.target.closest('button, a, input')) return;
+  function begin(clientY, t) {
     anim?.stop();
     measure();
-    drag = { startY: e.clientY, from: y, samples: [{ t: e.timeStamp, y }], id: e.pointerId };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    drag = { startY: clientY, from: y, samples: [{ t, y }] };
   }
-  function move(e) {
-    if (!drag || e.pointerId !== drag.id) return;
-    let next = drag.from + (e.clientY - drag.startY);
+  function follow(clientY, t) {
+    let next = drag.from + (clientY - drag.startY);
     if (next < 0) next = rubberband(next, h);
     paint(next);
-    drag.samples.push({ t: e.timeStamp, y: next });
-    if (drag.samples.length > 6) drag.samples.shift();
+    drag.samples.push({ t, y: next });
+    if (drag.samples.length > 8) drag.samples.shift();
   }
-  function up(e) {
-    if (!drag || e.pointerId !== drag.id) return;
+  function release(t) {
     // Only the last 80 ms count: a finger that stopped before lifting has no
     // velocity, however fast it was moving earlier.
-    const s = drag.samples.filter((p) => e.timeStamp - p.t <= 80);
+    const s = drag.samples.filter((p) => t - p.t <= 80);
     const a = s[0], b = s[s.length - 1];
     const v = s.length > 1 && b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
     drag = null;
@@ -247,16 +242,56 @@ const sheet = (() => {
     // Settling back after a flick carries its momentum, so a little give reads right.
     else animateTo(0, v, Math.abs(v) > 300 ? 0.82 : 1);
   }
-  for (const zone of [$('#grabber'), body]) {
-    zone.addEventListener('pointerdown', (e) => {
-      // In the scrolling body, only the header region drags the sheet.
-      if (zone === body && !e.target.closest('.sheet-head')) return;
-      down(e);
-    });
-    zone.addEventListener('pointermove', move);
-    zone.addEventListener('pointerup', up);
-    zone.addEventListener('pointercancel', up);
+
+  // The grabber drags with any pointer (a mouse included).
+  const grabber = $('#grabber');
+  grabber.addEventListener('pointerdown', (e) => {
+    if (e.button > 0 || !isOpen) return;
+    begin(e.clientY, e.timeStamp);
+    drag.id = e.pointerId;
+    grabber.setPointerCapture(e.pointerId);
+  });
+  grabber.addEventListener('pointermove', (e) => { if (drag?.id === e.pointerId) follow(e.clientY, e.timeStamp); });
+  for (const type of ['pointerup', 'pointercancel']) {
+    grabber.addEventListener(type, (e) => { if (drag?.id === e.pointerId) release(e.timeStamp); });
   }
+
+  // Anywhere else on the sheet, as in Maps: a downward pull while the
+  // content is at the top moves the sheet; otherwise the content scrolls. A
+  // scroll that reaches the top mid-gesture hands over to the sheet, one
+  // continuous motion. Charts keep their horizontal scrub.
+  let touch = null; // { startY, lastY, mode: null | 'sheet' | 'scroll' }
+  body.addEventListener('touchstart', (e) => {
+    if (!isOpen || e.touches.length > 1 || e.target.closest('.chart')) { touch = null; return; }
+    touch = { startY: e.touches[0].clientY, lastY: e.touches[0].clientY, mode: null };
+  }, { passive: true });
+  body.addEventListener('touchmove', (e) => {
+    if (!touch) return;
+    const cy = e.touches[0].clientY;
+    const goingDown = cy > touch.lastY;
+    touch.lastY = cy;
+    if (touch.mode === 'sheet') {
+      if (e.cancelable) e.preventDefault();
+      follow(cy, e.timeStamp);
+      return;
+    }
+    const atTop = body.scrollTop <= 0;
+    if (touch.mode === null && Math.abs(cy - touch.startY) < 6) return;
+    if (atTop && goingDown && e.cancelable) {
+      touch.mode = 'sheet';
+      e.preventDefault();
+      begin(cy, e.timeStamp);
+      return;
+    }
+    touch.mode = 'scroll';
+  }, { passive: false });
+  const touchEnd = (e) => {
+    if (touch?.mode === 'sheet' && drag) release(e.timeStamp);
+    touch = null;
+  };
+  body.addEventListener('touchend', touchEnd);
+  body.addEventListener('touchcancel', touchEnd);
+
   scrim.addEventListener('click', () => close());
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
