@@ -178,7 +178,7 @@ a, a:visited { color: var(--accent); }
 .nav-meta .meta-chevron { transform: rotate(90deg); }
 .nav .large-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav .large-title.wrap {
-  white-space: normal; overflow-wrap: anywhere;
+  white-space: normal; overflow-wrap: break-word;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
 .nav-meta { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
@@ -550,3 +550,32 @@ main { position: relative; transition: none; }
 @media (min-width: 44rem) {
   :root { --gutter: 1.25rem; }
 }
+
+/* ---- Accessibility text sizes (html.ax-type, 150% and up) ----
+   Stack instead of squeeze: the title and the alerts pill each get the full
+   width, list headers wrap, and a row's switch moves under its label. The
+   tab bar stays one size, as iOS keeps it. */
+.ax-type .nav-inner { flex-wrap: wrap; align-items: flex-start; }
+.ax-type .nav-titles { flex-basis: 100%; }
+.ax-type .nav .large-title.wrap { -webkit-line-clamp: 3; }
+.ax-type .nav .large-title.ax { overflow-wrap: normal; display: block; overflow: visible; }
+/* The header scrolls away rather than covering half the screen. */
+.ax-type .nav { position: relative; }
+.ax-type .pill { margin: 0.4rem 0 0; }
+.ax-type .list-header { flex-wrap: wrap; gap: 0.3rem 1rem; }
+.ax-type .ride-row { flex-wrap: wrap; padding-bottom: 0.7rem; }
+.ax-type .ride-row .row-main { flex-basis: 100%; }
+.ax-type .ride-row .switch { margin-left: var(--gutter); }
+.ax-type .row:has(> .switch) { flex-wrap: wrap; }
+.ax-type .row:has(> .switch) .row-label { flex-basis: calc(100% - 3rem); }
+.ax-type .card-top { flex-wrap: wrap; }
+.ax-type .card-title { flex-basis: 100%; }
+.ax-type .stats { grid-template-columns: 1fr; }
+.ax-type .segmented { flex-wrap: wrap; }
+.ax-type .segmented button { flex-basis: 45%; }
+.ax-type { --tabbar-h: 56px; }
+.ax-type .tab { font-size: 11px; }
+.ax-type .tab svg { width: 26px; height: 26px; }
+.ax-type .badge { font-size: 11px; min-width: 18px; height: 18px; line-height: 18px; }
+.ax-type .ride-row .meta { align-items: flex-start; }
+.ax-type .ride-row .meta .dot { margin-top: 0.4em; }

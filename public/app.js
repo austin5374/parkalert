@@ -754,7 +754,33 @@ function hoursText() {
 // shrinks to fit beside the alerts pill ("Magic Kin…" told nobody anything),
 // down to a floor, and past that takes a second line. Relative to the
 // computed size, so the reader's text size setting still counts.
+// At accessibility text sizes (150% and up) iOS stops squeezing things side
+// by side: titles take the full width and trailing controls move below.
+// The layout switches on a class, set from the root size, which follows
+// the reader's setting.
+function syncTypeSize() {
+  const big = parseFloat(getComputedStyle(document.documentElement).fontSize) >= 24;
+  document.documentElement.classList.toggle('ax-type', big);
+  return big;
+}
+syncTypeSize();
+addEventListener('resize', syncTypeSize);
+
 function fitTitle() {
+  if (syncTypeSize()) {
+    // On its own line it wraps at spaces, and shrinks only as far as needed
+    // for its longest word to fit, so "Kingdom" never breaks as "Kingdo-m".
+    const h = $('#park-name');
+    h.style.fontSize = '';
+    h.classList.add('wrap', 'ax');
+    const max = parseFloat(getComputedStyle(h).fontSize);
+    for (let size = max; h.scrollWidth > h.clientWidth && size > max * 0.5; ) {
+      size -= 1;
+      h.style.fontSize = `${size}px`;
+    }
+    return;
+  }
+  $('#park-name').classList.remove('ax');
   const h = $('#park-name');
   h.style.fontSize = '';
   h.classList.remove('wrap');
