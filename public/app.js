@@ -350,6 +350,11 @@ async function startTrip(parkId) {
 }
 
 function setTrip(code, { firstRun = false } = {}) {
+  if (code.toUpperCase() !== tripCode) {
+    // Never show one trip's rides under another trip's code.
+    dash = null;
+    offline = false;
+  }
   tripCode = code.toUpperCase();
   localStorage.setItem('parkalert.trip', tripCode);
   showApp({ firstRun });
@@ -609,8 +614,40 @@ function renderTrip() {
   $('#park-detail').textContent = parkLabel(dash.park.name);
 }
 
+// Before the first dashboard arrives there is nothing to show but where that
+// stands: loading, or unreachable with a way to try again.
+function renderNoData() {
+  $('#park-name').textContent = 'ParkAlert';
+  const meta = $('#park-meta');
+  meta.textContent = offline ? 'Offline. Waiting for a connection…' : 'Loading…';
+  meta.classList.toggle('warn', offline);
+  $('#btn-alerts').classList.add('hidden');
+  $('#down-badge').classList.add('hidden');
+  $('#trip-code').textContent = tripCode;
+  for (const id of ['#setup-detail', '#pause-detail', '#park-detail', '#follow-summary']) $(id).textContent = '';
+  $('#btn-follow-all').classList.add('hidden');
+  $('#recent-block').replaceChildren();
+
+  const state = offline
+    ? el(`<div class="empty offline">
+        ${icon('wifi-off')}
+        <h2 class="title-2">Can't reach ParkAlert</h2>
+        <p>Rides show up here as soon as your phone reconnects.</p>
+        <button class="btn-secondary pressable" type="button">Try again</button>
+      </div>`)
+    : el('<div class="empty loading" role="status"><p>Loading rides…</p></div>');
+  state.querySelector('button')?.addEventListener('click', () => {
+    offline = false;
+    renderAll();
+    refresh();
+  });
+  $('#down-list').replaceChildren(state);
+  $('#rides-list').className = 'group rides';
+  $('#rides-list').innerHTML = `<p class="no-results">${offline ? 'Rides show up once your phone reconnects.' : 'Loading rides…'}</p>`;
+}
+
 function renderAll() {
-  if (!dash) return;
+  if (!dash) return renderNoData();
   renderHeader();
   renderDown();
   renderRides();
@@ -1202,7 +1239,6 @@ async function refresh() {
       return;
     }
     offline = true;
-    if (!dash) $('#park-meta').textContent = 'Offline. Waiting for a connection…';
   }
   renderAll();
   if (!offline && sheetContext?.type === 'ride') loadRide(sheetContext.id);
@@ -1225,6 +1261,7 @@ async function showApp({ firstRun = false } = {}) {
   $('#app').classList.remove('hidden');
   document.body.classList.remove('no-tabbar');
   switchView('down');
+  renderAll();
   await refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
@@ -1284,10 +1321,12 @@ $('#join-form').onsubmit = async (e) => {
 };
 
 $('#btn-park').onclick = openParkInfo;
-$('#btn-alerts').onclick = () => (alertState().kind === 'setup' ? openAlertSetup() : openPause());
-$('#row-setup').onclick = openAlertSetup;
-$('#row-pause').onclick = openPause;
-$('#row-park').onclick = openPark;
+// Controls that act on the trip's data wait for it rather than failing.
+const withDash = (fn) => () => (dash ? fn() : toast('Still connecting. Try again in a moment.'));
+$('#btn-alerts').onclick = withDash(() => (alertState().kind === 'setup' ? openAlertSetup() : openPause()));
+$('#row-setup').onclick = withDash(openAlertSetup);
+$('#row-pause').onclick = withDash(openPause);
+$('#row-park').onclick = withDash(openPark);
 $('#row-leave').onclick = openLeave;
 $('#row-test').onclick = async () => {
   const d = $('#test-detail');
@@ -1303,7 +1342,7 @@ $('#row-test').onclick = async () => {
 
 $('#btn-share').onclick = async () => {
   const url = `${location.origin}/?join=${tripCode}`;
-  const text = `Join my ParkAlert trip at ${parkLabel(dash.park.name)}. Code ${tripCode}`;
+  const text = `Join my ParkAlert trip${dash ? ` at ${parkLabel(dash.park.name)}` : ''}. Code ${tripCode}`;
   if (navigator.share) {
     try { await navigator.share({ title: 'ParkAlert', text, url }); } catch {}
     return;
