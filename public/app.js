@@ -845,7 +845,7 @@ function queueTags(r) {
 }
 
 function rideMeta(r) {
-  if (r.status === 'OPERATING') return `Open${r.waitTime != null ? ` · ${r.waitTime} min wait` : ''}`;
+  if (r.status === 'OPERATING') return `Open · ${r.waitTime != null ? `${r.waitTime} min wait` : 'no posted wait'}`;
   if (r.status === 'DOWN') return `Down ${r.downSince ? fmtDuration(Date.now() - r.downSince) : ''}`.trim();
   if (r.status === 'REFURBISHMENT') return 'Refurbishment';
   return 'Closed';
@@ -855,10 +855,12 @@ function rideMeta(r) {
 // rides by posted wait, then down ones, then closed. Remembered per phone.
 let rideSort = (() => { try { return localStorage.getItem('parkalert.rideSort') || 'name'; } catch { return 'name'; } })();
 const byName = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name));
+// A running ride that posts no wait (a train, a walk-through, a show) is a
+// walk-on, so it sorts first, not after the 90-minute waits.
 function rideOrder(a, b) {
   if (rideSort !== 'wait') return byName(a, b);
   const rank = (r) => (r.status === 'OPERATING' ? 0 : r.status === 'DOWN' ? 1 : 2);
-  return rank(a) - rank(b) || (a.waitTime ?? Infinity) - (b.waitTime ?? Infinity) || byName(a, b);
+  return rank(a) - rank(b) || (a.waitTime ?? 0) - (b.waitTime ?? 0) || byName(a, b);
 }
 
 // Which rides to list: all, open ones, down ones, or the ones you get
