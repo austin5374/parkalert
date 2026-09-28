@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
-import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, history } from './store.js';
+import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary } from './insights.js';
 import { parkDayStart } from './time.js';
 import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
@@ -60,6 +60,7 @@ function tooMany(res, waitMs) {
 }
 
 const MAX_BODY = 100_000;
+const HEALTH_STALE_MS = 5 * 60_000;
 
 // Bytes are joined before decoding, so a character split across chunks
 // survives. Past the limit nothing more is kept, and the connection closes
@@ -137,6 +138,26 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/parks') {
     return json(res, 200, { parks: PARKS });
+  }
+
+  // For an uptime monitor: is every park someone is watching being polled?
+  // 503 once any has gone 5 minutes without a good poll, which is what
+  // "alerts silently stopped" looks like from outside. (Railway's deploy
+  // check uses /api/parks, so an API outage never blocks a deploy.)
+  if (req.method === 'GET' && url.pathname === '/api/health') {
+    const now = Date.now();
+    const parks = activeParkIds(now).map((id) => {
+      const s = parkState[id] || {};
+      return {
+        id,
+        name: getPark(id)?.name || id,
+        lastPoll: s.lastPoll || null,
+        ageSeconds: s.lastPoll ? Math.round((now - s.lastPoll) / 1000) : null,
+        lastError: s.lastError || null,
+      };
+    });
+    const ok = parks.every((p) => p.lastPoll && now - p.lastPoll < HEALTH_STALE_MS);
+    return json(res, ok ? 200 : 503, { ok, uptimeSeconds: Math.round(process.uptime()), parks });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/trips') {

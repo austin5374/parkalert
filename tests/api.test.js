@@ -32,7 +32,18 @@ async function call(method, path, body) {
   });
   return { status: res.status, body: await res.json().catch(() => null) };
 }
-const newTrip = async (parkId = MK) => (await call('POST', '/api/trips', { parkId })).body.trip;
+// Each test trip comes from its own address, so the suite never runs into
+// the per-client limit on creating trips (tested separately).
+let tripClient = 0;
+async function newTrip(parkId = MK) {
+  const res = await fetch(`${base}/api/trips`, {
+    method: 'POST',
+    headers: { 'X-Forwarded-For': `198.51.100.${++tripClient}` },
+    body: JSON.stringify({ parkId }),
+  });
+  assert.equal(res.status, 201);
+  return (await res.json()).trip;
+}
 
 test('creating a trip returns a shareable code and a private topic', async () => {
   const { status, body } = await call('POST', '/api/trips', { parkId: MK });
@@ -241,4 +252,28 @@ test("a California park runs on Pacific time even when its schedule doesn't say"
   const trip = await newTrip(DCA);
   const { body } = await call('GET', `/api/trips/${trip.code}/dashboard`);
   assert.equal(body.park.timezone, 'America/Los_Angeles');
+});
+
+test('health reports each watched park, and fails once one stops being polled', async () => {
+  const { parkState } = await import('../server/store.js');
+  const trip = await newTrip(MK);
+  await call('GET', `/api/trips/${trip.code}/dashboard`);
+  let r = await call('GET', '/api/health');
+  assert.equal(r.status, 200);
+  assert.ok(r.body.parks.some((p) => p.name === 'Magic Kingdom' && p.ageSeconds < 60));
+  assert.ok(!JSON.stringify(r.body).includes(trip.code), 'no trip codes');
+  const saved = parkState[MK].lastPoll;
+  parkState[MK].lastPoll = Date.now() - 10 * 60_000;
+  r = await call('GET', '/api/health');
+  parkState[MK].lastPoll = saved;
+  assert.equal(r.status, 503);
+  assert.equal(r.body.ok, false);
+});
+
+test('one client can only mint so many trips', async () => {
+  const mint = () => fetch(`${base}/api/trips`, { method: 'POST', headers: { 'X-Forwarded-For': '203.0.113.9' }, body: JSON.stringify({ parkId: MK }) });
+  const statuses = [];
+  for (let i = 0; i < 21; i++) statuses.push((await mint()).status);
+  assert.deepEqual(statuses.slice(0, 20), Array(20).fill(201));
+  assert.equal(statuses[20], 429);
 });
