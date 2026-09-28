@@ -401,6 +401,7 @@ main {
 .topic code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 0.875rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .topic button { color: var(--accent); font-weight: 600; font-size: 0.9375rem; flex: none; margin-right: -0.3rem; }
 .tip { font-size: 0.875rem !important; }
+.inline-icon { width: 1.1em; height: 1.1em; vertical-align: -0.2em; color: var(--accent); }
 
 /* ---- Toast ---- */
 .toast {

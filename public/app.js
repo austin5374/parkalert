@@ -1507,6 +1507,44 @@ $('#btn-share').onclick = async () => {
 
 $('#ride-search').addEventListener('input', () => dash && renderRides());
 
+/* ---------- Install ---------- */
+// Chrome (Android, desktop) offers its own install prompt, which it hands us
+// to show when asked; iPhone Safari has none, so the sheet says where the
+// menu item is. Nothing shows once the app runs from the home screen.
+const installed = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installPrompt = null;
+function syncInstall() {
+  $('#install-group').classList.toggle('hidden', installed() || !(installPrompt || platform === 'ios'));
+}
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  syncInstall();
+});
+addEventListener('appinstalled', () => {
+  installPrompt = null;
+  syncInstall();
+});
+$('#row-install').onclick = async () => {
+  if (installPrompt) {
+    installPrompt.prompt();
+    await installPrompt.userChoice.catch(() => null);
+    installPrompt = null;
+    syncInstall();
+    return;
+  }
+  sheet.open(el(`<div>
+    ${sheetHead('Add to Home Screen', 'ParkAlert then opens full screen from its own icon, without Safari around it.')}
+    <ol class="steps">
+      <li class="step"><h3>Tap Share</h3><p>The ${icon('share', 'inline-icon')} button in Safari's toolbar.</p></li>
+      <li class="step"><h3>Tap Add to Home Screen</h3><p>Scroll down the list if you don't see it, then tap Add.</p></li>
+    </ol>
+    <div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Done</button></div>
+  </div>`));
+  $('#sheet-body [data-act=done]').onclick = () => sheet.close();
+};
+syncInstall();
+
 const nav = $('#nav');
 addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 2), { passive: true });
 
