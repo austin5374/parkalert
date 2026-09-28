@@ -496,7 +496,15 @@ function renderDown() {
     .sort((a, b) => (isFollowing(b.id) - isFollowing(a.id)) || b.downSince - a.downSince);
   list.replaceChildren();
 
-  if (!down.length) {
+  if (!dash.lastPoll) {
+    // No ride data yet is not the same as nothing being down.
+    list.appendChild(el(`
+      <div class="empty offline">
+        ${icon('wifi-off')}
+        <h2 class="title-2">No ride data yet</h2>
+        <p>The park's ride feed isn't answering right now. This updates on its own.</p>
+      </div>`));
+  } else if (!down.length) {
     list.appendChild(el(`
       <div class="empty">
         ${icon('check-circle')}

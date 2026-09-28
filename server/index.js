@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, parkDayStart } from './insights.js';
-import { startPolling, pollPark, simulateTransition, downOutlook, currentSchedule, APP_URL } from './poller.js';
+import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, APP_URL } from './poller.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
 import { HttpError, requireObject, parseTripPatch } from './validate.js';
@@ -64,8 +64,7 @@ const NTFY_BASE = process.env.NTFY_BASE || 'https://ntfy.sh';
 
 async function dashboard(trip) {
   touchTrip(trip);
-  if (!parkState[trip.parkId]?.lastPoll) await pollPark(trip.parkId);
-  const state = parkState[trip.parkId] || {};
+  const state = await freshPark(trip.parkId);
   const park = getPark(trip.parkId);
   const schedule = currentSchedule(state);
   return {

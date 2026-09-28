@@ -303,6 +303,19 @@ export function pollPark(parkId) {
   return p;
 }
 
+// For readers (the dashboard): if this park's snapshot is old, or a poll is
+// already on its way (a park switch starts one), wait briefly for it rather
+// than serve the old snapshot as live. Bounded, so a slow API costs a few
+// seconds, not a hung request; the reader can tell from lastPoll.
+export const FRESH_MS = 2 * POLL_INTERVAL_MS;
+export async function freshPark(parkId, waitMs = 5000) {
+  const s = parkState[parkId];
+  if (!s?.lastPoll || Date.now() - s.lastPoll > FRESH_MS || inFlight.has(parkId)) {
+    await Promise.race([pollPark(parkId), new Promise((r) => setTimeout(r, waitMs).unref())]);
+  }
+  return parkState[parkId] || {};
+}
+
 // A snapshot older than this says nothing about when rides changed since:
 // the park went unwatched after a park hop, or the server or the API was
 // down. Diffing against it sent "back up, was down 18h" the morning after a

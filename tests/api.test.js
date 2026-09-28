@@ -151,3 +151,18 @@ test('guessing trip codes runs out quickly, and then even a right guess waits', 
   // Another client is unaffected.
   assert.equal((await fetch(`${base}/api/trips/${trip.code}`)).status, 200);
 });
+
+test('right after a park switch the dashboard shows that park now, not an old snapshot', async () => {
+  const { parkState } = await import('../server/store.js');
+  const yesterday = Date.now() - 20 * 3600_000;
+  // EPCOT was last polled yesterday, with its first ride down.
+  parkState[EPCOT] = {
+    timezone: 'America/New_York', schedule: null, lastPoll: yesterday,
+    rides: { [`${EPCOT}-1`]: { name: 'First Ride', status: 'DOWN', since: yesterday, downSince: yesterday, downFrom: 'OPERATING' } },
+  };
+  const trip = await newTrip(MK);
+  await call('PATCH', `/api/trips/${trip.code}`, { parkId: EPCOT });
+  const { body } = await call('GET', `/api/trips/${trip.code}/dashboard`);
+  assert.ok(body.lastPoll > yesterday);
+  assert.equal(body.rides.find((r) => r.id === `${EPCOT}-1`).status, 'OPERATING');
+});
