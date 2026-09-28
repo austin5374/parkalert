@@ -171,8 +171,9 @@ a, a:visited { color: var(--accent); }
   box-shadow: 0 0.5px 0 var(--separator);
 }
 .nav-inner { display: flex; align-items: flex-end; gap: 0.75rem; padding: 0 var(--gutter); max-width: 40rem; margin: 0 auto; }
-.nav-titles { flex: 1; min-width: 0; border-radius: 0.5rem; }
-.nav-titles:active { opacity: 0.6; }
+.nav-titles { flex: 1; min-width: 0; position: relative; }
+.cover-btn { position: absolute; inset: 0; z-index: 1; width: 100%; border-radius: 0.5rem; cursor: pointer; }
+.cover-btn:active ~ * { opacity: 0.6; }
 .nav-meta { display: flex; align-items: center; gap: 0.2rem; }
 .nav-meta .meta-chevron { transform: rotate(90deg); }
 .nav .large-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

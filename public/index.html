@@ -74,10 +74,13 @@
   <div id="app" class="screen hidden">
     <header class="nav" id="nav">
       <div class="nav-inner">
-        <button class="nav-titles pressable" id="btn-park" type="button" aria-haspopup="dialog">
+        <!-- The heading stays a heading; one transparent button over the whole
+             block (name and hours) opens the park sheet. -->
+        <div class="nav-titles">
+          <button class="cover-btn" id="btn-park" type="button" aria-haspopup="dialog" aria-labelledby="park-name park-meta"></button>
           <h1 id="park-name" class="large-title">ParkAlert</h1>
           <p class="nav-meta"><span id="park-meta" aria-live="polite"></span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
-        </button>
+        </div>
         <button id="btn-alerts" class="pill pressable hidden" type="button" aria-haspopup="dialog">
           <svg><use href="#i-bell"/></svg><span>Alerts on</span>
         </button>
