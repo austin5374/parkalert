@@ -151,16 +151,17 @@ function save(apply, body, afterSave) {
 }
 
 /* ---------- Toast ---------- */
-// One at a time, in order. A toast with an action (Undo, Reload) is never
-// cut short by the next one, which waits its turn; plain ones give way to
-// whatever comes next. With a sheet open, toasts show at the top, clear of
-// the sheet's buttons.
+// One at a time. A plain message never cuts short a toast with an action
+// (Undo, Reload): it waits its turn. A newer action replaces an older one,
+// since the Undo for what the guest just did is the one that matters (as
+// iOS keeps only the latest undo). Plain ones give way to whatever comes
+// next. With a sheet open, toasts show at the top, clear of its buttons.
 let toastTimer = null;
 let toastNow = null; // { text, action }
 const toastQueue = [];
 function toast(text, action) {
   const item = { text, action };
-  if (toastNow?.action) {
+  if (toastNow?.action && !action) {
     toastQueue.push(item);
     return;
   }
