@@ -42,8 +42,13 @@ test('an archive with no weather still scores the ordinary estimates', () => {
     }
   }
   const r = backtest({ P: eps });
-  assert.ok(r['breakdown: when it went down, old'].n > 0);
-  assert.ok(r['breakdown: when it went down, old'].inRange > 0);
+  const s = r['breakdown: when it went down, old'];
+  // Days 2 to 6 are each scored from the days before: 8 outages a day.
+  assert.equal(s.n, 40);
+  // The range is the middle half, so on steady data roughly half land in
+  // it; a range that caught everything or nothing would mean a broken score.
+  assert.ok(s.inRange >= 0.3 && s.inRange <= 0.9, `in range ${s.inRange}`);
+  assert.ok(s.width > 0 && s.width <= 20, `width ${s.width}`);
 });
 
 test('an outage that never reopened counts as a miss once it outlasts the range', () => {

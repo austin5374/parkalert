@@ -94,9 +94,14 @@ test('a delayed opening says the ride is now open, and how late', async () => {
 });
 
 test('a trip nobody has opened in three weeks gets no pushes', async () => {
-  const events = setup({ down: 1, trip: { lastSeenAt: Date.now() - 22 * 24 * 3600_000, createdAt: 0 } });
+  // The same trip, opened 20 days ago, does get the push: the only
+  // difference below is the three weeks.
+  let events = setup({ down: 1, trip: { lastSeenAt: Date.now() - 20 * 24 * 3600_000, createdAt: 0 } });
+  assert.equal((await notifyTrips(PARK, events, { simulated: true })).sent, 1);
+  events = setup({ down: 1, trip: { lastSeenAt: Date.now() - 22 * 24 * 3600_000, createdAt: 0 } });
   const { sent } = await notifyTrips(PARK, events, { simulated: true });
   assert.equal(sent, 0);
+  assert.equal(received.length, 0);
 });
 
 test('one slow phone does not hold up the others', async () => {

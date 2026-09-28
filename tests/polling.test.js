@@ -47,8 +47,24 @@ test('after a gap in polling there are no alerts, and clocks start afresh', asyn
   assert.deepEqual(recent, []);
 });
 
-test('the gap threshold sits between a redeploy and a park hop', () => {
-  assert.ok(MAX_GAP_MS >= 5 * 60_000 && MAX_GAP_MS <= 30 * 60_000);
+test('a redeploy-sized gap still alerts; a park-hop-sized gap starts afresh', async () => {
+  const { isBaseline } = await import('../server/poller.js');
+  const now = Date.now();
+  assert.equal(isBaseline(now - 3 * 60_000, now), false); // a redeploy
+  assert.equal(isBaseline(now - 20 * 60_000, now), true); // hopped away and back
+  assert.equal(isBaseline(null, now), true); // never polled
+  // And through the real poll: 3 minutes since the last poll, the change alerts.
+  setup({ g1: ride('Ride G1', 'OPERATING', now - 3600_000) }, now - 3 * 60_000);
+  fakes.upstream.live[PARK] = [{ id: 'g1', name: 'Ride G1', status: 'DOWN' }];
+  await pollPark(PARK);
+  assert.deepEqual(fakes.pushes.map((p) => p.title), ['Ride G1 is down']);
+  // 20 minutes: no alert, and the outage clock starts now.
+  setup({ g2: ride('Ride G2', 'OPERATING', now - 3600_000) }, now - 20 * 60_000);
+  fakes.upstream.live[PARK] = [{ id: 'g2', name: 'Ride G2', status: 'DOWN' }];
+  await pollPark(PARK);
+  assert.deepEqual(fakes.pushes, []);
+  assert.ok(Date.now() - parkState[PARK].rides.g2.downSince < 5000);
+  assert.ok(MAX_GAP_MS > 3 * 60_000 && MAX_GAP_MS < 20 * 60_000);
 });
 
 test('an empty live response is a failed poll, not every ride vanishing', async () => {
