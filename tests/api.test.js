@@ -228,3 +228,8 @@ test('every response carries the security headers', async () => {
     assert.equal(res.headers.get('referrer-policy'), 'no-referrer', path);
   }
 });
+
+test('every park names the resort it is listed under', async () => {
+  const { parks } = (await call('GET', '/api/parks')).body;
+  assert.ok(parks.every((p) => typeof p.resort === 'string' && p.resort && p.timezone));
+});

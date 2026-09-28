@@ -109,7 +109,7 @@ The dashboard shows how many past outages each range rests on. Six and a hundred
 
 - **HTTPS**: geolocation and PWA install require a secure context. Railway's `*.up.railway.app` domain is HTTPS out of the box; `localhost` also counts for local dev. GPS denied/unavailable degrades gracefully to the manual picker.
 - **ntfy topics are the security model**: anyone with the topic name can read/write it. The random suffix makes it unguessable; treat trip links like a shared secret.
-- **Adding parks**: append to `server/parks.js` with the park's timezone (entity IDs from `https://api.themeparks.wiki/v1/destinations`).
+- **Adding parks**: append to `server/parks.js` with the park's timezone and the resort to list it under (entity IDs from `https://api.themeparks.wiki/v1/destinations`).
 - Statuses other than OPERATING/DOWN (CLOSED, REFURBISHMENT) never trigger notifications; only the two transitions above do.
 - Trips nobody has opened in three weeks stop being polled, which is most of what hosting costs. Opening the app again resumes them.
 - Times are shown in the park's own time zone, so planning from home still reads like the park clock.

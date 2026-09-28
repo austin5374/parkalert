@@ -272,10 +272,6 @@ function sheetHead(title, html) {
 }
 
 /* ---------- Parks ---------- */
-const RESORTS = [
-  { name: 'Walt Disney World', timezone: 'America/New_York' },
-  { name: 'Disneyland Resort', timezone: 'America/Los_Angeles' },
-];
 const parkLabel = (name) => name.replace(' (CA)', '');
 
 // The park list is only needed to pick a park, so a phone that already has a
@@ -287,10 +283,10 @@ async function loadParks() {
 
 function parkGroups(currentId, onPick) {
   const wrap = document.createElement('div');
-  for (const resort of RESORTS) {
-    const list = parks.filter((p) => p.timezone === resort.timezone);
-    if (!list.length) continue;
-    wrap.appendChild(el(`<h2 class="section-label">${esc(resort.name)}</h2>`));
+  // Grouped under each park's resort, in the order the server lists them.
+  for (const resort of new Set(parks.map((p) => p.resort || 'Other parks'))) {
+    const list = parks.filter((p) => (p.resort || 'Other parks') === resort);
+    wrap.appendChild(el(`<h2 class="section-label">${esc(resort)}</h2>`));
     const group = el('<div class="group plain"></div>');
     for (const p of list) {
       const selected = p.id === currentId;
