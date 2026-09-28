@@ -20,6 +20,7 @@ beforeEach(() => {
   for (const k of Object.keys(store.trips)) delete store.trips[k];
   store.history.fetched = {};
   fakes.upstream.archiveCalls.length = 0;
+  fakes.upstream.archiveStatus = 200;
 });
 
 test('live reports come in for the stations of parks someone is watching', async () => {
@@ -43,15 +44,39 @@ test('the archive is read for each outage-archive day and the UTC day after', as
     'ISM,2026-09-20 18:53,KISM 201853Z 4SM -TSRA BKN030CB RMK AO2 TSB35',
     'ISM,2026-09-20 20:17,SPECI KISM 202017Z 10SM FEW030 RMK AO2 TSE10',
   ].join('\n');
-  await w.syncWeatherArchive(at('2026-09-28T12:00Z'));
-  assert.deepEqual(fakes.upstream.archiveCalls.sort(), ['ISM:2026-09-20', 'ISM:2026-09-21', 'MCO:2026-09-20', 'MCO:2026-09-21']);
+  await w.syncWeatherArchive(at('2026-09-28T12:00Z'), { gapMs: 0 });
+  assert.deepEqual(fakes.upstream.archiveCalls.sort(), ['ISM:2026-09-20..2026-09-21', 'MCO:2026-09-20..2026-09-21']);
   assert.deepEqual(store.weather.fetched.KISM.sort(), ['2026-09-20', '2026-09-21']);
   const storm = w.timelines(MK).thunder[0];
   assert.deepEqual([hhmm(storm.start), hhmm(storm.end)], ['18:35', '20:10']);
   // Nothing left to fetch.
   fakes.upstream.archiveCalls.length = 0;
-  await w.syncWeatherArchive(at('2026-09-28T12:00Z'));
+  await w.syncWeatherArchive(at('2026-09-28T12:00Z'), { gapMs: 0 });
   assert.deepEqual(fakes.upstream.archiveCalls, []);
+});
+
+test('a week of days is one request per station, and a gap starts another', () => {
+  const needed = [];
+  for (const day of ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-10', '2026-09-11']) {
+    for (const station of ['KISM', 'KMCO']) needed.push({ station, day });
+  }
+  assert.deepEqual(w.archiveRuns(needed).map((r) => `${r.station} ${r.from}..${r.to}`), [
+    'KISM 2026-09-10..2026-09-11', 'KMCO 2026-09-10..2026-09-11',
+    'KISM 2026-09-01..2026-09-03', 'KMCO 2026-09-01..2026-09-03',
+  ]);
+  const long = Array.from({ length: 40 }, (_, i) => ({ station: 'KISM', day: new Date(Date.UTC(2026, 7, 1 + i)).toISOString().slice(0, 10) }));
+  assert.deepEqual(w.archiveRuns(long).map((r) => r.days.length), [31, 9], 'at most a month per request');
+});
+
+test('a busy archive (429) stops the sync, and the next one picks up where it left off', async () => {
+  store.history.fetched[MK] = ['2026-09-20'];
+  fakes.upstream.archiveStatus = 429;
+  await w.syncWeatherArchive(at('2026-09-28T12:00Z'), { gapMs: 0 });
+  assert.equal(fakes.upstream.archiveCalls.length, 1, 'no hammering after a 429');
+  assert.deepEqual(store.weather.fetched, {});
+  fakes.upstream.archiveStatus = 200;
+  await w.syncWeatherArchive(at('2026-09-28T12:00Z'), { gapMs: 0 });
+  assert.deepEqual(Object.keys(store.weather.fetched).sort(), ['KISM', 'KMCO']);
 });
 
 test('days not over yet in UTC are left for later', () => {

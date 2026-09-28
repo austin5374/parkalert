@@ -16,8 +16,12 @@ const USER_AGENT = 'ParkAlert/1.0 (personal ride-status notifier)';
 const LIVE_INTERVAL_MS = 5 * 60_000;
 const ARCHIVE_INTERVAL_MS = 60 * 60_000;
 const KEEP_MS = 365 * 24 * 3600_000;
-// Days pulled from the archive per sync; the backfill catches up over a few hours.
-const ARCHIVE_DAYS_PER_SYNC = 40;
+// The archive is asked for a whole run of days per station in one request,
+// a few seconds apart: it throttles rapid requests (HTTP 429), and a host
+// like Railway shares its outgoing address with other customers.
+const ARCHIVE_MAX_RUN_DAYS = 31;
+const ARCHIVE_REQUESTS_PER_SYNC = 8;
+const ARCHIVE_GAP_MS = 5000;
 // A station whose newest report is older than this has nothing current to say.
 // Routine reports come hourly, and a special one the moment a storm starts or ends.
 export const STALE_MS = 75 * 60_000;
@@ -54,11 +58,11 @@ export async function fetchLive(stations) {
 
 const addDays = (date, n) => new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
 
-// Every report (routine and special) for one station on one UTC day.
-// The archive names US stations without the leading K.
-export async function fetchArchiveDay(station, utcDate) {
-  const [y1, m1, d1] = utcDate.split('-').map(Number);
-  const [y2, m2, d2] = addDays(utcDate, 1).split('-').map(Number);
+// Every report (routine and special) for one station over UTC days
+// from..to, both included. The archive names US stations without the K.
+export async function fetchArchiveRange(station, from, to) {
+  const [y1, m1, d1] = from.split('-').map(Number);
+  const [y2, m2, d2] = addDays(to, 1).split('-').map(Number);
   const id = station.replace(/^K/, '');
   const url = `${WEATHER_ARCHIVE}?station=${id}&data=metar&year1=${y1}&month1=${m1}&day1=${d1}` +
     `&year2=${y2}&month2=${m2}&day2=${d2}&tz=Etc/UTC&format=onlycomma&latlon=no&missing=empty` +
@@ -70,7 +74,7 @@ export async function fetchArchiveDay(station, utcDate) {
     const m = line.match(/^[^,]+,(\d{4}-\d{2}-\d{2} \d{2}:\d{2}),(.+)$/);
     if (!m) continue;
     const at = Date.parse(`${m[1].replace(' ', 'T')}:00Z`);
-    if (Number.isFinite(at) && at < Date.parse(`${utcDate}T00:00:00Z`) + DAY_MS) out.push(parseMetar(m[2].trim(), at));
+    if (Number.isFinite(at) && at < Date.parse(`${to}T00:00:00Z`) + DAY_MS) out.push(parseMetar(m[2].trim(), at));
   }
   return out;
 }
@@ -120,19 +124,39 @@ export function archiveDaysNeeded(now = Date.now()) {
   return out;
 }
 
+// The needed days as requests: one per station per run of consecutive
+// days, newest first, at most ARCHIVE_MAX_RUN_DAYS each.
+export function archiveRuns(needed) {
+  const byStation = new Map();
+  for (const { station, day } of needed) (byStation.get(station) || byStation.set(station, []).get(station)).push(day);
+  const runs = [];
+  for (const [station, days] of byStation) {
+    let run = null;
+    for (const day of [...new Set(days)].sort().reverse()) {
+      if (run && run.from === addDays(day, 1) && run.days.length < ARCHIVE_MAX_RUN_DAYS) {
+        run.from = day;
+        run.days.push(day);
+      } else runs.push((run = { station, from: day, to: day, days: [day] }));
+    }
+  }
+  return runs.sort((a, b) => (a.to < b.to) - (a.to > b.to) || a.station.localeCompare(b.station));
+}
+
 let archiveRunning = false;
-export async function syncWeatherArchive(now = Date.now()) {
+export async function syncWeatherArchive(now = Date.now(), { gapMs = ARCHIVE_GAP_MS } = {}) {
   if (archiveRunning) return;
   archiveRunning = true;
   let days = 0;
   try {
-    for (const { station, day } of archiveDaysNeeded(now).slice(0, ARCHIVE_DAYS_PER_SYNC)) {
+    const runs = archiveRuns(archiveDaysNeeded(now)).slice(0, ARCHIVE_REQUESTS_PER_SYNC);
+    for (const [i, { station, from, to, days: runDays }] of runs.entries()) {
+      if (i && gapMs) await new Promise((r) => setTimeout(r, gapMs));
       try {
-        addObservations(station, await fetchArchiveDay(station, day), now);
-        (weather.fetched[station] ??= []).push(day);
-        days++;
+        addObservations(station, await fetchArchiveRange(station, from, to), now);
+        (weather.fetched[station] ??= []).push(...runDays);
+        days += runDays.length;
       } catch (err) {
-        console.error(`[weather] archive ${station} ${day}:`, err.message);
+        console.error(`[weather] archive ${station} ${from}..${to}:`, err.message);
         break; // the archive is unhappy; try again next sync
       }
     }
