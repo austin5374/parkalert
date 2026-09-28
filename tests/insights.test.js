@@ -63,3 +63,8 @@ test("the park's day starts at local midnight", () => {
   assert.equal(new Date(parkDayStart('America/New_York', now)).toISOString(), '2026-09-27T04:00:00.000Z');
   assert.equal(new Date(parkDayStart('America/Los_Angeles', now)).toISOString(), '2026-09-27T07:00:00.000Z');
 });
+
+test('after a gap in polling, the wait chart breaks instead of holding the old wait', () => {
+  const w = recordWaits({ a: [[1000, 30]] }, { a: { status: 'OPERATING', waitTime: 30 } }, 9000, 2000);
+  assert.deepEqual(w.a, [[1000, 30], [2000, null], [9000, 30]]);
+});

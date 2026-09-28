@@ -1,4 +1,5 @@
-const BASE = 'https://api.themeparks.wiki/v1';
+// Overridable so tests (or a caching mirror) can stand in for the real API.
+const BASE = process.env.THEMEPARKS_BASE || 'https://api.themeparks.wiki/v1';
 
 const USER_AGENT = 'ParkAlert/1.0 (personal ride-status notifier)';
 

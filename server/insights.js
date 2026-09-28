@@ -15,12 +15,17 @@ const real = (ep) => ep.kind !== 'blip';
 
 // Wait-time samples, recorded only when the value changes. null means the ride
 // was not posting a wait (down, closed), which the chart draws as a gap.
+// gapFrom: when polling had stopped, the time it stopped; the series gets a
+// null there so the chart shows a gap instead of a stale wait.
 export const WAIT_KEEP_MS = 18 * 3600_000;
-export function recordWaits(waits = {}, rides, now = Date.now()) {
+export function recordWaits(waits = {}, rides, now = Date.now(), gapFrom = null) {
   const next = {};
   for (const [id, r] of Object.entries(rides)) {
     const value = r.status === 'OPERATING' ? r.waitTime ?? null : null;
     const series = (waits[id] || []).filter(([t]) => now - t < WAIT_KEEP_MS);
+    if (gapFrom !== null && series.length && series[series.length - 1][1] !== null && gapFrom < now) {
+      series.push([gapFrom, null]);
+    }
     const last = series[series.length - 1];
     if (!last || last[1] !== value) series.push([now, value]);
     next[id] = series;

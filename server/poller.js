@@ -254,17 +254,32 @@ export function pollPark(parkId) {
   return p;
 }
 
+// A snapshot older than this says nothing about when rides changed since:
+// the park went unwatched after a park hop, or the server or the API was
+// down. Diffing against it sent "back up, was down 18h" the morning after a
+// hop, so the next poll starts afresh instead, exactly like the first ever
+// poll: no alerts, and every clock starts now. A redeploy is a minute or two.
+export const MAX_GAP_MS = 15 * 60_000;
+export const isBaseline = (lastPoll, now = Date.now()) => !lastPoll || now - lastPoll > MAX_GAP_MS;
+
 async function doPollPark(parkId) {
   parkState[parkId] ??= { rides: {}, timezone: 'America/New_York', schedule: null };
   const state = parkState[parkId];
   try {
     await refreshSchedule(parkId);
     const live = await fetchLiveAttractions(parkId);
-    const { rides, events } = applyLiveData(state.rides, live);
+    const now = Date.now();
+    const baseline = isBaseline(state.lastPoll, now);
+    if (baseline && state.lastPoll) {
+      console.log(`[poller] ${getPark(parkId)?.name || parkId}: last snapshot is ${Math.round((now - state.lastPoll) / 60_000)} min old, starting afresh`);
+    }
+    const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now);
     state.rides = rides;
-    state.recent = recordRecent(state.recent, events);
-    state.waits = recordWaits(state.waits, rides);
-    state.lastPoll = Date.now();
+    state.recent = recordRecent(state.recent, events, now);
+    // Break the wait chart where polling stopped, rather than holding the
+    // last wait flat across hours nobody was watching.
+    state.waits = recordWaits(state.waits, rides, now, baseline && state.lastPoll ? state.lastPoll + POLL_INTERVAL_MS : null);
+    state.lastPoll = now;
     state.lastError = null;
     saveState();
     if (events.length) {
