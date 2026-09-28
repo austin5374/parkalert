@@ -10,6 +10,9 @@ export async function startFakes() {
   const upstream = {
     live: {}, // parkId -> [{ id, name, status, waitTime }]
     schedule: {}, // parkId -> ThemeParks.wiki schedule body
+    // (parkId, date) -> { status, body, remaining } for the history archive
+    history: () => ({ status: 200, body: { entities: [] } }),
+    historyCalls: [],
     fail: false,
   };
   const pushes = [];
@@ -41,7 +44,11 @@ export async function startFakes() {
         });
       }
       if (kind === 'schedule') return send(200, upstream.schedule[parkId] || { timezone: 'America/New_York', schedule: [] });
-      return send(200, { entities: [] });
+      const date = new URL(req.url, base).searchParams.get('date');
+      upstream.historyCalls.push({ parkId, date });
+      const h = upstream.history(parkId, date);
+      if (h.remaining !== undefined) res.setHeader('ratelimit-history-remaining', String(h.remaining));
+      return send(h.status, h.body);
     });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

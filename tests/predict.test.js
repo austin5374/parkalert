@@ -129,3 +129,12 @@ test('estimates pick up newly archived days', () => {
   history.P = history.P.slice(6); // a prune replaces the array
   assert.equal(estimate(history, 'P', 'x', 0, 'breakdown').n, 7);
 });
+
+test('a delayed opening uses past delayed openings, falling back to other parks', () => {
+  const openings = eps([30, 35, 40, 45, 50, 55], { kind: 'opening' });
+  const breakdowns = eps([5, 5, 5, 5, 5, 5, 5, 5, 5]);
+  const here = estimate({ P: [...openings, ...breakdowns] }, 'P', 'z', 0, 'opening');
+  assert.equal(here.basis, 'park');
+  assert.ok(here.p50 >= 30, 'not pulled down by breakdowns');
+  assert.equal(estimate({ P: breakdowns, Q: openings }, 'P', 'z', 0, 'opening').basis, 'all parks');
+});

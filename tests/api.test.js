@@ -180,3 +180,31 @@ test('a simulated alert goes through the real pipeline and says it is a test', a
   await call('PATCH', `/api/trips/${trip.code}`, { mute: { until: null } });
   assert.equal((await call('POST', `/api/trips/${trip.code}/simulate`, { type: 'up' })).body.sent, 0);
 });
+
+test('the app and its files are served, with revalidation', async () => {
+  const page = await fetch(`${base}/`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type'), /text\/html/);
+  const js = await fetch(`${base}/app.js`);
+  assert.match(js.headers.get('content-type'), /javascript/);
+  assert.equal(js.headers.get('cache-control'), 'no-cache');
+  const again = await fetch(`${base}/app.js`, { headers: { 'If-None-Match': js.headers.get('etag') } });
+  assert.equal(again.status, 304);
+  // Unknown paths are the app, so a shared deep link still opens it.
+  assert.match(await (await fetch(`${base}/some/deep/link`)).text(), /<title>ParkAlert<\/title>/);
+});
+
+test('nothing outside public/ is ever served', async () => {
+  const net = await import('node:net');
+  // fetch() normalises "..", so send raw request lines to test the server itself.
+  const raw = (target) => new Promise((resolve) => {
+    const sock = net.connect(server.address().port, '127.0.0.1', () => sock.end(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`));
+    let out = '';
+    sock.on('data', (d) => (out += d));
+    sock.on('end', () => resolve(out));
+  });
+  for (const target of ['/../server/index.js', '/%2e%2e/server/index.js', '/..%2fserver/index.js', '/../package.json']) {
+    const res = await raw(target);
+    assert.ok(!/THEMEPARKS_BASE|"devDependencies"/.test(res), `${target} leaked a file outside public/`);
+  }
+});
