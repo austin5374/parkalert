@@ -8,8 +8,8 @@ import { rideHistory, rideToday, parkSummary } from './insights.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
-import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
-import { PORT, NTFY_BASE, APP_URL, HEALTH_TOKEN } from './config.js';
+import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, appLink } from './poller.js';
+import { PORT, NTFY_BASE, HEALTH_TOKEN } from './config.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
 import { publish } from './notify.js';
@@ -300,7 +300,7 @@ async function handleApi(req, res, url) {
       title: 'ParkAlert test',
       message: 'Alerts are working on this phone. Tap to open ParkAlert.',
       tags: 'white_check_mark',
-      click: APP_URL,
+      click: appLink(trip),
     });
     return json(res, ok ? 200 : 502, { ok });
   }

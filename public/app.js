@@ -1504,7 +1504,24 @@ async function showApp({ firstRun = false } = {}) {
   await refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
-  if (firstRun && dash && !alertsReady()) openAlertSetup();
+  if (pendingOpen) openPending();
+  else if (firstRun && dash && !alertsReady()) openAlertSetup();
+}
+
+// What a tapped push asked for: its ride's sheet, the hold, or the Down
+// list. Opened once the dashboard is in, so the sheet has real data.
+let pendingOpen = null;
+function openPending() {
+  if (!pendingOpen || !dash) return;
+  const { ride, view } = pendingOpen;
+  pendingOpen = null;
+  switchView('down');
+  if (ride) {
+    if (dash.rides.some((r) => r.id === ride)) openRide(ride);
+    else toast("That ride isn't in today's ride list any more");
+  } else if (view === 'hold' && dash.rides.some((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold')) {
+    openHold();
+  }
 }
 
 function switchView(name) {
@@ -1654,7 +1671,23 @@ setInterval(() => {
 
 /* ---------- Boot ---------- */
 (async function boot() {
-  const joinParam = new URLSearchParams(location.search).get('join');
+  const params = new URLSearchParams(location.search);
+  const joinParam = params.get('join');
+  // A tapped push: ?trip=CODE and a ride or view to open. On iPhone the link
+  // may open in Safari, which has its own storage and no saved trip, so the
+  // code in the link decides which trip to show.
+  const tripParam = params.get('trip');
+  if (params.get('ride') || params.get('view')) pendingOpen = { ride: params.get('ride'), view: params.get('view') };
+  if (tripParam && !joinParam) {
+    history.replaceState(null, '', '/');
+    const code = tripParam.toUpperCase();
+    if (code !== tripCode) {
+      const previous = tripCode;
+      setTrip(code);
+      if (previous) toast(`Showing trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
+      return;
+    }
+  }
   if (joinParam) {
     history.replaceState(null, '', '/');
     const code = joinParam.toUpperCase();

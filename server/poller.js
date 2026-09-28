@@ -255,6 +255,15 @@ export function describeOutlook(w, est, timezone) {
   return `${lead} ${range ?? fallback}`;
 }
 
+// Where tapping a push should land: the ride it is about, the hold, or the
+// Down list. The trip code rides along because on iPhone a tapped link can
+// open in Safari, whose storage is separate from the home-screen app's; with
+// the code in the link it still opens the right trip there.
+export function appLink(trip, params = {}) {
+  if (!APP_URL) return null;
+  return `${APP_URL}/?${new URLSearchParams({ trip: trip.code, ...params })}`;
+}
+
 // This many alerts of one kind in a single poll become one push. A storm hold
 // closes ~11 rides inside two minutes; eleven buzzes in a row reads as a bug.
 export const GROUP_MIN = 3;
@@ -359,17 +368,24 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
     for (const type of ['DOWN', 'UP', 'CLOSED']) {
       const evs = mine.filter((ev) => ev.type === type);
       if (!evs.length) continue;
-      const pushes =
-        evs.length >= GROUP_MIN
-          ? [groupMessage(type, evs.map((ev) => ev.ride.name), parkName,
-              type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null,
-              { late: evs.every((ev) => ev.late) })]
-          : evs.map((ev) => (type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone)
+      let pushes;
+      if (evs.length >= GROUP_MIN) {
+        const outlook = type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null;
+        pushes = [{
+          ...groupMessage(type, evs.map((ev) => ev.ride.name), parkName, outlook, { late: evs.every((ev) => ev.late) }),
+          click: appLink(trip, { view: outlook?.kind === 'hold' ? 'hold' : 'down' }),
+        }];
+      } else {
+        pushes = evs.map((ev) => ({
+          ...(type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone)
             : type === 'CLOSED' ? closedMessage(ev, parkName, state.timezone)
-              : upMessage(ev, parkName)));
+              : upMessage(ev, parkName)),
+          click: appLink(trip, { ride: ev.ride.id }),
+        }));
+      }
       for (const push of pushes) {
         if (simulated) push.message += ' · SIMULATED TEST';
-        if (await publish(trip.topic, { ...push, click: APP_URL })) sent++;
+        if (await publish(trip.topic, push)) sent++;
       }
     }
   }));
@@ -390,8 +406,8 @@ export async function notifyWaitAlerts(parkId, rides, now = Date.now()) {
     if (pruneWaitAlerts(trip, today)) changed = true;
     const paused = trip.mute && (trip.mute.until === null || trip.mute.until > now);
     if (paused || isPastClosing(state, now)) return;
-    for (const { ride, alert } of dueWaitAlerts(trip, rides, today)) {
-      if (!(await publish(trip.topic, { ...waitAlertMessage(ride, alert, parkName), click: APP_URL }))) continue;
+    for (const { rideId, ride, alert } of dueWaitAlerts(trip, rides, today)) {
+      if (!(await publish(trip.topic, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }))) continue;
       alert.sentAt = now;
       alert.sentWait = ride.waitTime;
       changed = true;

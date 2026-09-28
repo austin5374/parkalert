@@ -48,7 +48,7 @@ function setup({ down = 0, trip = {} } = {}) {
   return Object.entries(rides).map(([id, r]) => ({ type: 'DOWN', ride: { id, ...r } }));
 }
 
-test('a storm hold is one push naming the rides, and tapping it opens the app', async () => {
+test('a storm hold is one push naming the rides, and tapping it opens the hold', async () => {
   const events = setup({ down: 6 });
   const { sent } = await notifyTrips(PARK, events, { simulated: true });
   assert.equal(sent, 1);
@@ -56,7 +56,13 @@ test('a storm hold is one push naming the rides, and tapping it opens the app', 
   assert.equal(received[0].title, '6 rides just went down');
   assert.match(received[0].message, /Ride 0, Ride 1, Ride 2, Ride 3, Ride 4 and 1 more/);
   assert.match(received[0].message, /Park-wide hold at Magic Kingdom/);
-  assert.equal(received[0].click, 'https://parkalert.example');
+  assert.equal(received[0].click, 'https://parkalert.example/?trip=AAAAAA&view=hold');
+});
+
+test("tapping a one-ride push opens that ride's sheet, on the right trip", async () => {
+  const events = setup({ down: 1 });
+  await notifyTrips(PARK, events, { simulated: true });
+  assert.equal(received[0].click, 'https://parkalert.example/?trip=AAAAAA&ride=r0');
 });
 
 test('two rides down at once are still two separate alerts', async () => {
