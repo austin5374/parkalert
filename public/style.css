@@ -106,7 +106,7 @@ a, a:visited { color: var(--accent); }
 .pressable:active { transition-duration: 0ms; }
 .row.pressable:active { background: var(--press); }
 .pill.pressable:active, .btn-primary.pressable:active, .tab.pressable:active,
-.option.pressable:active, .btn-secondary.pressable:active { transform: scale(0.96); }
+.btn-secondary.pressable:active { transform: scale(0.96); }
 
 /* ---- Grouped lists ---- */
 .group {
@@ -368,7 +368,6 @@ main {
 .sheet-head p { color: var(--label-2); margin-top: 0.3rem; font-size: 0.9375rem; line-height: 1.4; }
 .sheet .group { background: var(--surface); }
 @media (prefers-color-scheme: dark) { .sheet .group { background: var(--surface-2); } }
-.option { display: block; }
 
 /* Alert setup steps */
 .steps { list-style: none; counter-reset: step; padding: 0 var(--gutter); display: flex; flex-direction: column; gap: 1.25rem; }

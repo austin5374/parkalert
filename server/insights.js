@@ -2,8 +2,6 @@
 // local outage archive and the live park state, so they can be tested alone.
 import { isResolved } from './episodes.js';
 
-const DAY_MS = 24 * 3600_000;
-
 const median = (xs) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -88,5 +86,3 @@ export function parkSummary(episodes, fetchedDates, names, days = 7) {
       .map((r) => ({ ...r, minutes: Math.round(r.minutes) })),
   };
 }
-
-export { DAY_MS };

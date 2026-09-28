@@ -22,14 +22,19 @@ function saveAtomic(file, obj, indent) {
   fs.renameSync(tmp, file);
 }
 
-// trips: { [code]: { code, topic, parkId, watched, mute, rideMutes, createdAt } }
-//   watched: null = all rides, or array of ride ids
+// trips: { [code]: { code, topic, parkId, watched, watchedByPark, mute, rideMutes, createdAt, lastSeenAt } }
+//   watched: null = all rides, or array of ride ids (for the current park)
+//   watchedByPark: { [parkId]: watched } saved when hopping away from a park
 //   mute: null, or { until: epoch-ms | null } (null until = muted indefinitely)
 //   rideMutes: { [rideId]: true }
+//   lastSeenAt: last dashboard load, written at most hourly (see touchTrip)
 export const trips = load(TRIPS_FILE, {});
 
-// parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides } }
-//   rides: { [rideId]: { name, status, since, downSince, waitTime } }
+// parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides, recent, waits } }
+//   rides: { [rideId]: { name, status, waitTime, since, downSince, downFrom, missed? } }
+//     downFrom: the status it went DOWN from; missed: polls it has been absent
+//   recent: today's transitions, newest first (see recordRecent in poller.js)
+//   waits: { [rideId]: [[epoch-ms, minutes | null], ...] } (see recordWaits)
 export const parkState = load(STATE_FILE, {});
 
 // history: { fetched: { [parkId]: [YYYY-MM-DD, ...] }, episodes: { [parkId]: episode[] } }
