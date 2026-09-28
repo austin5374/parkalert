@@ -70,6 +70,7 @@
 }
 
 html {
+  overscroll-behavior-y: none;
   font: 100%/1.4 -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, sans-serif;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
@@ -81,7 +82,9 @@ body {
   font-size: 1.0625rem;
   letter-spacing: -0.01em;
   min-height: 100dvh;
-  overscroll-behavior-y: contain; /* the app's own pull-to-refresh, not a page reload */
+  /* The app's own pull to refresh, not a page reload, and not stacked on
+     top of iOS's rubber band: with the bounce off, only the pull moves. */
+  overscroll-behavior-y: none;
 }
 button, input { font: inherit; color: inherit; letter-spacing: inherit; }
 button { background: none; border: none; cursor: pointer; text-align: left; }
