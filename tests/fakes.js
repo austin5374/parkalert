@@ -14,10 +14,11 @@ export async function startFakes() {
     history: () => ({ status: 200, body: { entities: [] } }),
     historyCalls: [],
     // Airport weather: live reports [{ icaoId, obsTime (s), rawOb }], and the
-    // archive's CSV body per 'STATION:YYYY-MM-DD' (the day requested).
+    // archive's CSV rows per 'STATION:YYYY-MM-DD'; a request spanning days gets each day's.
     metars: [],
     archive: {},
     archiveCalls: [],
+    archiveStatus: 200,
     fail: false,
   };
   const pushes = [];
@@ -40,11 +41,15 @@ export async function startFakes() {
       }
       if (req.url.startsWith('/archive')) {
         const q = new URL(req.url, base).searchParams;
-        const day = `${q.get('year1')}-${q.get('month1').padStart(2, '0')}-${q.get('day1').padStart(2, '0')}`;
-        const key = `${q.get('station')}:${day}`;
-        upstream.archiveCalls.push(key);
+        const ymd = (n) => `${q.get(`year${n}`)}-${q.get(`month${n}`).padStart(2, '0')}-${q.get(`day${n}`).padStart(2, '0')}`;
+        // day2 is the day after the last one asked for.
+        const days = [];
+        for (let t = Date.parse(`${ymd(1)}T00:00Z`); t < Date.parse(`${ymd(2)}T00:00Z`); t += 864e5) days.push(new Date(t).toISOString().slice(0, 10));
+        upstream.archiveCalls.push(`${q.get('station')}:${days[0]}..${days[days.length - 1]}`);
+        if (upstream.archiveStatus !== 200) return send(upstream.archiveStatus, {});
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        return res.end(`station,valid,metar\n${upstream.archive[key] || ''}`);
+        const rows = days.map((d) => upstream.archive[`${q.get('station')}:${d}`]).filter(Boolean);
+        return res.end(`station,valid,metar\n${rows.join('\n')}`);
       }
       const m = req.url.match(/^\/v1\/entity\/([^/?]+)\/(live|schedule|history)/);
       if (!m || upstream.fail) return send(upstream.fail ? 503 : 404, {});
