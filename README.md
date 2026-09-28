@@ -112,7 +112,7 @@ The dashboard shows how many past outages each range rests on. Six and a hundred
 - **ntfy topics are the security model**: anyone with the topic name can read/write it. The random suffix makes it unguessable; treat trip links like a shared secret.
 - **Adding parks**: append to `server/parks.js` with the park's timezone and the resort to list it under (entity IDs from `https://api.themeparks.wiki/v1/destinations`).
 - Statuses other than OPERATING/DOWN (CLOSED, REFURBISHMENT) never trigger notifications; only the two transitions above do.
-- Trips nobody has opened in three weeks stop being polled, which is most of what hosting costs. Opening the app again resumes them.
+- Trips nobody has opened in three weeks stop being polled and stop getting alerts, which is most of what hosting costs. Opening the app again resumes them. Trips are never deleted.
 - Times are shown in the park's own time zone, so planning from home still reads like the park clock.
 - Estimates are only as good as the history behind them. The first week after a fresh deploy runs on 7 days (30 with a key), and the archive grows by a day each night from there.
 

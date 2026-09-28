@@ -1,6 +1,6 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
 import { publish, formatDuration } from './notify.js';
-import { trips, parkState, saveState, activeParkIds, history } from './store.js';
+import { trips, parkState, saveState, activeParkIds, isTripActive, history } from './store.js';
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
 import { isLateOpening } from './episodes.js';
@@ -232,14 +232,17 @@ export function groupMessage(type, names, parkName, outlook, { late = false } = 
   };
 }
 
-// Push events to every trip at the park (or just `only`), honouring each
-// trip's mutes. The anti-flicker gate (gateEvents) runs before this, in the poller.
+// Push events to every active trip at the park (or just `only`), honouring
+// each trip's mutes. A trip nobody has opened in three weeks is a finished
+// vacation: its park is no longer polled for it, and it gets no pushes
+// either, until someone opens it again. The anti-flicker gate (gateEvents)
+// runs before this, in the poller.
 export async function notifyTrips(parkId, events, { simulated = false, only = null } = {}) {
   const state = parkState[parkId];
   const parkName = getPark(parkId)?.name || 'the park';
   let sent = 0;
   let skipped = 0;
-  const targets = only ? [only] : Object.values(trips).filter((t) => t.parkId === parkId);
+  const targets = only ? [only] : Object.values(trips).filter((t) => t.parkId === parkId && isTripActive(t));
   for (const trip of targets) {
     const mine = events.filter((ev) => !isTripMuted(trip, ev.ride.id, state));
     skipped += events.length - mine.length;

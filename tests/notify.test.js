@@ -82,3 +82,9 @@ test('a delayed opening says the ride is now open, and how late', async () => {
   assert.equal(received[0].title, 'Seven Dwarfs Mine Train is now open');
   assert.match(received[0].message, /^Opened 40 min late · Magic Kingdom/);
 });
+
+test('a trip nobody has opened in three weeks gets no pushes', async () => {
+  const events = setup({ down: 1, trip: { lastSeenAt: Date.now() - 22 * 24 * 3600_000, createdAt: 0 } });
+  const { sent } = await notifyTrips(PARK, events, { simulated: true });
+  assert.equal(sent, 0);
+});
