@@ -50,13 +50,15 @@ function fmtTime(ts) {
 }
 
 // A time that may not be today, said the way a person would: "9:30 PM",
-// "tomorrow at 7:00 AM", or "Mon at 7:00 AM". Park days, not phone days.
+// "tomorrow at 7:00 AM", "yesterday at 3:42 PM" or "Mon at 7:00 AM". Park
+// days, not phone days.
 function fmtUntil(ts) {
   const tz = dash?.park.timezone || undefined;
   const today = localDay(Date.now(), tz);
   const day = localDay(ts, tz);
   if (day === today) return fmtTime(ts);
   if (day === localDay(Date.now() + 24 * 3600_000, tz)) return `tomorrow at ${fmtTime(ts)}`;
+  if (day === localDay(Date.now() - 24 * 3600_000, tz)) return `yesterday at ${fmtTime(ts)}`;
   const weekday = new Intl.DateTimeFormat([], { weekday: 'short', timeZone: tz }).format(new Date(ts));
   return `${weekday} at ${fmtTime(ts)}`;
 }
@@ -446,7 +448,7 @@ function renderHeader() {
   const meta = $('#park-meta');
   const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS || !!dash.lastError;
   meta.textContent = offline
-    ? `Offline · showing ${fmtTime(dash.lastPoll)} data`
+    ? `Offline · as of ${fmtUntil(dash.lastPoll)}`
     : stale
       ? `Updated ${dash.lastPoll ? fmtDuration(Date.now() - dash.lastPoll) : 'a while'} ago · reconnecting`
       : hoursText();
@@ -1317,6 +1319,16 @@ const fmtWeekday = (d) => new Intl.DateTimeFormat([], { weekday: 'short', timeZo
 })();
 
 /* ---------- Data ---------- */
+// The last dashboard is kept on the phone, so opening the app with no signal
+// shows the last known rides, marked as such, instead of nothing.
+const dashKey = (code) => `parkalert.dash.${code}`;
+function rememberDash(code, d) {
+  try { localStorage.setItem(dashKey(code), JSON.stringify(d)); } catch {}
+}
+function recallDash(code) {
+  try { return JSON.parse(localStorage.getItem(dashKey(code))); } catch { return null; }
+}
+
 // Refreshes come from the timer, the tab coming back, going online, pull to
 // refresh and saves. Only one runs at a time, so answers can't land out of
 // order; asking during one queues a single follow-up that sees the latest
@@ -1345,9 +1357,11 @@ async function fetchDashboard() {
     if (code !== tripCode) return; // switched trips while this was on its way
     dash = next;
     offline = false;
+    rememberDash(code, next);
   } catch (err) {
     if (code !== tripCode) return;
     if (err.status === 404) {
+      try { localStorage.removeItem(dashKey(code)); } catch {}
       toast(`Trip ${code} no longer exists`);
       leaveTrip();
       return;
@@ -1375,6 +1389,7 @@ async function showApp({ firstRun = false } = {}) {
   $('#app').classList.remove('hidden');
   document.body.classList.remove('no-tabbar');
   switchView('down');
+  dash ??= recallDash(tripCode);
   renderAll();
   await refresh();
   clearInterval(refreshTimer);
