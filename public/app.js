@@ -196,8 +196,30 @@ const sheet = (() => {
     cb?.();
   }
 
+  // Back (the browser's, Android's, or a sheet's own back button) closes the
+  // sheet, or steps back through sheets opened from sheets, instead of
+  // leaving the app. Each open or pushed view adds a history entry; closing
+  // any other way (scrim, drag, Escape) takes them back off.
+  let depth = 0; // history entries this sheet has added
+  let skipPops = 0; // popstate events caused by our own history.go()
+  let onBack = null; // app hook: step back one view; false when at the first
+  addEventListener('popstate', () => {
+    if (skipPops) { skipPops--; return; }
+    if (!isOpen) { depth = 0; return; }
+    depth = Math.max(0, depth - 1);
+    if (onBack?.()) return;
+    depth = 0;
+    dismiss();
+  });
+  const addEntry = () => { history.pushState({ parkalertSheet: ++depth }, ''); };
+
   function open(content, { onClose } = {}) {
-    returnFocus = document.activeElement;
+    // Focus goes back to what opened the first sheet, not to a row inside a
+    // sheet that is about to be replaced.
+    if (!isOpen) {
+      returnFocus = document.activeElement;
+      addEntry();
+    }
     onClosed = onClose || null;
     body.replaceChildren(content);
     body.scrollTop = 0;
@@ -210,10 +232,31 @@ const sheet = (() => {
     panel.focus({ preventScroll: true });
   }
 
-  function close(velocity = 0) {
+  // A view opened from the current one (a ride from the hold list): same
+  // sheet, new content, one more step for Back.
+  function push(content) {
+    addEntry();
+    replace(content);
+  }
+  function replace(content) {
+    body.replaceChildren(content);
+    body.scrollTop = 0;
+    panel.focus({ preventScroll: true });
+  }
+
+  function dismiss(velocity = 0) {
     if (!isOpen) return;
     isOpen = false;
     animateTo(measure(), velocity, 1, finishClose);
+  }
+  function close(velocity = 0) {
+    if (!isOpen) return;
+    if (depth) {
+      skipPops++;
+      history.go(-depth);
+      depth = 0;
+    }
+    dismiss(velocity);
   }
 
   // Drag: 1:1 with the finger from where it grabbed, rubber-banded above the
@@ -309,12 +352,19 @@ const sheet = (() => {
     body.scrollTop = top;
   }
 
-  return { open, update, close: () => close(), get isOpen() { return isOpen; } };
+  return {
+    open, push, replace, update, close: () => close(),
+    get isOpen() { return isOpen; },
+    set onBack(fn) { onBack = fn; },
+  };
 })();
 
-function sheetHead(title, html) {
-  return `<div class="sheet-head"><h2 class="title-2" id="sheet-title">${esc(title)}</h2>${html ? `<p>${html}</p>` : ''}</div>`;
+// back: the label of the view this one was opened from ("Hold"), shown as
+// a back button above the title, as a pushed card in Find My has.
+function sheetHead(title, html, back = null) {
+  return `<div class="sheet-head">${back ? `<button class="sheet-back pressable" type="button" data-act="back">${icon('chevron', 'back-chevron')}<span>${esc(back)}</span></button>` : ''}<h2 class="title-2" id="sheet-title">${esc(title)}</h2>${html ? `<p>${html}</p>` : ''}</div>`;
 }
+document.addEventListener('click', (e) => { if (e.target.closest('#sheet [data-act=back]')) history.back(); });
 
 /* ---------- Parks ---------- */
 const parkLabel = (name) => name.replace(' (CA)', '');
@@ -967,11 +1017,33 @@ function openAlertSetup() {
 // What the open sheet is showing, so a background refresh can bring it up to date.
 let sheetContext = null;
 
+// Sheets opened from sheets (a ride from the hold or park sheet) stack:
+// Back returns to the one below, rebuilt with fresh data.
+const sheetStack = [];
 function openSheet(content, context) {
+  sheetStack.length = 0;
   sheetContext = context;
-  sheet.open(content, { onClose: () => { sheetContext = null; } });
+  sheet.open(content, { onClose: () => { sheetContext = null; sheetStack.length = 0; } });
   mountCharts($('#sheet-body'));
 }
+function pushSheet(content, context) {
+  sheetStack.push(sheetContext);
+  sheetContext = context;
+  sheet.push(content);
+  mountCharts($('#sheet-body'));
+}
+sheet.onBack = () => {
+  if (!sheetStack.length) return false;
+  sheetContext = sheetStack.pop();
+  if (sheetContext.type === 'hold') sheet.replace(holdSheet());
+  if (sheetContext.type === 'park') {
+    sheet.replace(parkSheet(lastParkInfo));
+    loadPark();
+  }
+  mountCharts($('#sheet-body'));
+  return true;
+};
+const BACK_LABEL = { hold: 'Hold', park: 'Park' };
 
 function updateSheet(content) {
   sheet.update(content);
@@ -1021,14 +1093,17 @@ async function openRide(rideId) {
   const r = dash?.rides.find((x) => x.id === rideId);
   if (!r) return;
   // Open at once with what is already known; the history fills in a moment later.
-  openSheet(rideSheet(r, null), { type: 'ride', id: rideId });
+  const from = sheet.isOpen && BACK_LABEL[sheetContext?.type];
+  const context = { type: 'ride', id: rideId, back: from || null };
+  if (from) pushSheet(rideSheet(r, null, from), context);
+  else openSheet(rideSheet(r, null), context);
   await loadRide(rideId);
 }
 
 async function loadRide(rideId) {
   try {
     const detail = await api(`/trips/${tripCode}/rides/${encodeURIComponent(rideId)}`);
-    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) updateSheet(rideSheet(detail.ride, detail));
+    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) updateSheet(rideSheet(detail.ride, detail, sheetContext.back));
   } catch {
     if (sheetContext?.id === rideId) {
       const note = $('#sheet-body [data-loading]');
@@ -1091,10 +1166,10 @@ async function setWaitAlert(rideId, max) {
   }
 }
 
-function rideSheet(r, detail) {
+function rideSheet(r, detail, back = null) {
   const o = detail ? detail.outlook : r.outlook;
   const down = r.status === 'DOWN' && r.downSince;
-  const wrap = el(`<div class="ride-sheet">${sheetHead(r.name, esc(statusLine(r)))}</div>`);
+  const wrap = el(`<div class="ride-sheet">${sheetHead(r.name, esc(statusLine(r)), back)}</div>`);
   wrap.querySelector('.sheet-head p').classList.toggle('tint-red', !!down);
 
   if (down) {
@@ -1206,9 +1281,11 @@ async function openParkInfo() {
   await loadPark();
 }
 
+let lastParkInfo = null;
 async function loadPark() {
   try {
     const info = await api(`/trips/${tripCode}/park`);
+    lastParkInfo = info;
     if (sheetContext?.type === 'park') updateSheet(parkSheet(info));
   } catch {}
 }
@@ -1258,6 +1335,10 @@ function parkSheet(info) {
 }
 
 function openHold() {
+  openSheet(holdSheet(), { type: 'hold' });
+}
+
+function holdSheet() {
   const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold');
   const text = holds[0]?.outlook?.text;
   const wrap = el(`<div>${sheetHead('Park-wide hold', esc(KIND_NOTE.hold))}</div>`);
@@ -1270,7 +1351,7 @@ function openHold() {
       ${icon('chevron', 'chevron')}
     </button>`).join('')}</div>`));
   wrap.appendChild(el('<div style="height:1rem"></div>'));
-  openSheet(wrap, { type: 'hold' });
+  return wrap;
 }
 
 // Any element carrying a ride id opens that ride, wherever it sits.
