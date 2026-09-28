@@ -434,7 +434,9 @@ html.sheet-up body { background: transparent; }
   display: flex; align-items: center; gap: 0.5rem; background: var(--fill); border-radius: 0.65rem;
   padding: 0.55rem 0.55rem 0.55rem 0.8rem; margin-bottom: 0.5rem;
 }
-.topic code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 0.875rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A long-press selects the whole topic at once (the copy fallback tells
+   guests to press and hold), and it wraps rather than scrolling sideways. */
+.topic code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 0.875rem ui-monospace, SFMono-Regular, Menlo, monospace; -webkit-user-select: all; user-select: all; }
 .topic button { color: var(--accent); font-weight: 600; font-size: 0.9375rem; flex: none; margin-right: -0.3rem; }
 .tip { font-size: 0.875rem !important; }
 .wait-state { color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; }

@@ -1415,8 +1415,19 @@ function openAlertSetup() {
   const q = (a) => content.querySelector(`[data-act=${a}]`);
   if (q('copy')) {
     q('copy').onclick = async () => {
-      try { await navigator.clipboard.writeText(topic); q('copy').textContent = 'Copied'; }
-      catch { toast('Press and hold the topic to copy it'); }
+      try {
+        await navigator.clipboard.writeText(topic);
+        q('copy').textContent = 'Copied';
+        haptic();
+        setTimeout(() => { if (q('copy')) q('copy').textContent = 'Copy'; }, 2000);
+      } catch {
+        // Select it for them, so the system's Copy is one tap away.
+        const range = document.createRange();
+        range.selectNodeContents(content.querySelector('.topic code'));
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        toast('Tap Copy on the selected topic');
+      }
     };
   }
   q('test').onclick = async () => {
