@@ -160,6 +160,7 @@ function rubberband(overshoot, dimension, constant = 0.55) {
 const sheet = (() => {
   const layer = $('#sheet-layer'), panel = $('#sheet'), scrim = $('#scrim'), body = $('#sheet-body');
   let y = 0, h = 1, anim = null, isOpen = false, returnFocus = null, onClosed = null;
+  // closing: the close animation is running (isOpen is already false).
 
   // The sheet's height changes after it opens (a ride's history loads in),
   // so it is read again whenever a close or a drag needs it.
@@ -203,21 +204,41 @@ const sheet = (() => {
   let depth = 0; // history entries this sheet has added
   let skipPops = 0; // popstate events caused by our own history.go()
   let onBack = null; // app hook: step back one view; false when at the first
+  let entryAfterPop = false; // a sheet opened while our history.go() was still pending
   addEventListener('popstate', () => {
-    if (skipPops) { skipPops--; return; }
+    if (skipPops) {
+      skipPops--;
+      if (!skipPops && entryAfterPop) { entryAfterPop = false; history.pushState({ parkalertSheet: depth }, ''); }
+      return;
+    }
     if (!isOpen) { depth = 0; return; }
     depth = Math.max(0, depth - 1);
     if (onBack?.()) return;
     depth = 0;
     dismiss();
   });
-  const addEntry = () => { history.pushState({ parkalertSheet: ++depth }, ''); };
+  // history.go() is asynchronous: an entry pushed before it lands would be
+  // the one it takes away, so it waits for that popstate.
+  const addEntry = () => {
+    if (skipPops) { entryAfterPop = true; depth++; return; }
+    history.pushState({ parkalertSheet: depth + 1 }, '');
+    depth++;
+  };
 
   function open(content, { onClose } = {}) {
+    // Opened again while still closing: finish the old sheet's bookkeeping
+    // and rise from where it is now, rather than snapping to the bottom.
+    const wasClosing = closing;
+    if (closing) {
+      closing = false;
+      const cb = onClosed;
+      onClosed = null;
+      cb?.();
+    }
     // Focus goes back to what opened the first sheet, not to a row inside a
     // sheet that is about to be replaced.
     if (!isOpen) {
-      returnFocus = document.activeElement;
+      if (!wasClosing) returnFocus = document.activeElement;
       addEntry();
     }
     onClosed = onClose || null;
@@ -226,7 +247,7 @@ const sheet = (() => {
     layer.classList.remove('hidden');
     setInert(true);
     h = panel.getBoundingClientRect().height || 400;
-    if (!isOpen) paint(h);
+    if (!isOpen && !wasClosing) paint(h);
     isOpen = true;
     animateTo(0);
     panel.focus({ preventScroll: true });
@@ -244,10 +265,12 @@ const sheet = (() => {
     panel.focus({ preventScroll: true });
   }
 
+  let closing = false;
   function dismiss(velocity = 0) {
     if (!isOpen) return;
     isOpen = false;
-    animateTo(measure(), velocity, 1, finishClose);
+    closing = true;
+    animateTo(measure(), velocity, 1, () => { closing = false; finishClose(); });
   }
   function close(velocity = 0) {
     if (!isOpen) return;
@@ -338,18 +361,43 @@ const sheet = (() => {
   scrim.addEventListener('click', () => close());
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
-  // A finger on the sheet (scrubbing a chart, say) holds off live refreshes.
+  // A finger on the sheet (dragging it, scrubbing a chart) or a scroll still
+  // coasting holds off live refreshes: replacing the content then would
+  // jump under the finger or stop the momentum dead. The newest refresh
+  // waits and lands once the sheet is still.
   let touching = false;
+  let lastScroll = 0;
+  let pending = null; // { content, after }
+  let retry = null;
   body.addEventListener('pointerdown', () => { touching = true; });
-  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { touching = false; }, true);
+  body.addEventListener('touchstart', () => { touching = true; }, { passive: true });
+  grabber.addEventListener('pointerdown', () => { touching = true; });
+  body.addEventListener('scroll', () => { lastScroll = performance.now(); }, { passive: true });
+  const settle = () => {
+    touching = false;
+    flush();
+  };
+  for (const t of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) addEventListener(t, settle, true);
 
-  // Swap content in place (live refresh), keeping the reader's scroll
-  // position and focus. Skipped mid-touch; the next refresh catches up.
-  function update(content) {
-    if (!isOpen || touching) return;
+  const busy = () => touching || !!drag || performance.now() - lastScroll < 250;
+  function flush() {
+    clearTimeout(retry);
+    if (!pending || !isOpen) { pending = null; return; }
+    if (busy()) { retry = setTimeout(flush, 250); return; }
+    const { content, after } = pending;
+    pending = null;
     const top = body.scrollTop;
     keepFocus(body, () => body.replaceChildren(content));
     body.scrollTop = top;
+    after?.();
+  }
+
+  // Swap content in place (live refresh), keeping the reader's scroll
+  // position and focus.
+  function update(content, after) {
+    if (!isOpen) return;
+    pending = { content, after };
+    flush();
   }
 
   return {
@@ -1021,9 +1069,11 @@ let sheetContext = null;
 // Back returns to the one below, rebuilt with fresh data.
 const sheetStack = [];
 function openSheet(content, context) {
+  // The context is set after open(), which may first finish off a sheet
+  // still closing (whose onClose clears the context).
+  sheet.open(content, { onClose: () => { sheetContext = null; sheetStack.length = 0; } });
   sheetStack.length = 0;
   sheetContext = context;
-  sheet.open(content, { onClose: () => { sheetContext = null; sheetStack.length = 0; } });
   mountCharts($('#sheet-body'));
 }
 function pushSheet(content, context) {
@@ -1046,8 +1096,7 @@ sheet.onBack = () => {
 const BACK_LABEL = { hold: 'Hold', park: 'Park' };
 
 function updateSheet(content) {
-  sheet.update(content);
-  mountCharts($('#sheet-body'));
+  sheet.update(content, () => mountCharts($('#sheet-body')));
 }
 
 const KIND_NOTE = {
