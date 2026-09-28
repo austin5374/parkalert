@@ -407,16 +407,31 @@ export async function simulateTransition(trip, type) {
   return { simulated: true, type: ev.type, ride: r.name, ...stats };
 }
 
+// Hours change on the day (an extension, an added event), so today's
+// schedule is checked again every hour, and every 15 minutes in the hour
+// before it says the park closes: a stale close would mute alerts while the
+// park is still open.
+export const SCHEDULE_TTL_MS = 60 * 60_000;
+export const SCHEDULE_TTL_NEAR_CLOSE_MS = 15 * 60_000;
+export function scheduleIsFresh(state, now = Date.now()) {
+  const s = state?.schedule;
+  const today = localDate(now, state?.timezone || 'America/New_York');
+  // Schedules saved before lastCloseTime existed are refetched once.
+  if (s?.date !== today || !('lastCloseTime' in s) || !s.fetchedAt) return false;
+  const close = Date.parse(s.lastCloseTime || s.closingTime || '');
+  const nearClose = Number.isFinite(close) && now >= close - 60 * 60_000 && now <= close + 30 * 60_000;
+  return now - s.fetchedAt < (nearClose ? SCHEDULE_TTL_NEAR_CLOSE_MS : SCHEDULE_TTL_MS);
+}
+
 async function refreshSchedule(parkId) {
   const state = parkState[parkId];
-  const today = localDate(Date.now(), state?.timezone || 'America/New_York');
-  // Schedules saved before lastCloseTime existed are refetched once.
-  if (state?.schedule?.date === today && 'lastCloseTime' in state.schedule) return;
+  if (scheduleIsFresh(state)) return;
   try {
     const sched = await fetchSchedule(parkId);
     state.timezone = sched.timezone;
-    state.schedule = sched;
+    state.schedule = { ...sched, fetchedAt: Date.now() };
   } catch (err) {
+    // The last good copy stands (for today only; see currentSchedule).
     console.error(`[poller] schedule fetch failed for ${parkId}:`, err.message);
   }
 }
