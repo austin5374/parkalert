@@ -222,7 +222,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 
 - **No alerts on one phone**: Trip tab → Alerts on this phone. Send a test; if it doesn't arrive, check that notifications are allowed for ntfy and that the topic you subscribed to matches exactly.
 - **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride's alerts are off (its switch on the Rides tab). Check `/api/health?token=…` to see whether the park is being polled at all.
-- **Header says "reconnecting"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. Alerts resume on their own when it answers again.
+- **Header says "Ride times may be out of date"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. Alerts resume on their own when it answers again.
 - **Estimates say nothing**: fewer than 5 comparable past outages yet. Set `THEMEPARKS_API_KEY` to backfill 30 days instead of 7.
 - **A storm outage gets an ordinary estimate**: the weather reports are more than 75 minutes old (the feed is down; the server log says so), or the archive hasn't yet shown that ride closing for storms on two days.
 

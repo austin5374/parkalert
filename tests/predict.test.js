@@ -76,7 +76,7 @@ test('describe reads like a person said it', () => {
   assert.equal(describe({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), 'Usually back in about 30 min');
   assert.equal(
     describe({ p25: 30, p50: 60, p75: 120, stayedDownShare: 0.14 }),
-    'Usually back in 30 to 120 min. About 14% stay closed for the day'
+    'Usually back in 30 min to 2 hr. About 14% stay closed for the day'
   );
 });
 
@@ -187,6 +187,12 @@ test('a ride still down when the rest of its hold reopens stays in the hold', as
   ({ rides } = applyLiveData(rides, live([]), t + 50 * 60_000));
   ({ rides } = applyLiveData(rides, live([6]), t + 90 * 60_000));
   assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'breakdown' });
+});
+
+test('ranges past an hour read in hours, and the lightning rule says it is a rule', () => {
+  assert.equal(describe({ p25: 45, p50: 60, p75: 92, stayedDownShare: 0 }), 'Usually back in 45 min to 1 hr 30 min');
+  assert.equal(describe({ p25: 70, p50: 80, p75: null, stayedDownShare: 0 }), 'Usually back in about 1 hr 20 min');
+  assert.equal(describe({ p25: 30, p50: 35, p75: 45, stayedDownShare: 0, basis: 'rule' }), 'By the 30-minute rule, back in 30 to 45 min');
 });
 
 test('the window is the range as the text states it', async () => {

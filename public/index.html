@@ -94,7 +94,7 @@
                maxlength="6" placeholder="Trip code" aria-label="Trip code">
         <button class="btn-inline" type="submit">Join</button>
       </form>
-      <p class="footnote" id="join-note" aria-live="polite">Ask them for the 6-letter code on their Trip tab. Joining shares their rides and alerts.</p>
+      <p class="footnote" id="join-note" aria-live="polite">Ask them for the 6-letter code on their Trip tab. You'll see their rides and get the same alerts.</p>
     </div>
   </div>
 
@@ -180,9 +180,9 @@
         <h2 class="section-label">Park</h2>
         <div class="group">
           <button id="row-park" class="row pressable" type="button">
-            <svg class="row-icon tint-accent"><use href="#i-map"/></svg>
-            <span class="row-label">Park</span>
-            <span class="row-detail" id="park-detail"></span>
+            <svg class="row-icon tint-accent" aria-hidden="true"><use href="#i-map"/></svg>
+            <span class="row-label" id="park-detail"></span>
+            <span class="row-detail">Change</span>
             <svg class="chevron"><use href="#i-chevron"/></svg>
           </button>
         </div>

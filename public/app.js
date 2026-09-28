@@ -836,7 +836,7 @@ function renderHeader() {
   meta.textContent = flash ? flash.text : offline
     ? `${FAILURE_META[failure]} · as of ${fmtUntil(dash.lastPoll)}`
     : stale
-      ? `Updated ${dash.lastPoll ? fmtDuration(Date.now() - dash.lastPoll) : 'a while'} ago · reconnecting`
+      ? `Ride times may be out of date · ${dash.lastPoll ? `${fmtDuration(Date.now() - dash.lastPoll)} old` : 'waiting for the ride feed'}`
       : hoursText();
   meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
 
@@ -883,7 +883,7 @@ function timeline(r) {
 function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
-  const since = o.kind === 'opening' ? `Delayed opening since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
+  const since = o.kind === 'opening' ? `Hasn't opened yet · down since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
   const foot = [
     basisLine(o),
     following ? '' : 'Alerts off',
@@ -1214,7 +1214,9 @@ function renderTrip() {
   d.textContent = ready ? 'Working' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
-  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtUntil(st.until)}` : 'Paused') : 'Off';
+  // Nothing when not paused, as Settings shows no value for an unset row;
+  // "Off" read as "alerts are off".
+  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtUntil(st.until)}` : 'Until you resume') : '';
   $('#park-detail').textContent = parkLabel(dash.park.name);
 }
 
@@ -1423,7 +1425,7 @@ function openAlertSetup() {
     btn.querySelector('span').textContent = 'Sending…';
     try {
       await api(`/trips/${tripCode}/test`, { method: 'POST' });
-      btn.querySelector('span').textContent = 'Sent. Send another';
+      btn.querySelector('span').textContent = 'Send again';
       content.querySelector('.confirm').classList.remove('hidden');
     } catch {
       btn.querySelector('span').textContent = "Couldn't send. Try again";
@@ -1489,7 +1491,7 @@ const KIND_NOTE = {
 };
 
 function statusLine(r) {
-  if (r.status === 'DOWN' && r.downSince) return `Down for ${fmtDuration(Date.now() - r.downSince)}, since ${fmtTime(r.downSince)}`;
+  if (r.status === 'DOWN' && r.downSince) return `Down ${fmtDuration(Date.now() - r.downSince)} · since ${fmtTime(r.downSince)}`;
   return [rideMeta(r), ...queueTags(r)].join(' · ');
 }
 
@@ -1501,7 +1503,9 @@ function basisLine(o) {
     return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
   }
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
-  return `From ${o.basis.outages} past outages ${where}`;
+  // The same noun as the sheet's explanation: holds from holds.
+  const what = { hold: 'holds', opening: 'delayed openings' }[o.kind] || 'outages';
+  return `From ${o.basis.outages} past ${what} ${where}`;
 }
 
 const WEATHER_NOTE = {
@@ -1570,8 +1574,8 @@ function waitAlertBlock(r) {
       : posted != null && !choices.length
         ? `The wait is only ${posted} min right now.`
         : posted != null
-          ? `It's ${posted} min now. Tell me when it's at most:`
-          : 'Tell me when it is running with a wait of at most:';
+          ? `Now ${posted} min. Tell me when the wait is at most (minutes):`
+          : 'When it reopens, tell me if the wait is at most (minutes):';
   const box = el(`
     <div>
       <h2 class="section-label">Wait alert</h2>
@@ -1602,7 +1606,7 @@ async function setWaitAlert(rideId, max) {
     confirmTrip(trip);
     renderAll();
     if (sheetContext?.type === 'ride' && sheetContext.id === rideId) loadRide(rideId);
-    toast(max == null ? 'Wait alert off' : `We'll tell you when it's ${max} min or less`);
+    toast(max == null ? 'Wait alert off' : `Wait alert set for ${max} min or less`);
   } catch {
     toast("Couldn't save that. Check your connection and try again.");
   }
