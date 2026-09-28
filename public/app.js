@@ -758,6 +758,30 @@ function hoursText() {
 // by side: titles take the full width and trailing controls move below.
 // The layout switches on a class, set from the root size, which follows
 // the reader's setting.
+// iOS hands the reader's Text Size setting (Dynamic Type) to web content
+// only through the -apple-system-body font. The layout is in rem on a 16px
+// root, so the root is set to the same share of 16px that the reader's body
+// size is of the default 17px. Elsewhere the font name is ignored and the
+// browser's own text size applies as before. Checked again on return,
+// since the setting can change while the app is in the background.
+function syncDynamicType() {
+  const probe = document.createElement('span');
+  probe.style.font = '-apple-system-body';
+  if (!probe.style.font) return; // not an Apple browser
+  probe.style.cssText += ';position:absolute;visibility:hidden;pointer-events:none';
+  probe.textContent = 'x';
+  document.body.appendChild(probe);
+  const px = parseFloat(getComputedStyle(probe).fontSize);
+  probe.remove();
+  if (px > 0) document.documentElement.style.fontSize = `${((px / 17) * 100).toFixed(2)}%`;
+}
+syncDynamicType();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  syncDynamicType();
+  if (dash) renderHeader();
+});
+
 function syncTypeSize() {
   const big = parseFloat(getComputedStyle(document.documentElement).fontSize) >= 24;
   document.documentElement.classList.toggle('ax-type', big);
