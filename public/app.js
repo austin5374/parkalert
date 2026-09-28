@@ -175,8 +175,14 @@ const sheet = (() => {
     anim = spring({ from: y, to: target, velocity, damping, response: 0.32, onUpdate: paint, onDone: done });
   }
 
+  // While a sheet is up, the page behind it is out of reach: Tab stays in the
+  // sheet and screen readers don't wander into the page, as aria-modal says.
+  const background = [$('#app'), $('#setup')];
+  const setInert = (on) => background.forEach((n) => { n.inert = on; });
+
   function finishClose() {
     layer.classList.add('hidden');
+    setInert(false);
     body.replaceChildren();
     returnFocus?.focus?.({ preventScroll: true });
     const cb = onClosed;
@@ -190,6 +196,7 @@ const sheet = (() => {
     body.replaceChildren(content);
     body.scrollTop = 0;
     layer.classList.remove('hidden');
+    setInert(true);
     h = panel.getBoundingClientRect().height || 400;
     if (!isOpen) paint(h);
     isOpen = true;
