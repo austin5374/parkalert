@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordWaits, outageDays, rideHistory, rideToday, parkSummary, parkDayStart, WAIT_KEEP_MS } from '../server/insights.js';
+import { recordWaits, outageDays, rideHistory, rideToday, parkSummary, WAIT_KEEP_MS } from '../server/insights.js';
+import { parkDayStart } from '../server/time.js';
 
 test('wait samples are recorded only when the value changes, and down means no wait', () => {
   let w = recordWaits({}, { a: { status: 'OPERATING', waitTime: 30 } }, 1000);

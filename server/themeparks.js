@@ -1,4 +1,5 @@
 import { getPark } from './parks.js';
+import { localDate } from './time.js';
 import { THEMEPARKS_BASE as BASE, THEMEPARKS_API_KEY } from './config.js';
 
 const USER_AGENT = 'ParkAlert/1.0 (personal ride-status notifier)';
@@ -62,7 +63,7 @@ export async function fetchSchedule(parkId) {
 // Auto-mute must use lastCloseTime or party guests silently get no alerts.
 export function parseSchedule(data, now = Date.now(), fallbackZone = 'America/New_York') {
   const timezone = data.timezone || fallbackZone;
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(now));
+  const today = localDate(now, timezone);
   const entries = (data.schedule || []).filter((s) => s.date === today && s.closingTime);
   const regular = entries.find((s) => s.type === 'OPERATING');
   const late = entries

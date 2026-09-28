@@ -6,6 +6,7 @@ import { fetchParkHistory } from './themeparks.js';
 import { extractEpisodes } from './episodes.js';
 import { history, saveHistory } from './store.js';
 import { HISTORY_DAYS as WINDOW_DAYS } from './config.js';
+import { localDate } from './time.js';
 
 const SYNC_INTERVAL_MS = 60 * 60_000;
 // Episodes older than this are dropped. Ride reliability drifts with
@@ -18,10 +19,6 @@ const DAY_SETTLE_HOURS = 6;
 const BUDGET_FLOOR = 2;
 
 const DAY_MS = 24 * 3600_000;
-
-export function localDate(ts, timezone) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(ts));
-}
 
 function addDays(date, n) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);

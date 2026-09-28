@@ -6,7 +6,7 @@ import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
 import { isLateOpening } from './episodes.js';
 import { recordWaits } from './insights.js';
-import { localDate } from './history.js';
+import { localDate } from './time.js';
 
 const POLL_INTERVAL_MS = 60_000;
 // A ride missing from a response keeps its last state this many polls before
@@ -286,9 +286,7 @@ export async function simulateTransition(trip, type) {
 
 async function refreshSchedule(parkId) {
   const state = parkState[parkId];
-  const today = new Intl.DateTimeFormat('en-CA', {
-    timeZone: state?.timezone || 'America/New_York',
-  }).format(new Date());
+  const today = localDate(Date.now(), state?.timezone || 'America/New_York');
   // Schedules saved before lastCloseTime existed are refetched once.
   if (state?.schedule?.date === today && 'lastCloseTime' in state.schedule) return;
   try {

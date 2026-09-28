@@ -89,15 +89,4 @@ export function parkSummary(episodes, fetchedDates, names, days = 7) {
   };
 }
 
-// Midnight in the park's zone, as epoch ms, for "today" filters.
-export function parkDayStart(timezone, now = Date.now()) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric',
-    }).formatToParts(new Date(now)).map((p) => [p.type, Number(p.value)])
-  );
-  const sinceMidnight = ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000;
-  return now - sinceMidnight - (now % 1000);
-}
-
 export { DAY_MS };
