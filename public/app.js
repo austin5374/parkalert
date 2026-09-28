@@ -804,11 +804,20 @@ function drawDown() {
         <p>The park's ride feed isn't answering right now. This updates on its own.</p>
       </div>`));
   } else if (!down.length) {
+    // Only a live, open park gets the green check. Closed, not open yet,
+    // and old or offline data each say what they are.
+    const open = Date.parse(dash.park.openingTime || '');
+    const stale = offline || Date.now() - dash.lastPoll > STALE_MS;
+    const [glyph, cls, title, text] =
+      alertState().kind === 'closed' ? ['moon', 'closed', 'Park closed', 'Closed for the day. Alerts start again when it opens.']
+        : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride you follow is late to open.`]
+          : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, 'This catches up as soon as ParkAlert can be reached again.']
+            : ['check-circle', '', "Everything's running", "You'll get an alert when a ride you follow goes down."];
     list.appendChild(el(`
-      <div class="empty">
-        ${icon('check-circle')}
-        <h2 class="title-2">Everything's running</h2>
-        <p>${alertState().kind === 'closed' ? 'The park is closed for the day.' : "You'll get an alert when a ride you follow goes down."}</p>
+      <div class="empty ${cls}">
+        ${icon(glyph)}
+        <h2 class="title-2">${esc(title)}</h2>
+        <p>${esc(text)}</p>
       </div>`));
   } else {
     const holds = down.filter((r) => r.outlook?.kind === 'hold');

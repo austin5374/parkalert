@@ -260,7 +260,7 @@ main {
 .empty .title-2 { margin-bottom: 0.35rem; }
 .empty p { color: var(--label-2); line-height: 1.4; }
 .empty + .group { margin-top: 1.2rem; }
-.empty.offline svg { color: var(--label-2); }
+.empty.offline svg, .empty.closed svg { color: var(--label-2); }
 .empty.loading { padding-top: 4rem; color: var(--label-2); }
 .empty .btn-secondary { margin: 1.4rem auto 0; max-width: 16rem; }
 
