@@ -1698,9 +1698,10 @@ function rideSheet(r, detail, back = null) {
       wrap.appendChild(el(`<div class="group plain">${h.last.map((ep) => `
         <div class="row">
           <span class="row-label">${esc(fmtDay(ep.start))}<small>${esc([
-            { hold: 'Park-wide hold', opening: 'Delayed opening' }[ep.kind],
-            ep.reopened ? '' : "Didn't reopen that day",
-          ].filter(Boolean).join(' · ') || `Went down at ${fmtTime(ep.start)}`)}</small></span>
+            `Went down at ${fmtTime(ep.start)}`,
+            { hold: 'park-wide hold', opening: 'delayed opening' }[ep.kind],
+            ep.reopened ? '' : "didn't reopen that day",
+          ].filter(Boolean).join(' · '))}</small></span>
           <span class="row-detail">${ep.reopened ? fmtDuration(ep.minutes * 60000) : ''}</span>
         </div>`).join('')}</div>`));
     }
