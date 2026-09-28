@@ -204,6 +204,17 @@ function upMessage(ev, parkName) {
 }
 
 // One push for many rides at once. Pure apart from the outlook lookup.
+// The outlook a grouped push can speak for: the one shared by at least half
+// the group, else none. Six rides in a storm hold plus one unrelated
+// breakdown is still "Park-wide hold"; taking whichever ride came first
+// could call it a breakdown, or quote a breakdown's estimate for the hold.
+export function groupOutlook(outlooks) {
+  const counts = new Map();
+  for (const o of outlooks) counts.set(o.kind, (counts.get(o.kind) || 0) + 1);
+  const [kind, n] = [...counts].sort((a, b) => b[1] - a[1])[0] || [];
+  return n * 2 >= outlooks.length ? outlooks.find((o) => o.kind === kind) : null;
+}
+
 // late: every ride in the group is a delayed opening, now open.
 export function groupMessage(type, names, parkName, outlook, { late = false } = {}) {
   if (type === 'DOWN') {
@@ -238,7 +249,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       const pushes =
         evs.length >= GROUP_MIN
           ? [groupMessage(type, evs.map((ev) => ev.ride.name), parkName,
-              type === 'DOWN' ? downOutlook(parkId, evs[0].ride.id, 0) : null,
+              type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null,
               { late: evs.every((ev) => ev.late) })]
           : evs.map((ev) => (type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone) : upMessage(ev, parkName)));
       for (const push of pushes) {

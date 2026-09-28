@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSchedule } from '../server/themeparks.js';
-import { groupMessage, recordRecent, GROUP_MIN } from '../server/poller.js';
+import { groupMessage, groupOutlook, recordRecent, GROUP_MIN } from '../server/poller.js';
 import { isTripActive, TRIP_IDLE_MS } from '../server/store.js';
 
 // Magic Kingdom on 2026-09-27 as the API returned it: early entry, a 6pm
@@ -73,4 +73,12 @@ test('a day that is only a ticketed event reports the event, and alerts run unti
 
 test('several late openings at once are one "now open" push', () => {
   assert.equal(groupMessage('UP', ['A', 'B', 'C'], 'EPCOT', null, { late: true }).title, '3 rides are now open');
+});
+
+test('a grouped push speaks for the kind of outage most of its rides share', () => {
+  const hold = { kind: 'hold', text: 'Usually back in 45 to 105 min' };
+  const breakdown = { kind: 'breakdown', text: 'Usually back in 10 to 30 min' };
+  assert.equal(groupOutlook([breakdown, hold, hold, hold]), hold);
+  assert.equal(groupOutlook([hold, breakdown, breakdown]), breakdown);
+  assert.equal(groupOutlook([hold, breakdown, { kind: 'opening' }]), null);
 });
