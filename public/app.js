@@ -185,6 +185,11 @@ function hideToast() {
   if (next) setTimeout(() => showToast(next), 250);
 }
 
+// iOS Safari only shows :active press states under an element with a touch
+// listener; main has one, sheets and the setup screen didn't. One empty
+// passive listener on the document covers every control.
+document.addEventListener('touchstart', () => {}, { passive: true });
+
 /* ---------- Haptics ---------- */
 // A light tick where native apps give one. Android has vibrate(); iOS
 // Safari doesn't, but toggling a native switch input (iOS 17.4+) plays the
