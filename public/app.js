@@ -1112,7 +1112,12 @@ function toggleFollow(rideId) {
 }
 
 function followAll() {
-  save((t) => { t.watched = null; t.rideMutes = {}; }, { watched: null, rideMutes: {} });
+  save((t) => { t.watched = null; t.rideMutes = {}; }, { watched: null, rideMutes: {} }, (before) => {
+    toast(`Alerts on for all ${dash.rides.length} rides`, {
+      label: 'Undo',
+      run: () => save((t) => { t.watched = before.watched; t.rideMutes = before.rideMutes; }, { watched: before.watched, rideMutes: before.rideMutes || {} }),
+    });
+  });
 }
 
 function unfollowAll() {
