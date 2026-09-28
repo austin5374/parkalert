@@ -1809,6 +1809,7 @@ $('#join-form').onsubmit = async (e) => {
   joinNote('Joining…');
   try {
     await api(`/trips/${code}`);
+    setPendingInvite(null);
     joinNote(JOIN_HINT);
     joinInput.value = '';
     syncJoin();
@@ -1901,7 +1902,10 @@ const nav = $('#nav');
 addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 2), { passive: true });
 
 // Coming back (to the tab, or online) catches up whichever screen is showing.
-const resume = () => (onSetup() ? (!parks.length && renderSetupParks()) : refresh());
+const resume = () => {
+  if (pendingInvite()) tryInvite();
+  return onSetup() ? (!parks.length && renderSetupParks()) : refresh();
+};
 document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
 addEventListener('online', resume);
 addEventListener('offline', () => { offline = true; if (dash) renderHeader(); });
@@ -1913,6 +1917,74 @@ setInterval(() => {
   renderDown();
   if (sheetContext?.type === 'hold') updateSheet(holdSheet());
 }, TICK_MS);
+
+/* ---------- Invites ---------- */
+// An invite is kept until it has been answered, so one opened with no signal
+// (at the gate, in the parking lot) is still there once the phone
+// reconnects, and its code is waiting in the join field meanwhile.
+const INVITE_KEY = 'parkalert.pendingInvite';
+const pendingInvite = () => { try { return localStorage.getItem(INVITE_KEY); } catch { return null; } };
+function setPendingInvite(code) {
+  try { code ? localStorage.setItem(INVITE_KEY, code) : localStorage.removeItem(INVITE_KEY); } catch {}
+  if (code) { joinInput.value = code; syncJoin(); }
+}
+
+let inviteBusy = false;
+async function tryInvite() {
+  const code = pendingInvite();
+  if (!code || inviteBusy) return false;
+  inviteBusy = true;
+  try {
+    const { trip } = await api(`/trips/${code}`);
+    setPendingInvite(null);
+    joinInput.value = '';
+    syncJoin();
+    if (code === tripCode) {
+      if (!onSetup()) toast(`You're already on trip ${code}`);
+      else showApp();
+      return true;
+    }
+    if (!tripCode) {
+      setTrip(code, { firstRun: true });
+      return true;
+    }
+    // On another trip already: ask first. One tap on a link should never
+    // quietly swap the trip this phone is on.
+    if (onSetup()) showApp();
+    await loadParks().catch(() => {});
+    confirmInvite(code, trip);
+    return true;
+  } catch (err) {
+    if (err.status === 404) {
+      setPendingInvite(null);
+      joinInput.value = '';
+      syncJoin();
+      toast(`Invite code ${code} wasn't found`);
+    } else {
+      toast(`Couldn't open the invite to trip ${code} yet. It will try again when you're back online.`);
+    }
+    return false;
+  } finally {
+    inviteBusy = false;
+  }
+}
+
+function confirmInvite(code, trip) {
+  const park = parks.find((p) => p.id === trip.parkId);
+  const content = el(`<div>
+    ${sheetHead(`Join trip ${code}?`, `${park ? `It's at ${esc(parkLabel(park.name))}. ` : ''}This phone leaves trip <strong>${esc(tripCode)}</strong>, which keeps going for anyone else on it. You can rejoin it with that code.`)}
+    <div class="btn-stack">
+      <button class="btn-primary pressable" type="button" data-act="join">Join trip ${esc(code)}</button>
+      <button class="btn-secondary pressable" type="button" data-act="stay">Stay on ${esc(tripCode)}</button>
+    </div>
+  </div>`);
+  content.querySelector('[data-act=join]').onclick = () => {
+    sheet.close();
+    setTrip(code, { firstRun: true });
+  };
+  content.querySelector('[data-act=stay]').onclick = () => sheet.close();
+  sheet.open(content);
+}
 
 /* ---------- Boot ---------- */
 (async function boot() {
@@ -1935,27 +2007,19 @@ setInterval(() => {
   }
   if (joinParam) {
     history.replaceState(null, '', '/');
-    const code = joinParam.toUpperCase();
-    const previous = tripCode;
-    try {
-      await api(`/trips/${code}`);
-      setTrip(code, { firstRun: previous !== code });
-      // Tapping someone's invite should never silently strand your own trip.
-      if (previous && previous !== code) {
-        toast(`Joined trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
-      }
-      return;
-    } catch (err) {
-      toast(err.status === 404
-        ? `Invite code ${code} wasn't found`
-        : `Couldn't open the invite. Check your connection, or join with code ${code}.`);
-    }
+    setPendingInvite(joinParam.toUpperCase());
+    if (await tryInvite()) return;
   }
 
   // A saved trip opens straight away, online or not. A trip that no longer
   // exists is caught by the first refresh, which says so and leaves it.
   if (tripCode) showApp();
   else showSetup();
+  // An invite opened offline earlier, still waiting.
+  if (!joinParam && pendingInvite()) {
+    setPendingInvite(pendingInvite());
+    if (navigator.onLine !== false) tryInvite();
+  }
 })();
 
 if ('serviceWorker' in navigator) {
