@@ -53,3 +53,16 @@ test('a down ride closing is news mid-day, not before opening or around closing'
   assert.equal(closingIsNews(state(day), at('2026-09-27T23:45:00-04:00')), false, 'party ending');
   assert.equal(closingIsNews(state(null), at('2026-09-27T15:00:00-04:00')), true, 'unknown hours');
 });
+
+test("today's hours are checked again during the day, and more often near close", async () => {
+  const { scheduleIsFresh } = await import('../server/poller.js');
+  const now = Date.parse('2026-09-28T18:00:00Z'); // 2pm in Orlando
+  const base = { date: '2026-09-28', closingTime: '2026-09-28T22:00:00-04:00', lastCloseTime: '2026-09-28T22:00:00-04:00' };
+  const st = (extra) => ({ timezone: 'America/New_York', schedule: { ...base, ...extra } });
+  assert.equal(scheduleIsFresh(st({ fetchedAt: now - 10 * 60_000 }), now), true);
+  assert.equal(scheduleIsFresh(st({ fetchedAt: now - 61 * 60_000 }), now), false);
+  assert.equal(scheduleIsFresh(st({}), now), false); // saved before fetchedAt existed
+  const nearClose = Date.parse('2026-09-29T01:40:00Z'); // 9:40pm, 20 min before close
+  assert.equal(scheduleIsFresh(st({ fetchedAt: nearClose - 20 * 60_000 }), nearClose), false);
+  assert.equal(scheduleIsFresh(st({ fetchedAt: nearClose - 5 * 60_000 }), nearClose), true);
+});

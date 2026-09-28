@@ -35,7 +35,7 @@ test('ride history ignores blips and other rides, and reports typical and longes
   const h = rideHistory(eps, 'a', ['2026-09-21', '2026-09-22', '2026-09-23']);
   assert.equal(h.outages, 3);
   assert.equal(h.typicalMinutes, 15); // median of the two that reopened
-  assert.equal(h.longestMinutes, 90);
+  assert.equal(h.longestMinutes, 20); // the 90 never reopened: not a length
   assert.equal(h.last[0].reopened, false);
   assert.equal(h.archivedDays, 3);
 });
@@ -68,4 +68,20 @@ test("the park's day starts at local midnight", () => {
 test('after a gap in polling, the wait chart breaks instead of holding the old wait', () => {
   const w = recordWaits({ a: [[1000, 30]] }, { a: { status: 'OPERATING', waitTime: 30 } }, 9000, 2000);
   assert.deepEqual(w.a, [[1000, 30], [2000, null], [9000, 30]]);
+});
+
+test("on daylight-saving days the park's day still starts at midnight", () => {
+  // Nov 1 2026: clocks go back at 2am. 3pm EST is 16 hours after midnight EDT.
+  assert.equal(new Date(parkDayStart('America/New_York', Date.parse('2026-11-01T20:00:00Z'))).toISOString(), '2026-11-01T04:00:00.000Z');
+  // Mar 8 2026: clocks go forward at 2am. 3pm EDT is 14 hours after midnight EST.
+  assert.equal(new Date(parkDayStart('America/New_York', Date.parse('2026-03-08T19:00:00Z'))).toISOString(), '2026-03-08T05:00:00.000Z');
+});
+
+test('"last 7 days" figures come from those 7 days only', () => {
+  const dates = ['2026-08-01', ...Array.from({ length: 7 }, (_, i) => `2026-09-2${i}`)];
+  const h = rideHistory([ep('2026-08-01', 180), ep('2026-09-21', 10), ep('2026-09-24', 20)], 'a', dates);
+  assert.equal(h.outages, 2);
+  assert.equal(h.longestMinutes, 20);
+  assert.equal(h.typicalMinutes, 15);
+  assert.equal(h.archivedDays, 8);
 });

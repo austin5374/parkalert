@@ -1,13 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- ParkAlert: a coaster loop at dusk, with an alert badge. Source for every
+  <!-- ParkAlert: a coaster loop at dusk (night blue into a sunset orange; no purple), with an alert badge. Source for every
        PNG in this folder; maskable-*.png are the same art pulled in to the
        Android safe zone. -->
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#120d38"/>
-      <stop offset="0.5" stop-color="#43208a"/>
-      <stop offset="0.82" stop-color="#b8327f"/>
-      <stop offset="1" stop-color="#ff6a6a"/>
+      <stop offset="0" stop-color="#0a1a33"/>
+      <stop offset="0.52" stop-color="#17406b"/>
+      <stop offset="0.66" stop-color="#2f6a8f"/>
+      <stop offset="0.7" stop-color="#e98a4a"/>
+      <stop offset="1" stop-color="#ff9f55"/>
     </linearGradient>
     <path id="track" d="M-20 408 C 70 408, 150 402, 214 374 C 298 338, 350 292, 350 226 C 350 166, 306 126, 252 126 C 198 126, 154 168, 154 226 C 154 286, 202 334, 266 360 C 336 388, 420 398, 466 362 C 494 340, 512 314, 540 290"/>
     <!-- Rails: a wide stroke with its middle cut out, so the sky shows between them. -->

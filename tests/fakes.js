@@ -61,7 +61,7 @@ export async function startFakes() {
             name: r.name,
             entityType: 'ATTRACTION',
             status: r.status,
-            queue: { STANDBY: { waitTime: r.waitTime ?? null } },
+            queue: r.queue || { STANDBY: { waitTime: r.waitTime ?? null } },
           })),
         });
       }
@@ -79,6 +79,7 @@ export async function startFakes() {
   process.env.NTFY_BASE = `${base}/ntfy`;
   process.env.WEATHER_BASE = `${base}/weather`;
   process.env.WEATHER_ARCHIVE = `${base}/archive`;
+  process.env.HEALTH_TOKEN = 'health-secret';
   process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'parkalert-test-'));
   return { upstream, pushes, close: () => server.close() };
 }

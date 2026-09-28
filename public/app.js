@@ -9,7 +9,26 @@ const PLAY_STORE = 'https://play.google.com/store/apps/details?id=io.heckel.ntfy
 let tripCode = localStorage.getItem('parkalert.trip');
 let dash = null; // last /dashboard payload
 let parks = [];
-let offline = false;
+let offline = false; // the last refresh failed; `failure` says how
+// Why: 'offline' (no connection), 'server' (ParkAlert answered with an
+// error, as Railway's proxy does when the app is down), 'busy' (429) or
+// 'slow' (no answer in time). A phone that is online is never told it's
+// offline because the server is down.
+let failure = 'offline';
+function failureOf(err) {
+  if (navigator.onLine === false) return 'offline';
+  if (err?.status === 429) return 'busy';
+  if (err?.status >= 500) return 'server';
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return 'slow';
+  if (err?.status) return 'server';
+  return 'offline';
+}
+const FAILURE_META = {
+  offline: 'Offline',
+  server: "ParkAlert isn't responding",
+  busy: 'Busy, trying again shortly',
+  slow: 'Slow connection',
+};
 let refreshTimer = null;
 let view = 'down';
 
@@ -42,9 +61,12 @@ function el(html) {
 }
 
 // Times are shown in the park's own zone: planning from home should still say 3:30 PM for 3:30 PM at the park.
+// And in the same format as the pushes (server/poller.js), so an alert and
+// the card it opens never read "2:10 PM" and "14:10" for one moment.
+const LOCALE = 'en-US';
 function fmtTime(ts) {
   if (ts == null) return '';
-  return new Intl.DateTimeFormat([], {
+  return new Intl.DateTimeFormat(LOCALE, {
     hour: 'numeric', minute: '2-digit', timeZone: dash?.park.timezone || undefined,
   }).format(new Date(ts));
 }
@@ -59,7 +81,7 @@ function fmtUntil(ts) {
   if (day === today) return fmtTime(ts);
   if (day === localDay(Date.now() + 24 * 3600_000, tz)) return `tomorrow at ${fmtTime(ts)}`;
   if (day === localDay(Date.now() - 24 * 3600_000, tz)) return `yesterday at ${fmtTime(ts)}`;
-  const weekday = new Intl.DateTimeFormat([], { weekday: 'short', timeZone: tz }).format(new Date(ts));
+  const weekday = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', timeZone: tz }).format(new Date(ts));
   return `${weekday} at ${fmtTime(ts)}`;
 }
 
@@ -88,35 +110,110 @@ async function api(path, opts = {}) {
 const patchTrip = (body) => api(`/trips/${tripCode}`, { method: 'PATCH', body });
 
 // Optimistic change with an honest rollback: the UI moves first, and if the
-// server refuses, it moves back and says so.
-async function save(apply, body, afterSave) {
+// server refuses, it moves back and says so. Saves go out one at a time, in
+// order, and a failure shows the trip exactly as the server last confirmed
+// it. Restoring a snapshot taken before this change instead used to undo
+// the wrong thing when two saves overlapped and both failed, leaving a
+// switch showing a change that was never saved.
+let confirmedTrip = null; // the trip as the server last returned it
+let savesPending = 0;
+let saveChain = Promise.resolve();
+function confirmTrip(trip) {
+  confirmedTrip = structuredClone(trip);
+}
+function save(apply, body, afterSave) {
   const before = structuredClone(dash.trip);
   apply(dash.trip);
   renderAll();
-  try {
-    const { trip } = await patchTrip(body);
-    Object.assign(dash.trip, trip);
-    afterSave?.(before);
-    return true;
-  } catch {
-    dash.trip = before;
-    renderAll();
-    toast("Couldn't save that. Check your connection and try again.");
-    return false;
-  }
+  savesPending++;
+  const run = saveChain.then(async () => {
+    try {
+      const { trip } = await patchTrip(body);
+      confirmTrip(trip);
+      // Later saves still on their way keep their optimistic changes.
+      if (savesPending === 1) {
+        Object.assign(dash.trip, trip);
+        renderAll();
+      }
+      afterSave?.(before);
+      return true;
+    } catch {
+      if (confirmedTrip) dash.trip = structuredClone(confirmedTrip);
+      renderAll();
+      toast("Couldn't save that. Check your connection and try again.");
+      return false;
+    } finally {
+      savesPending--;
+    }
+  });
+  saveChain = run.catch(() => {});
+  return run;
 }
 
 /* ---------- Toast ---------- */
+// One at a time. A plain message never cuts short a toast with an action
+// (Undo, Reload): it waits its turn. A newer action replaces an older one,
+// since the Undo for what the guest just did is the one that matters (as
+// iOS keeps only the latest undo). Plain ones give way to whatever comes
+// next. With a sheet open, toasts show at the top, clear of its buttons.
 let toastTimer = null;
+let toastNow = null; // { text, action }
+const toastQueue = [];
 function toast(text, action) {
+  const item = { text, action };
+  if (toastNow?.action && !action) {
+    toastQueue.push(item);
+    return;
+  }
+  showToast(item);
+}
+function showToast(item) {
   const t = $('#toast');
+  toastNow = item;
+  const { text, action } = item;
   t.innerHTML = `<span>${esc(text)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ''}`;
   if (action) t.querySelector('button').onclick = () => { hideToast(); action.run(); };
+  t.classList.toggle('top', sheet.isOpen);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, action ? 5000 : 2800);
+  toastTimer = setTimeout(hideToast, action?.sticky ? 12000 : action ? 5000 : 2800);
 }
-function hideToast() { $('#toast').classList.remove('show'); }
+function hideToast() {
+  clearTimeout(toastTimer);
+  $('#toast').classList.remove('show');
+  toastNow = null;
+  const next = toastQueue.shift();
+  if (next) setTimeout(() => showToast(next), 250);
+}
+
+// iOS Safari only shows :active press states under an element with a touch
+// listener; main has one, sheets and the setup screen didn't. One empty
+// passive listener on the document covers every control.
+document.addEventListener('touchstart', () => {}, { passive: true });
+
+/* ---------- Haptics ---------- */
+// A light tick where native apps give one. Android has vibrate(); iOS
+// Safari doesn't, but toggling a native switch input (iOS 17.4+) plays the
+// system tick, so a hidden one is flipped inside the gesture.
+const haptic = (() => {
+  let label = null;
+  return () => {
+    if (navigator.vibrate) { navigator.vibrate(8); return; }
+    if (platform !== 'ios') return;
+    if (!label) {
+      label = document.createElement('label');
+      label.setAttribute('aria-hidden', 'true');
+      label.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('switch', '');
+      input.tabIndex = -1;
+      label.appendChild(input);
+      document.body.appendChild(label);
+    }
+    label.click();
+  };
+})();
 
 /* ---------- Spring (damping ratio + response, as Apple frames it) ---------- */
 function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate, onDone }) {
@@ -146,7 +243,8 @@ function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate
 }
 
 // Where a flick would come to rest, the way scroll deceleration projects it.
-const project = (v, rate = 0.99) => ((v / 1000) * rate) / (1 - rate);
+// 0.998 is UIScrollView's normal rate: a short, fast flick carries far.
+const project = (v, rate = 0.998) => ((v / 1000) * rate) / (1 - rate);
 
 function rubberband(overshoot, dimension, constant = 0.55) {
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
@@ -156,11 +254,43 @@ function rubberband(overshoot, dimension, constant = 0.55) {
 const sheet = (() => {
   const layer = $('#sheet-layer'), panel = $('#sheet'), scrim = $('#scrim'), body = $('#sheet-body');
   let y = 0, h = 1, anim = null, isOpen = false, returnFocus = null, onClosed = null;
+  // closing: the close animation is running (isOpen is already false).
 
+  // The sheet's height changes after it opens (a ride's history loads in),
+  // so it is read again whenever a close or a drag needs it.
+  const measure = () => { h = panel.getBoundingClientRect().height || h; return h; };
+  // Detents, as in Maps: a tall ride sheet rests at a medium height (rest > 0,
+  // the offset that leaves 55% of the screen showing) and a drag up or a
+  // flick takes it to full height (rest = 0). Short sheets only have full.
+  let rest = 0;
+  let medium = 0; // the medium detent's offset, or 0 when there isn't one
+  let wantMedium = false; // this sheet has a medium detent once it is tall enough
+  let pendingMedium = false; // opened short; take the medium detent when it grows
+  const MEDIUM_SHARE = 0.55;
+  // Worked out again whenever the content's height changes (a ride's
+  // history loads after the sheet opens): a sheet resting at medium stays
+  // there, now with the same 55% of the screen showing.
+  const setDetents = () => {
+    const wasMedium = medium > 0 && rest === medium;
+    measure();
+    medium = wantMedium && h > innerHeight * (MEDIUM_SHARE + 0.07) ? Math.round(h - innerHeight * MEDIUM_SHARE) : 0;
+    return wasMedium;
+  };
+  const app = $('#app');
+  // While a full-height sheet is up, the page behind recedes a little, as
+  // behind an iOS page sheet; nothing moves under reduced motion.
+  const recede = (v) => {
+    const full = h >= innerHeight - 80 && !reducedMotion();
+    const p = full ? Math.max(0, Math.min(1, 1 - v / (medium || h))) : 0;
+    app.style.transform = p ? `scale(${1 - 0.06 * p})` : '';
+    app.style.borderRadius = p ? `${Math.round(12 * p)}px` : '';
+    document.documentElement.classList.toggle('sheet-up', p > 0);
+  };
   const paint = (v) => {
     y = v;
     panel.style.transform = `translateY(${v}px)`;
     scrim.style.opacity = String(Math.max(0, Math.min(1, 1 - v / h)));
+    recede(v);
   };
 
   function animateTo(target, velocity = 0, damping = 1, done) {
@@ -180,6 +310,7 @@ const sheet = (() => {
   const setInert = (on) => background.forEach((n) => { n.inert = on; });
 
   function finishClose() {
+    recede(h);
     layer.classList.add('hidden');
     setInert(false);
     body.replaceChildren();
@@ -189,86 +320,251 @@ const sheet = (() => {
     cb?.();
   }
 
-  function open(content, { onClose } = {}) {
-    returnFocus = document.activeElement;
+  // Back (the browser's, Android's, or a sheet's own back button) closes the
+  // sheet, or steps back through sheets opened from sheets, instead of
+  // leaving the app. Each open or pushed view adds a history entry; closing
+  // any other way (scrim, drag, Escape) takes them back off.
+  let depth = 0; // history entries this sheet has added
+  let skipPops = 0; // popstate events caused by our own history.go()
+  let onBack = null; // app hook: step back one view; false when at the first
+  let entryAfterPop = false; // a sheet opened while our history.go() was still pending
+  addEventListener('popstate', () => {
+    if (skipPops) {
+      skipPops--;
+      if (!skipPops && entryAfterPop) { entryAfterPop = false; history.pushState({ parkalertSheet: depth }, ''); }
+      return;
+    }
+    if (!isOpen) { depth = 0; return; }
+    depth = Math.max(0, depth - 1);
+    if (onBack?.()) return;
+    depth = 0;
+    dismiss();
+  });
+  // history.go() is asynchronous: an entry pushed before it lands would be
+  // the one it takes away, so it waits for that popstate.
+  const addEntry = () => {
+    if (skipPops) { entryAfterPop = true; depth++; return; }
+    history.pushState({ parkalertSheet: depth + 1 }, '');
+    depth++;
+  };
+
+  function open(content, { onClose, detent = 'large' } = {}) {
+    // Opened again while still closing: finish the old sheet's bookkeeping
+    // and rise from where it is now, rather than snapping to the bottom.
+    const wasClosing = closing;
+    if (closing) {
+      closing = false;
+      const cb = onClosed;
+      onClosed = null;
+      cb?.();
+    }
+    // Focus goes back to what opened the first sheet, not to a row inside a
+    // sheet that is about to be replaced.
+    if (!isOpen) {
+      if (!wasClosing) returnFocus = document.activeElement;
+      addEntry();
+    }
     onClosed = onClose || null;
     body.replaceChildren(content);
     body.scrollTop = 0;
     layer.classList.remove('hidden');
     setInert(true);
     h = panel.getBoundingClientRect().height || 400;
-    if (!isOpen) paint(h);
+    wantMedium = detent === 'medium';
+    setDetents();
+    // A medium sheet that opens short (its content still loading) takes the
+    // medium detent as soon as it grows into one.
+    rest = medium;
+    pendingMedium = wantMedium && !medium;
+    if (!isOpen && !wasClosing) paint(h);
     isOpen = true;
-    animateTo(0);
+    animateTo(rest);
     panel.focus({ preventScroll: true });
   }
 
-  function close(velocity = 0) {
+  // A view opened from the current one (a ride from the hold list): same
+  // sheet, new content, one more step for Back.
+  function push(content) {
+    addEntry();
+    replace(content);
+  }
+  function replace(content) {
+    body.replaceChildren(content);
+    body.scrollTop = 0;
+    panel.focus({ preventScroll: true });
+    if (setDetents()) {
+      rest = medium;
+      animateTo(rest);
+    }
+  }
+
+  let closing = false;
+  function dismiss(velocity = 0) {
     if (!isOpen) return;
     isOpen = false;
-    animateTo(h, velocity, 1, finishClose);
+    closing = true;
+    animateTo(measure(), velocity, 1, () => { closing = false; finishClose(); });
+  }
+  function close(velocity = 0) {
+    if (!isOpen) return;
+    if (depth) {
+      skipPops++;
+      history.go(-depth);
+      depth = 0;
+    }
+    dismiss(velocity);
   }
 
   // Drag: 1:1 with the finger from where it grabbed, rubber-banded above the
   // top, and on release the flick's projected resting point decides.
   let drag = null;
-  function down(e) {
-    if (e.button > 0 || !isOpen) return;
-    if (e.target.closest('button, a, input')) return;
+  function begin(clientY, t) {
     anim?.stop();
-    drag = { startY: e.clientY, from: y, samples: [{ t: e.timeStamp, y }], id: e.pointerId };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    measure();
+    drag = { startY: clientY, from: y, samples: [{ t, y }] };
   }
-  function move(e) {
-    if (!drag || e.pointerId !== drag.id) return;
-    let next = drag.from + (e.clientY - drag.startY);
+  function follow(clientY, t) {
+    let next = drag.from + (clientY - drag.startY);
     if (next < 0) next = rubberband(next, h);
     paint(next);
-    drag.samples.push({ t: e.timeStamp, y: next });
-    if (drag.samples.length > 6) drag.samples.shift();
+    drag.samples.push({ t, y: next });
+    if (drag.samples.length > 8) drag.samples.shift();
   }
-  function up(e) {
-    if (!drag || e.pointerId !== drag.id) return;
-    const s = drag.samples, a = s[0], b = s[s.length - 1];
-    const v = b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
+  function release(t) {
+    // Only the last 80 ms count: a finger that stopped before lifting has no
+    // velocity, however fast it was moving earlier.
+    const s = drag.samples.filter((p) => t - p.t <= 80);
+    const a = s[0], b = s[s.length - 1];
+    const v = s.length > 1 && b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
     drag = null;
-    if (y + project(v) > h * 0.45) close(v);
+    const to = y + project(v);
+    // Past 45% of the way from the lowest detent to the bottom closes; else
+    // the nearest detent to where the flick would come to rest.
+    const low = medium || 0;
+    if (to > low + (h - low) * 0.45) return close(v);
+    const next = medium && to > medium / 2 ? medium : 0;
+    if (next !== rest) haptic(); // settling into another detent
+    rest = next;
     // Settling back after a flick carries its momentum, so a little give reads right.
-    else animateTo(0, v, Math.abs(v) > 300 ? 0.82 : 1);
+    animateTo(rest, v, Math.abs(v) > 300 ? 0.82 : 1);
   }
-  for (const zone of [$('#grabber'), body]) {
-    zone.addEventListener('pointerdown', (e) => {
-      // In the scrolling body, only the header region drags the sheet.
-      if (zone === body && !e.target.closest('.sheet-head')) return;
-      down(e);
-    });
-    zone.addEventListener('pointermove', move);
-    zone.addEventListener('pointerup', up);
-    zone.addEventListener('pointercancel', up);
+
+  // The grabber drags with any pointer (a mouse included).
+  const grabber = $('#grabber');
+  grabber.addEventListener('pointerdown', (e) => {
+    if (e.button > 0 || !isOpen) return;
+    begin(e.clientY, e.timeStamp);
+    drag.id = e.pointerId;
+    grabber.setPointerCapture(e.pointerId);
+  });
+  grabber.addEventListener('pointermove', (e) => { if (drag?.id === e.pointerId) follow(e.clientY, e.timeStamp); });
+  for (const type of ['pointerup', 'pointercancel']) {
+    grabber.addEventListener(type, (e) => { if (drag?.id === e.pointerId) release(e.timeStamp); });
   }
+
+  // Anywhere else on the sheet, as in Maps: a downward pull while the
+  // content is at the top moves the sheet; otherwise the content scrolls. A
+  // scroll that reaches the top mid-gesture hands over to the sheet, one
+  // continuous motion. Charts keep their horizontal scrub.
+  let touch = null; // { startY, lastY, mode: null | 'sheet' | 'scroll' }
+  body.addEventListener('touchstart', (e) => {
+    if (!isOpen || e.touches.length > 1 || e.target.closest('.chart')) { touch = null; return; }
+    touch = { startY: e.touches[0].clientY, lastY: e.touches[0].clientY, mode: null };
+  }, { passive: true });
+  body.addEventListener('touchmove', (e) => {
+    if (!touch) return;
+    const cy = e.touches[0].clientY;
+    const goingDown = cy > touch.lastY;
+    touch.lastY = cy;
+    if (touch.mode === 'sheet') {
+      if (e.cancelable) e.preventDefault();
+      follow(cy, e.timeStamp);
+      return;
+    }
+    const atTop = body.scrollTop <= 0;
+    if (touch.mode === null && Math.abs(cy - touch.startY) < 6) return;
+    // Below full height, the content doesn't scroll: the sheet moves, up to
+    // full height or down to close.
+    const belowFull = y > 0.5;
+    if (((atTop && goingDown) || belowFull) && e.cancelable) {
+      touch.mode = 'sheet';
+      e.preventDefault();
+      begin(cy, e.timeStamp);
+      return;
+    }
+    touch.mode = 'scroll';
+  }, { passive: false });
+  const touchEnd = (e) => {
+    if (touch?.mode === 'sheet' && drag) release(e.timeStamp);
+    touch = null;
+  };
+  body.addEventListener('touchend', touchEnd);
+  body.addEventListener('touchcancel', touchEnd);
+
   scrim.addEventListener('click', () => close());
+  // A drag on the dimmed page is not a scroll of the page under it (iOS
+  // would chain it through the fixed layer); the page stays put.
+  scrim.addEventListener('touchmove', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
-  // A finger on the sheet (scrubbing a chart, say) holds off live refreshes.
+  // A finger on the sheet (dragging it, scrubbing a chart) or a scroll still
+  // coasting holds off live refreshes: replacing the content then would
+  // jump under the finger or stop the momentum dead. The newest refresh
+  // waits and lands once the sheet is still.
   let touching = false;
+  let lastScroll = 0;
+  let pending = null; // { content, after }
+  let retry = null;
   body.addEventListener('pointerdown', () => { touching = true; });
-  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { touching = false; }, true);
+  body.addEventListener('touchstart', () => { touching = true; }, { passive: true });
+  grabber.addEventListener('pointerdown', () => { touching = true; });
+  body.addEventListener('scroll', () => { lastScroll = performance.now(); }, { passive: true });
+  const settle = () => {
+    touching = false;
+    flush();
+  };
+  for (const t of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) addEventListener(t, settle, true);
 
-  // Swap content in place (live refresh), keeping the reader's scroll
-  // position and focus. Skipped mid-touch; the next refresh catches up.
-  function update(content) {
-    if (!isOpen || touching) return;
+  const busy = () => touching || !!drag || performance.now() - lastScroll < 250;
+  function flush() {
+    clearTimeout(retry);
+    if (!pending || !isOpen) { pending = null; return; }
+    if (busy()) { retry = setTimeout(flush, 250); return; }
+    const { content, after } = pending;
+    pending = null;
     const top = body.scrollTop;
     keepFocus(body, () => body.replaceChildren(content));
     body.scrollTop = top;
+    const wasMedium = setDetents();
+    if (medium && (wasMedium || pendingMedium)) {
+      pendingMedium = false;
+      rest = medium;
+      animateTo(rest);
+    }
+    after?.();
   }
 
-  return { open, update, close: () => close(), get isOpen() { return isOpen; } };
+  // Swap content in place (live refresh), keeping the reader's scroll
+  // position and focus.
+  function update(content, after) {
+    if (!isOpen) return;
+    pending = { content, after };
+    flush();
+  }
+
+  return {
+    open, push, replace, update, close: () => close(),
+    get isOpen() { return isOpen; },
+    set onBack(fn) { onBack = fn; },
+  };
 })();
 
-function sheetHead(title, html) {
-  return `<div class="sheet-head"><h2 class="title-2" id="sheet-title">${esc(title)}</h2>${html ? `<p>${html}</p>` : ''}</div>`;
+// back: the label of the view this one was opened from ("Hold"), shown as
+// a back button above the title, as a pushed card in Find My has.
+function sheetHead(title, html, back = null) {
+  return `<div class="sheet-head">${back ? `<button class="sheet-back pressable" type="button" data-act="back">${icon('chevron', 'back-chevron')}<span>${esc(back)}</span></button>` : ''}<h2 class="title-2" id="sheet-title">${esc(title)}</h2>${html ? `<p>${html}</p>` : ''}</div>`;
 }
+document.addEventListener('click', (e) => { if (e.target.closest('#sheet [data-act=back]')) history.back(); });
 
 /* ---------- Parks ---------- */
 const parkLabel = (name) => name.replace(' (CA)', '');
@@ -294,7 +590,7 @@ function parkGroups(currentId, onPick) {
           <span class="row-label">${esc(parkLabel(p.name))}</span>
           ${selected ? icon('check', 'check') : icon('chevron', 'chevron')}
         </button>`);
-      row.onclick = () => onPick(p);
+      row.onclick = () => onPick(p, row);
       group.appendChild(row);
     }
     wrap.appendChild(group);
@@ -335,7 +631,7 @@ async function renderSetupParks() {
     return;
   }
   if ($('#setup-status').textContent === OFFLINE_SETUP) setupStatus('');
-  $('#setup-parks').replaceChildren(parkGroups(null, (p) => startTrip(p.id)));
+  $('#setup-parks').replaceChildren(parkGroups(null, (p, row) => startTrip(p.id, row)));
 }
 
 // Location is asked for only when the person taps for it, never on arrival.
@@ -371,13 +667,32 @@ function locate() {
   );
 }
 
-async function startTrip(parkId) {
-  try {
-    const { trip } = await api('/trips', { method: 'POST', body: { parkId } });
-    setTrip(trip.code, { firstRun: true });
-  } catch {
-    setupStatus("Can't reach ParkAlert right now. Check your connection.", true);
-  }
+// One trip per tap: a second tap (or a double tap on a slow connection)
+// while the first is on its way does nothing, and the tapped row shows a
+// spinner where its chevron was so it's clear something is happening.
+let starting = null;
+async function startTrip(parkId, row = null) {
+  if (starting) return starting;
+  const list = $('#setup-parks');
+  list.setAttribute('aria-busy', 'true');
+  list.classList.add('busy');
+  const chevron = row?.querySelector('.chevron');
+  const spinner = el('<span class="spinner" role="status" aria-label="Creating your trip"></span>');
+  chevron?.replaceWith(spinner);
+  starting = (async () => {
+    try {
+      const { trip } = await api('/trips', { method: 'POST', body: { parkId } });
+      setTrip(trip.code, { firstRun: true });
+    } catch {
+      setupStatus("Can't reach ParkAlert right now. Check your connection.", true);
+    } finally {
+      list.removeAttribute('aria-busy');
+      list.classList.remove('busy');
+      if (chevron) spinner.replaceWith(chevron);
+      starting = null;
+    }
+  })();
+  return starting;
 }
 
 function setTrip(code, { firstRun = false } = {}) {
@@ -391,12 +706,31 @@ function setTrip(code, { firstRun = false } = {}) {
   showApp({ firstRun });
 }
 
-function leaveTrip() {
-  localStorage.removeItem('parkalert.trip');
+// Leaving takes the trip's cached rides and its "alerts work here" flag off
+// the phone too, so a shared phone keeps no trace of the topic, and
+// rejoining starts clean. A toast offers the way back.
+function leaveTrip({ undoable = false } = {}) {
+  const code = tripCode;
+  try {
+    localStorage.removeItem('parkalert.trip');
+    localStorage.removeItem(dashKey(code));
+    if (!undoable) localStorage.removeItem(`parkalert.alertsReady.${code}`);
+  } catch {}
   tripCode = null;
   dash = null;
-  clearInterval(refreshTimer);
+  clearTimeout(refreshTimer);
   showSetup();
+  if (undoable && code) {
+    const ready = localStorage.getItem(`parkalert.alertsReady.${code}`);
+    try { localStorage.removeItem(`parkalert.alertsReady.${code}`); } catch {}
+    toast(`Left trip ${code}`, {
+      label: 'Undo',
+      run: () => {
+        if (ready) try { localStorage.setItem(`parkalert.alertsReady.${code}`, ready); } catch {}
+        setTrip(code);
+      },
+    });
+  }
 }
 
 /* ---------- Header ---------- */
@@ -407,6 +741,8 @@ function alertState() {
   const close = dash.park.lastCloseTime || dash.park.lateEvent?.closingTime || dash.park.closingTime;
   if (close && Date.now() > Date.parse(close)) return { kind: 'closed' };
   if (!alertsReady()) return { kind: 'setup' };
+  // Alerts on, about nothing: say so instead of a reassuring bell.
+  if (!dash.rides.some((r) => isFollowing(r.id))) return { kind: 'none' };
   return { kind: 'on' };
 }
 
@@ -427,7 +763,60 @@ function hoursText() {
 // shrinks to fit beside the alerts pill ("Magic Kin…" told nobody anything),
 // down to a floor, and past that takes a second line. Relative to the
 // computed size, so the reader's text size setting still counts.
+// At accessibility text sizes (150% and up) iOS stops squeezing things side
+// by side: titles take the full width and trailing controls move below.
+// The layout switches on a class, set from the root size, which follows
+// the reader's setting.
+// iOS hands the reader's Text Size setting (Dynamic Type) to web content
+// only through the -apple-system-body font. The layout is in rem on a 16px
+// root, so the root is set to the same share of 16px that the reader's body
+// size is of the default 17px. Elsewhere the font name is ignored and the
+// browser's own text size applies as before. Checked again on return,
+// since the setting can change while the app is in the background.
+function syncDynamicType() {
+  // Mac Safari knows the font too, but its body size (13px) isn't a
+  // reader's setting and would shrink the whole app.
+  if (platform !== 'ios' || navigator.maxTouchPoints === 0) return;
+  const probe = document.createElement('span');
+  probe.style.font = '-apple-system-body';
+  if (!probe.style.font) return; // not an Apple browser
+  probe.style.cssText += ';position:absolute;visibility:hidden;pointer-events:none';
+  probe.textContent = 'x';
+  document.body.appendChild(probe);
+  const px = parseFloat(getComputedStyle(probe).fontSize);
+  probe.remove();
+  if (px > 0) document.documentElement.style.fontSize = `${((px / 17) * 100).toFixed(2)}%`;
+}
+syncDynamicType();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  syncDynamicType();
+  if (dash) renderHeader();
+});
+
+function syncTypeSize() {
+  const big = parseFloat(getComputedStyle(document.documentElement).fontSize) >= 24;
+  document.documentElement.classList.toggle('ax-type', big);
+  return big;
+}
+syncTypeSize();
+addEventListener('resize', syncTypeSize);
+
 function fitTitle() {
+  if (syncTypeSize()) {
+    // On its own line it wraps at spaces, and shrinks only as far as needed
+    // for its longest word to fit, so "Kingdom" never breaks as "Kingdo-m".
+    const h = $('#park-name');
+    h.style.fontSize = '';
+    h.classList.add('wrap', 'ax');
+    const max = parseFloat(getComputedStyle(h).fontSize);
+    for (let size = max; h.scrollWidth > h.clientWidth && size > max * 0.5; ) {
+      size -= 1;
+      h.style.fontSize = `${size}px`;
+    }
+    return;
+  }
+  $('#park-name').classList.remove('ax');
   const h = $('#park-name');
   h.style.fontSize = '';
   h.classList.remove('wrap');
@@ -447,12 +836,13 @@ function renderHeader() {
 
   const meta = $('#park-meta');
   const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS || !!dash.lastError;
-  meta.textContent = offline
-    ? `Offline · as of ${fmtUntil(dash.lastPoll)}`
+  const flash = metaFlash && Date.now() < metaFlash.until ? metaFlash : null;
+  meta.textContent = flash ? flash.text : offline
+    ? `${FAILURE_META[failure]} · as of ${fmtUntil(dash.lastPoll)}`
     : stale
-      ? `Updated ${dash.lastPoll ? fmtDuration(Date.now() - dash.lastPoll) : 'a while'} ago · reconnecting`
+      ? `Ride times may be out of date · ${dash.lastPoll ? `${fmtDuration(Date.now() - dash.lastPoll)} old` : 'waiting for the ride feed'}`
       : hoursText();
-  meta.classList.toggle('warn', offline || stale);
+  meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
 
   const st = alertState();
   const [glyph, label] = {
@@ -460,6 +850,7 @@ function renderHeader() {
     paused: ['pause', 'Paused'],
     closed: ['moon', 'Park closed'],
     setup: ['bell-off', 'Set up alerts'],
+    none: ['bell-off', 'No rides on'],
   }[st.kind];
   const pill = $('#btn-alerts');
   pill.className = `pill pressable ${st.kind}`;
@@ -496,10 +887,10 @@ function timeline(r) {
 function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
-  const since = o.kind === 'opening' ? `Delayed opening since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
+  const since = o.kind === 'opening' ? `Hasn't opened yet · down since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
   const foot = [
     basisLine(o),
-    following ? '' : 'Not following',
+    following ? '' : 'Alerts off',
   ].filter(Boolean).join(' · ');
   return `
     <article class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="button" tabindex="0"
@@ -547,20 +938,46 @@ function drawDown() {
         <p>The park's ride feed isn't answering right now. This updates on its own.</p>
       </div>`));
   } else if (!down.length) {
+    // Only a live, open park gets the green check. Closed, not open yet,
+    // and old or offline data each say what they are.
+    const open = Date.parse(dash.park.openingTime || '');
+    const stale = offline || Date.now() - dash.lastPoll > STALE_MS;
+    const [glyph, cls, title, text] =
+      alertState().kind === 'closed' ? ['moon', 'closed', 'Park closed', 'Closed for the day. Alerts start again when it opens.']
+        : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride with alerts on is late to open.`]
+          : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, 'This catches up as soon as ParkAlert can be reached again.']
+            : ['check-circle', '', "Everything's running", "You'll get an alert when a ride with alerts on goes down."];
     list.appendChild(el(`
-      <div class="empty">
-        ${icon('check-circle')}
-        <h2 class="title-2">Everything's running</h2>
-        <p>${alertState().kind === 'closed' ? 'The park is closed for the day.' : "You'll get an alert when a ride you follow goes down."}</p>
+      <div class="empty ${cls}">
+        ${icon(glyph)}
+        <h2 class="title-2">${esc(title)}</h2>
+        <p>${esc(text)}</p>
       </div>`));
   } else {
     const holds = down.filter((r) => r.outlook?.kind === 'hold');
     const rest = down.filter((r) => r.outlook?.kind !== 'hold');
     if (holds.length) {
-      const hdr = el(`<button class="hold-header pressable" type="button">${icon('bolt')}<span>Park-wide hold · ${holds.length} rides</span>${icon('chevron', 'chevron')}</button>`);
-      hdr.onclick = () => openHold();
-      list.appendChild(hdr);
-      list.appendChild(el(`<div class="cards">${holds.map(downCard).join('')}</div>`));
+      // One card for the hold, not a card per ride: in a storm that was
+      // thirty identical cards before the breakdowns below. The rides are
+      // rows inside it, each still opening its own sheet.
+      const first = holds.reduce((a, r) => (r.downSince < a.downSince ? r : a));
+      const o = first.outlook || {};
+      const card = el(`
+        <div class="card hold-card">
+          <button class="hold-header pressable" type="button">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
+          <p class="card-sub">Since ${fmtTime(first.downSince)} · ${fmtDuration(Date.now() - first.downSince)}</p>
+          ${timeline(first)}
+          ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
+          ${basisLine(o) ? `<p class="card-foot">${esc(basisLine(o))}</p>` : ''}
+          <div class="hold-rides">${holds.map((r) => `
+            <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
+              <span class="row-label">${esc(r.name)}</span>
+              <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
+              ${icon('chevron', 'chevron')}
+            </button>`).join('')}</div>
+        </div>`);
+      card.querySelector('.hold-header').onclick = () => openHold();
+      list.appendChild(el('<div class="cards"></div>')).appendChild(card);
     }
     if (rest.length) {
       if (holds.length) list.appendChild(el('<h2 class="section-label">Down</h2>'));
@@ -613,8 +1030,23 @@ function waitBadge(r) {
   return a && !a.sentAt ? `<span class="wait-badge" title="Wait alert">${icon('timer')}≤${a.max}</span>` : '';
 }
 
+// The other lines a guest weighs: single rider, and Lightning Lane with its
+// next return time. Words, not symbols, and only where the data has them.
+function queueTags(r) {
+  if (r.status !== 'OPERATING') return [];
+  const tags = [];
+  if (r.singleRider) tags.push('Single rider');
+  const ll = r.lightningLane;
+  if (ll) {
+    const name = ll.paid ? 'Single Pass' : 'Lightning Lane';
+    if (ll.state === 'AVAILABLE' && ll.returnStart) tags.push(`${name} ${fmtTime(Date.parse(ll.returnStart))}`);
+    else if (ll.state === 'TEMP_FULL' || ll.state === 'FINISHED') tags.push(`${name} full`);
+  }
+  return tags;
+}
+
 function rideMeta(r) {
-  if (r.status === 'OPERATING') return `Open${r.waitTime != null ? ` · ${r.waitTime} min wait` : ''}`;
+  if (r.status === 'OPERATING') return `Open · ${r.waitTime != null ? `${r.waitTime} min wait` : 'no posted wait'}`;
   if (r.status === 'DOWN') return `Down ${r.downSince ? fmtDuration(Date.now() - r.downSince) : ''}`.trim();
   if (r.status === 'REFURBISHMENT') return 'Refurbishment';
   return 'Closed';
@@ -624,11 +1056,36 @@ function rideMeta(r) {
 // rides by posted wait, then down ones, then closed. Remembered per phone.
 let rideSort = (() => { try { return localStorage.getItem('parkalert.rideSort') || 'name'; } catch { return 'name'; } })();
 const byName = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name));
+// A running ride that posts no wait (a train, a walk-through, a show) is a
+// walk-on, so it sorts first, not after the 90-minute waits.
 function rideOrder(a, b) {
   if (rideSort !== 'wait') return byName(a, b);
   const rank = (r) => (r.status === 'OPERATING' ? 0 : r.status === 'DOWN' ? 1 : 2);
-  return rank(a) - rank(b) || (a.waitTime ?? Infinity) - (b.waitTime ?? Infinity) || byName(a, b);
+  return rank(a) - rank(b) || (a.waitTime ?? 0) - (b.waitTime ?? 0) || byName(a, b);
 }
+
+// Which rides to list: all, open ones, down ones, or the ones you get
+// alerts about. Remembered per phone, like the sort.
+let rideFilter = (() => { try { return localStorage.getItem('parkalert.rideFilter') || 'all'; } catch { return 'all'; } })();
+const FILTERS = {
+  all: () => true,
+  open: (r) => r.status === 'OPERATING',
+  down: (r) => r.status === 'DOWN',
+  following: (r) => isFollowing(r.id),
+};
+const FILTER_EMPTY = {
+  open: 'No rides are open right now.',
+  down: 'Nothing is down right now.',
+  following: "You aren't getting alerts about any ride. Turn some on under All.",
+};
+function setRideFilter(filter) {
+  rideFilter = FILTERS[filter] ? filter : 'all';
+  try { localStorage.setItem('parkalert.rideFilter', rideFilter); } catch {}
+  document.querySelectorAll('[data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === rideFilter)));
+  if (dash) renderRides();
+}
+document.querySelectorAll('[data-filter]').forEach((b) => { b.onclick = () => setRideFilter(b.dataset.filter); });
+setRideFilter(rideFilter);
 
 function setRideSort(sort) {
   rideSort = sort;
@@ -644,14 +1101,14 @@ function renderRides() {
 }
 
 function drawRides() {
-  const q = $('#ride-search').value.trim().toLowerCase();
+  const q = $('#ride-search').value.trim();
   const all = [...dash.rides].sort(rideOrder);
-  const shown = q ? all.filter((r) => r.name.toLowerCase().includes(q)) : all;
+  const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
   const following = all.filter((r) => isFollowing(r.id)).length;
 
-  $('#follow-summary').textContent = following === all.length ? `Following all ${all.length}` : `Following ${following} of ${all.length}`;
+  $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length}` : `Alerts on for ${following} of ${all.length}`;
   const btn = $('#btn-follow-all');
-  btn.textContent = following === all.length ? 'Unfollow all' : 'Follow all';
+  btn.textContent = following === all.length ? 'Turn all off' : 'Turn all on';
   btn.onclick = following === all.length ? unfollowAll : followAll;
   // While searching it would be unclear whether this acts on the matches or on everything.
   btn.classList.toggle('hidden', !!q);
@@ -659,7 +1116,7 @@ function drawRides() {
   const list = $('#rides-list');
   list.className = 'group rides';
   if (!shown.length) {
-    list.innerHTML = `<p class="no-results">No rides match “${esc(q)}”.</p>`;
+    list.innerHTML = `<p class="no-results">${q ? `No rides match “${esc(q)}”.` : esc(FILTER_EMPTY[rideFilter] || 'No rides.')}</p>`;
     return;
   }
   list.innerHTML = shown.map((r) => {
@@ -668,7 +1125,8 @@ function drawRides() {
       <div class="row ride-row">
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}${icon('chevron', 'meta-chevron')}</span>
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}</span>
+            ${queueTags(r).length ? `<span class="tags">${queueTags(r).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}
           </span>
         </button>
         <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
@@ -676,6 +1134,44 @@ function drawRides() {
       </div>`;
   }).join('');
 }
+
+// Switches slide as well as tap, as in Settings: the knob follows a
+// sideways drag and the switch ends up whichever way the finger finished.
+// The tap that ends a drag is swallowed and the change made once, here.
+let slide = null;
+let swallowClick = false;
+document.addEventListener('pointerdown', (e) => {
+  const sw = e.target.closest('.switch');
+  if (!sw || e.button > 0) return;
+  slide = { sw, x: e.clientX, id: e.pointerId, on: sw.getAttribute('aria-checked') === 'true', want: null };
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (!slide || e.pointerId !== slide.id) return;
+  const dx = e.clientX - slide.x;
+  if (Math.abs(dx) < 8 && slide.want === null) return;
+  slide.want = dx > 0;
+  slide.sw.classList.toggle('slide-on', slide.want);
+  slide.sw.classList.toggle('slide-off', !slide.want);
+}, true);
+const endSlide = (e) => {
+  if (!slide || e.pointerId !== slide.id) return;
+  const { sw, on, want } = slide;
+  slide = null;
+  sw.classList.remove('slide-on', 'slide-off');
+  if (want === null || e.type === 'pointercancel') return;
+  swallowClick = true;
+  setTimeout(() => { swallowClick = false; }, 400);
+  if (want !== on) sw.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+};
+document.addEventListener('pointerup', endSlide, true);
+document.addEventListener('pointercancel', endSlide, true);
+document.addEventListener('click', (e) => {
+  if (swallowClick && e.isTrusted && e.target.closest('.switch')) {
+    swallowClick = false;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+}, true);
 
 $('#rides-list').addEventListener('click', (e) => {
   const sw = e.target.closest('.switch');
@@ -685,6 +1181,7 @@ $('#rides-list').addEventListener('click', (e) => {
 // One control per ride. The old star (watch) and bell (mute) did the same job
 // two different ways; following now clears any leftover per-ride mute too.
 function toggleFollow(rideId) {
+  haptic();
   const all = dash.rides.map((r) => r.id);
   const on = isFollowing(rideId);
   let watched = dash.trip.watched === null ? all : [...dash.trip.watched];
@@ -696,12 +1193,17 @@ function toggleFollow(rideId) {
 }
 
 function followAll() {
-  save((t) => { t.watched = null; t.rideMutes = {}; }, { watched: null, rideMutes: {} });
+  save((t) => { t.watched = null; t.rideMutes = {}; }, { watched: null, rideMutes: {} }, (before) => {
+    toast(`Alerts on for all ${dash.rides.length} rides`, {
+      label: 'Undo',
+      run: () => save((t) => { t.watched = before.watched; t.rideMutes = before.rideMutes; }, { watched: before.watched, rideMutes: before.rideMutes || {} }),
+    });
+  });
 }
 
 function unfollowAll() {
   save((t) => { t.watched = []; }, { watched: [] }, (before) => {
-    toast('Unfollowed every ride', {
+    toast('Alerts off for every ride', {
       label: 'Undo',
       run: () => save((t) => { t.watched = before.watched; }, { watched: before.watched }),
     });
@@ -716,7 +1218,9 @@ function renderTrip() {
   d.textContent = ready ? 'Working' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
-  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtUntil(st.until)}` : 'Paused') : 'Off';
+  // Nothing when not paused, as Settings shows no value for an unset row;
+  // "Off" read as "alerts are off".
+  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtUntil(st.until)}` : 'Until you resume') : '';
   $('#park-detail').textContent = parkLabel(dash.park.name);
 }
 
@@ -727,7 +1231,7 @@ function renderNoData() {
   $('#park-name').style.fontSize = '';
   $('#park-name').classList.remove('wrap');
   const meta = $('#park-meta');
-  meta.textContent = offline ? 'Offline. Waiting for a connection…' : 'Loading…';
+  meta.textContent = offline ? (failure === 'offline' ? 'Offline. Waiting for a connection…' : `${FAILURE_META[failure]}…`) : 'Loading…';
   meta.classList.toggle('warn', offline);
   $('#btn-alerts').classList.add('hidden');
   $('#down-badge').classList.add('hidden');
@@ -739,8 +1243,8 @@ function renderNoData() {
   const state = offline
     ? el(`<div class="empty offline">
         ${icon('wifi-off')}
-        <h2 class="title-2">Can't reach ParkAlert</h2>
-        <p>Rides show up here as soon as your phone reconnects.</p>
+        <h2 class="title-2">${failure === 'offline' ? "You're offline" : "Can't reach ParkAlert"}</h2>
+        <p>${failure === 'offline' ? 'Rides show up here as soon as your phone reconnects.' : "Your connection is fine; ParkAlert isn't answering. This tries again on its own."}</p>
         <button class="btn-secondary pressable" type="button">Try again</button>
       </div>`)
     : el('<div class="empty loading" role="status"><p>Loading rides…</p></div>');
@@ -751,7 +1255,7 @@ function renderNoData() {
   });
   $('#down-list').replaceChildren(state);
   $('#rides-list').className = 'group rides';
-  $('#rides-list').innerHTML = `<p class="no-results">${offline ? 'Rides show up once your phone reconnects.' : 'Loading rides…'}</p>`;
+  $('#rides-list').innerHTML = `<p class="no-results">${offline ? (failure === 'offline' ? 'Rides show up once your phone reconnects.' : "Rides show up once ParkAlert answers.") : 'Loading rides…'}</p>`;
 }
 
 function renderAll() {
@@ -760,6 +1264,10 @@ function renderAll() {
   renderDown();
   renderRides();
   renderTrip();
+  // The open ride sheet's switch follows the trip too, so a failed save
+  // moves it back along with the list.
+  const sw = document.querySelector('#sheet .switch[data-act=follow]');
+  if (sw && sheetContext?.type === 'ride') sw.setAttribute('aria-checked', String(isFollowing(sheetContext.id)));
 }
 
 /* ---------- Sheets ---------- */
@@ -770,10 +1278,12 @@ function openPause() {
   const tz = dash.park.timezone || undefined;
   const morning = nextLocalHour(Date.now(), tz, 7);
   const thisMorning = localDay(morning, tz) === localDay(Date.now(), tz);
+  // Each option says when it ends, as Focus does.
   const options = [
     ['For 1 hour', Date.now() + 3600_000],
     ['For 3 hours', Date.now() + 3 * 3600_000],
-    [thisMorning ? 'Until 7 this morning' : 'Until tomorrow morning', morning],
+    [thisMorning ? 'Until this morning' : 'Until tomorrow morning', morning],
+    ['Until I turn them back on', null],
   ];
   const note = st.kind === 'closed'
     ? 'The park is closed, so alerts are already off until it opens.'
@@ -787,17 +1297,22 @@ function openPause() {
   }
   const g = el('<div class="group plain"></div>');
   for (const [label, until] of options) {
-    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span></button>`);
+    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(until === morning ? fmtTime(until) : `Until ${fmtTime(until)}`)}</span>` : ''}</button>`);
     row.onclick = () => { sheet.close(); setMute({ until }); };
     g.appendChild(row);
   }
   content.appendChild(g);
+  const cancel = el('<div class="btn-stack"><button class="btn-secondary pressable" type="button">Cancel</button></div>');
+  cancel.querySelector('button').onclick = () => sheet.close();
+  content.appendChild(cancel);
   sheet.open(content);
 }
 
 function setMute(mute) {
   save((t) => { t.mute = mute; }, { mute }, (before) => {
-    const text = mute ? `Alerts paused until ${fmtUntil(mute.until)}` : 'Alerts are back on';
+    const text = !mute ? 'Alerts are back on'
+      : mute.until === null ? 'Alerts paused until you turn them back on'
+        : `Alerts paused until ${fmtUntil(mute.until)}`;
     toast(text, { label: 'Undo', run: () => save((t) => { t.mute = before.mute; }, { mute: before.mute }) });
   });
 }
@@ -809,24 +1324,39 @@ async function openPark() {
     toast("Can't load the park list. Check your connection.");
     return;
   }
-  const content = el(`<div>${sheetHead('Park', 'Changes the park for everyone on this trip. Each park keeps its own follow list.')}</div>`);
-  content.appendChild(parkGroups(dash.park.id, async (p) => {
+  const content = el(`<div>${sheetHead('Park', 'Changes the park for everyone on this trip. Each park remembers which rides have alerts on.')}</div>`);
+  content.appendChild(parkGroups(dash.park.id, (p) => {
     sheet.close();
-    if (p.id === dash.park.id) return;
-    const from = dash.park.id;
-    try {
-      await patchTrip({ parkId: p.id });
-      await refresh();
-      toast(`Switched to ${parkLabel(p.name)}`, {
-        label: 'Undo',
-        run: async () => { await patchTrip({ parkId: from }); refresh(); },
-      });
-    } catch {
-      toast("Couldn't switch parks. Check your connection.");
-    }
+    if (p.id !== dash.park.id) switchPark(p, dash.park);
   }));
   content.appendChild(el('<div style="height:0.5rem"></div>'));
   sheet.open(content);
+}
+
+// The new park shows at once, loading, instead of the old park's rides
+// sitting there until the server answers. A failure (of the switch or its
+// Undo) goes back to what the server has and says so.
+async function switchPark(to, from, { undo = true } = {}) {
+  const before = dash;
+  dash = null;
+  renderNoData();
+  $('#park-name').textContent = parkLabel(to.name);
+  $('#park-meta').textContent = 'Loading rides…';
+  try {
+    await patchTrip({ parkId: to.id });
+    await refresh();
+    if (undo) {
+      toast(`Switched to ${parkLabel(to.name)}`, {
+        label: 'Undo',
+        run: () => switchPark(from, to, { undo: false }),
+      });
+    }
+  } catch {
+    dash = before;
+    renderAll();
+    refresh();
+    toast(`Couldn't switch to ${parkLabel(to.name)}. Check your connection.`);
+  }
 }
 
 function openLeave() {
@@ -837,7 +1367,7 @@ function openLeave() {
       <button class="btn-secondary pressable" type="button" data-act="cancel">Cancel</button>
     </div>
   </div>`);
-  content.querySelector('[data-act=leave]').onclick = () => { sheet.close(); leaveTrip(); };
+  content.querySelector('[data-act=leave]').onclick = () => { sheet.close(); leaveTrip({ undoable: true }); };
   content.querySelector('[data-act=cancel]').onclick = () => sheet.close();
   sheet.open(content);
 }
@@ -889,8 +1419,19 @@ function openAlertSetup() {
   const q = (a) => content.querySelector(`[data-act=${a}]`);
   if (q('copy')) {
     q('copy').onclick = async () => {
-      try { await navigator.clipboard.writeText(topic); q('copy').textContent = 'Copied'; }
-      catch { toast('Press and hold the topic to copy it'); }
+      try {
+        await navigator.clipboard.writeText(topic);
+        q('copy').textContent = 'Copied';
+        haptic();
+        setTimeout(() => { if (q('copy')) q('copy').textContent = 'Copy'; }, 2000);
+      } catch {
+        // Select it for them, so the system's Copy is one tap away.
+        const range = document.createRange();
+        range.selectNodeContents(content.querySelector('.topic code'));
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        toast('Tap Copy on the selected topic');
+      }
     };
   }
   q('test').onclick = async () => {
@@ -899,7 +1440,7 @@ function openAlertSetup() {
     btn.querySelector('span').textContent = 'Sending…';
     try {
       await api(`/trips/${tripCode}/test`, { method: 'POST' });
-      btn.querySelector('span').textContent = 'Sent. Send another';
+      btn.querySelector('span').textContent = 'Send again';
       content.querySelector('.confirm').classList.remove('hidden');
     } catch {
       btn.querySelector('span').textContent = "Couldn't send. Try again";
@@ -921,15 +1462,42 @@ function openAlertSetup() {
 // What the open sheet is showing, so a background refresh can bring it up to date.
 let sheetContext = null;
 
+// Sheets opened from sheets (a ride from the hold or park sheet) stack:
+// Back returns to the one below, rebuilt with fresh data.
+const sheetStack = [];
 function openSheet(content, context) {
+  // The context is set after open(), which may first finish off a sheet
+  // still closing (whose onClose clears the context). Ride sheets open at
+  // the medium detent, so the list stays in view behind them.
+  sheet.open(content, {
+    detent: context.type === 'ride' ? 'medium' : 'large',
+    onClose: () => { sheetContext = null; sheetStack.length = 0; },
+  });
+  sheetStack.length = 0;
   sheetContext = context;
-  sheet.open(content, { onClose: () => { sheetContext = null; } });
   mountCharts($('#sheet-body'));
 }
+function pushSheet(content, context) {
+  sheetStack.push(sheetContext);
+  sheetContext = context;
+  sheet.push(content);
+  mountCharts($('#sheet-body'));
+}
+sheet.onBack = () => {
+  if (!sheetStack.length) return false;
+  sheetContext = sheetStack.pop();
+  if (sheetContext.type === 'hold') sheet.replace(holdSheet());
+  if (sheetContext.type === 'park') {
+    sheet.replace(parkSheet(lastParkInfo));
+    loadPark();
+  }
+  mountCharts($('#sheet-body'));
+  return true;
+};
+const BACK_LABEL = { hold: 'Hold', park: 'Park' };
 
 function updateSheet(content) {
-  sheet.update(content);
-  mountCharts($('#sheet-body'));
+  sheet.update(content, () => mountCharts($('#sheet-body')));
 }
 
 const KIND_NOTE = {
@@ -938,8 +1506,8 @@ const KIND_NOTE = {
 };
 
 function statusLine(r) {
-  if (r.status === 'DOWN' && r.downSince) return `Down for ${fmtDuration(Date.now() - r.downSince)}, since ${fmtTime(r.downSince)}`;
-  return rideMeta(r);
+  if (r.status === 'DOWN' && r.downSince) return `Down ${fmtDuration(Date.now() - r.downSince)} · since ${fmtTime(r.downSince)}`;
+  return [rideMeta(r), ...queueTags(r)].join(' · ');
 }
 
 // What a range rests on, in a few words for the card.
@@ -950,7 +1518,9 @@ function basisLine(o) {
     return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
   }
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
-  return `From ${o.basis.outages} past outages ${where}`;
+  // The same noun as the sheet's explanation: holds from holds.
+  const what = { hold: 'holds', opening: 'delayed openings' }[o.kind] || 'outages';
+  return `From ${o.basis.outages} past ${what} ${where}`;
 }
 
 const WEATHER_NOTE = {
@@ -975,18 +1545,28 @@ async function openRide(rideId) {
   const r = dash?.rides.find((x) => x.id === rideId);
   if (!r) return;
   // Open at once with what is already known; the history fills in a moment later.
-  openSheet(rideSheet(r, null), { type: 'ride', id: rideId });
+  const from = sheet.isOpen && BACK_LABEL[sheetContext?.type];
+  const context = { type: 'ride', id: rideId, back: from || null };
+  if (from) pushSheet(rideSheet(r, null, from), context);
+  else openSheet(rideSheet(r, null), context);
   await loadRide(rideId);
 }
 
 async function loadRide(rideId) {
   try {
     const detail = await api(`/trips/${tripCode}/rides/${encodeURIComponent(rideId)}`);
-    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) updateSheet(rideSheet(detail.ride, detail));
+    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) updateSheet(rideSheet(detail.ride, detail, sheetContext.back));
   } catch {
     if (sheetContext?.id === rideId) {
       const note = $('#sheet-body [data-loading]');
-      if (note) note.textContent = "Couldn't load this ride's history. Pull down on the list to retry.";
+      if (note) {
+        note.replaceWith(el(`<div class="retry"><p class="footnote">Couldn't load this ride's wait times and history.</p>
+          <button class="btn-secondary pressable" type="button" data-act="retry-ride">Try again</button></div>`));
+        $('#sheet-body [data-act=retry-ride]').onclick = (e) => {
+          e.currentTarget.parentElement.replaceWith(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
+          loadRide(rideId);
+        };
+      }
     }
   }
 }
@@ -1009,22 +1589,23 @@ function waitAlertBlock(r) {
       : posted != null && !choices.length
         ? `The wait is only ${posted} min right now.`
         : posted != null
-          ? `It's ${posted} min now. Tell me when it's at most:`
-          : 'Tell me when it is running with a wait of at most:';
+          ? `Now ${posted} min. Tell me when the wait is at most (minutes):`
+          : 'When it reopens, tell me if the wait is at most (minutes):';
   const box = el(`
     <div>
       <h2 class="section-label">Wait alert</h2>
       <div class="group padded wait-alert">
         <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
-        ${choices.length ? `<div class="chips" role="group" aria-label="Wait alert limit">
-          ${choices.map((m) => `<button class="chip pressable" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}">${m} min</button>`).join('')}
-          ${armed ? '<button class="chip pressable" type="button" data-act="wait-off">Off</button>' : ''}
+        ${choices.length ? `<div class="segmented wait-limits" role="group" aria-label="Wait alert limit">
+          ${armed ? `<button class="chip" type="button" data-act="wait-off" aria-pressed="false">Off</button>` : ''}
+          ${choices.map((m) => `<button class="chip" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}" aria-label="${m} minutes">${m}</button>`).join('')}
         </div>` : ''}
       </div>
       <p class="footnote">Goes to everyone on this trip, once, and only today.</p>
     </div>`);
   box.querySelectorAll('.chip').forEach((b) => {
     b.onclick = () => {
+      haptic();
       const m = b.dataset.act.slice(5);
       setWaitAlert(r.id, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
     };
@@ -1037,18 +1618,19 @@ async function setWaitAlert(rideId, max) {
     const path = `/trips/${tripCode}/wait-alerts/${encodeURIComponent(rideId)}`;
     const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: { max } });
     dash.trip = trip;
+    confirmTrip(trip);
     renderAll();
     if (sheetContext?.type === 'ride' && sheetContext.id === rideId) loadRide(rideId);
-    toast(max == null ? 'Wait alert off' : `We'll tell you when it's ${max} min or less`);
+    toast(max == null ? 'Wait alert off' : `Wait alert set for ${max} min or less`);
   } catch {
     toast("Couldn't save that. Check your connection and try again.");
   }
 }
 
-function rideSheet(r, detail) {
+function rideSheet(r, detail, back = null) {
   const o = detail ? detail.outlook : r.outlook;
   const down = r.status === 'DOWN' && r.downSince;
-  const wrap = el(`<div class="ride-sheet">${sheetHead(r.name, esc(statusLine(r)))}</div>`);
+  const wrap = el(`<div class="ride-sheet">${sheetHead(r.name, esc(statusLine(r)), back)}</div>`);
   wrap.querySelector('.sheet-head p').classList.toggle('tint-red', !!down);
 
   if (down) {
@@ -1075,10 +1657,7 @@ function rideSheet(r, detail) {
       <span class="row-label">Alerts for this ride</span>
       <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}" data-act="follow"></button>
     </div></div>`);
-  follow.querySelector('.switch').onclick = (e) => {
-    toggleFollow(r.id);
-    e.currentTarget.setAttribute('aria-checked', String(isFollowing(r.id)));
-  };
+  follow.querySelector('.switch').onclick = () => toggleFollow(r.id);
   wrap.appendChild(follow);
   wrap.appendChild(waitAlertBlock(r));
 
@@ -1138,10 +1717,11 @@ function rideSheet(r, detail) {
       wrap.appendChild(el(`<div class="group plain">${h.last.map((ep) => `
         <div class="row">
           <span class="row-label">${esc(fmtDay(ep.start))}<small>${esc([
-            { hold: 'Park-wide hold', opening: 'Delayed opening' }[ep.kind],
-            ep.reopened ? '' : "Didn't reopen that day",
-          ].filter(Boolean).join(' · ') || `Went down at ${fmtTime(ep.start)}`)}</small></span>
-          <span class="row-detail">${ep.reopened ? '' : 'at least '}${fmtDuration(ep.minutes * 60000)}</span>
+            `Went down at ${fmtTime(ep.start)}`,
+            { hold: 'park-wide hold', opening: 'delayed opening' }[ep.kind],
+            ep.reopened ? '' : "didn't reopen that day",
+          ].filter(Boolean).join(' · '))}</small></span>
+          <span class="row-detail">${ep.reopened ? fmtDuration(ep.minutes * 60000) : ''}</span>
         </div>`).join('')}</div>`));
     }
     wrap.appendChild(el(`<p class="footnote">Outage history comes from the ThemeParks.wiki archive, ${h.archivedDays} days so far and growing nightly.</p>`));
@@ -1151,7 +1731,7 @@ function rideSheet(r, detail) {
 }
 
 function fmtDay(ts) {
-  return new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: dash?.park.timezone }).format(new Date(ts));
+  return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: dash?.park.timezone }).format(new Date(ts));
 }
 
 async function openParkInfo() {
@@ -1160,11 +1740,20 @@ async function openParkInfo() {
   await loadPark();
 }
 
+let lastParkInfo = null;
 async function loadPark() {
   try {
     const info = await api(`/trips/${tripCode}/park`);
+    lastParkInfo = info;
     if (sheetContext?.type === 'park') updateSheet(parkSheet(info));
-  } catch {}
+  } catch {
+    const box = $('#sheet-body [data-park-loading]');
+    if (sheetContext?.type === 'park' && box) {
+      box.replaceWith(el(`<div class="retry"><p class="footnote">Couldn't load this park's week and scorecard.</p>
+        <button class="btn-secondary pressable" type="button" data-act="retry-park">Try again</button></div>`));
+      $('#sheet-body [data-act=retry-park]').onclick = () => loadPark();
+    }
+  }
 }
 
 function parkSheet(info) {
@@ -1202,21 +1791,31 @@ function parkSheet(info) {
     // How the reopen estimates have done here, scored as rides came back.
     wrap.appendChild(el(`<h2 class="section-label">How the estimates did, last ${info.estimates.days} days</h2>`));
     wrap.appendChild(el(`<div class="group plain">${info.estimates.groups.map((g) => `
-      <div class="row"><span class="row-label">${esc(g.label)}<small>${g.n} reopening${g.n === 1 ? '' : 's'} · ranges about ${g.width} min wide</small></span>
+      <div class="row"><span class="row-label">${esc(g.label)}<small>${g.n} outage${g.n === 1 ? '' : 's'}${g.closed ? `, ${g.closed} closed for the day` : ''} · ranges about ${g.width} min wide</small></span>
       <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>`));
     wrap.appendChild(el('<p class="footnote">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>'));
   }
-  wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on any list to refresh.</p>`));
+  if (!info) wrap.appendChild(el('<p class="footnote" data-park-loading>Loading this week…</p>'));
+  wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on a list to refresh.</p>`));
   wrap.appendChild(el('<div style="height:1rem"></div>'));
   return wrap;
 }
 
 function openHold() {
+  openSheet(holdSheet(), { type: 'hold' });
+}
+
+function holdSheet() {
   const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold');
   const text = holds[0]?.outlook?.text;
   const wrap = el(`<div>${sheetHead('Park-wide hold', esc(KIND_NOTE.hold))}</div>`);
+  if (!holds.length) {
+    // Left open while the rides came back: say so rather than go blank.
+    wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">The hold is over</p><p class="explain">Every ride in it is running again or has closed. They're listed under Back up recently on Down now.</p></div>`));
+    return wrap;
+  }
   if (text) wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">${esc(text)}</p><p class="explain">${esc(estimateExplainer(holds[0].outlook))}</p></div>`));
-  wrap.appendChild(el(`<h2 class="section-label">${holds.length} rides in this hold</h2>`));
+  wrap.appendChild(el(`<h2 class="section-label">${holds.length} ride${holds.length === 1 ? '' : 's'} still in this hold</h2>`));
   wrap.appendChild(el(`<div class="group plain">${holds.map((r) => `
     <button class="row pressable" type="button" data-ride="${esc(r.id)}">
       <span class="row-label">${esc(r.name)}<small>Down since ${fmtTime(r.downSince)}</small></span>
@@ -1224,7 +1823,7 @@ function openHold() {
       ${icon('chevron', 'chevron')}
     </button>`).join('')}</div>`));
   wrap.appendChild(el('<div style="height:1rem"></div>'));
-  openSheet(wrap, { type: 'hold' });
+  return wrap;
 }
 
 // Any element carrying a ride id opens that ride, wherever it sits.
@@ -1264,8 +1863,14 @@ function mountCharts(root) {
 }
 
 // Posted waits hold until they change, so the line steps rather than slopes.
+// The box's own padding, which is in rem and grows with the text size.
+const contentWidth = (box) => {
+  const cs = getComputedStyle(box);
+  return box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+};
+
 function waitChart(box, { waits, now }) {
-  const W = Math.max(200, box.clientWidth - 32), H = 116, top = 16, bottom = 2;
+  const W = Math.max(160, contentWidth(box)), H = 116, top = 6, bottom = 2;
   const pts = waits.map(([t, w]) => ({ t, w }));
   const t0 = pts[0].t, t1 = Math.max(now, t0 + 60_000);
   const max = niceMax(Math.max(10, ...pts.map((p) => p.w ?? 0)));
@@ -1277,11 +1882,20 @@ function waitChart(box, { waits, now }) {
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img', 'data-act': 'wait-chart' });
   svg.append(
     svgEl('line', { x1: 0, x2: W, y1: y(max), y2: y(max), class: 'grid' }),
+    svgEl('line', { x1: 0, x2: W, y1: y(max / 2), y2: y(max / 2), class: 'grid faint' }),
     svgEl('line', { x1: 0, x2: W, y1: base, y2: base, class: 'axis' })
   );
-  const maxLabel = svgEl('text', { x: 0, y: y(max) - 3, class: 'tick' });
-  maxLabel.textContent = `${max} min`;
-  svg.append(maxLabel);
+  // Hour marks every two hours on the park's clock, as Weather's hourly
+  // chart has; the labels are HTML below, so they grow with the text size.
+  const hours = [];
+  const tz = dash?.park.timezone;
+  for (let t = nextLocalHour(t0, tz, 0) - 24 * 3600_000; t <= t1; t += 3600_000) {
+    // Clear of the start time and "Now" at the ends, which are wider.
+    if (x(t) < 70 || x(t) > W - 50) continue;
+    const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date(t)));
+    if (hour % 2 === 0) hours.push(t);
+  }
+  for (const t of hours) svg.append(svgEl('line', { x1: x(t), x2: x(t), y1: base - 4, y2: base, class: 'axis' }));
 
   let line = '', area = '';
   pts.forEach((p, i) => {
@@ -1302,8 +1916,12 @@ function waitChart(box, { waits, now }) {
     while (i + 1 < pts.length && pts[i + 1].t <= t) i++;
     return pts[i];
   };
+  let lastShown = null;
   const show = (t, fromUser) => {
     const p = at(t);
+    // A tick each time the finger crosses onto a different reading.
+    if (fromUser && lastShown !== null && p !== lastShown) haptic();
+    lastShown = fromUser ? p : null;
     readout.textContent = `${fromUser ? fmtTime(t) : 'Now'} · ${p.w == null ? 'not running' : `${p.w} min wait`}`;
     cross.setAttribute('x1', x(t)); cross.setAttribute('x2', x(t));
     cross.setAttribute('visibility', fromUser ? 'visible' : 'hidden');
@@ -1327,6 +1945,10 @@ function waitChart(box, { waits, now }) {
     if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) { cursor = fromEvent(e); show(cursor, true); }
   });
   svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') show(t1, false); });
+  // Lifting the finger goes back to "Now", as Stocks and Weather do.
+  for (const type of ['pointerup', 'pointercancel']) {
+    svg.addEventListener(type, (e) => { if (e.pointerType !== 'mouse') { cursor = t1; show(t1, false); } });
+  }
   svg.addEventListener('keydown', (e) => {
     const step = (t1 - t0) / 40;
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -1336,13 +1958,18 @@ function waitChart(box, { waits, now }) {
     }
   });
 
-  const axis = el(`<div class="chart-x"><span>${fmtTime(t0)}</span><span>Now</span></div>`);
-  box.append(readout, svg, axis);
+  const yLabels = el(`<div class="chart-y"><span>${max} min</span><span>0</span></div>`);
+  const hourLabel = (t) => new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', timeZone: tz }).format(new Date(t)).replace(':00', '');
+  const axis = el(`<div class="chart-x"><span>${fmtTime(t0)}</span>${hours.map((t) =>
+    `<span class="mid" style="left:${((x(t) / W) * 100).toFixed(1)}%">${esc(hourLabel(t))}</span>`).join('')}<span>Now</span></div>`);
+  const plot = el('<div class="chart-plot"></div>');
+  plot.append(svg, yLabels);
+  box.append(readout, plot, axis);
 }
 
 // One column per archived day: minutes down. Tap a column for that day.
 function dayBars(box, { days }) {
-  const W = Math.max(200, box.clientWidth), H = 96, base = H - 2;
+  const W = Math.max(160, contentWidth(box)), H = 96, base = H - 2;
   const max = niceMax(Math.max(10, ...days.map((d) => d.minutes)));
   const slot = W / days.length, bw = Math.min(24, slot * 0.55);
   const total = days.reduce((n, d) => n + d.outages, 0);
@@ -1375,58 +2002,118 @@ function dayBars(box, { days }) {
     hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(i); } });
     svg.append(mark, hit);
   });
-  const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${days.length},1fr)">${days.map((d) => `<span>${esc(fmtWeekday(d.date))}</span>`).join('')}</div>`);
+  // Past ten days a weekday per column collides ("MonTueWed..."), so only
+  // Mondays are labelled, with the date.
+  const many = days.length > 10;
+  const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${days.length},1fr)">${days.map((d) =>
+    `<span>${esc(!many ? fmtWeekday(d.date) : fmtWeekday(d.date) === 'Mon' ? fmtShort(d.date) : '')}</span>`).join('')}</div>`);
   box.append(readout, svg, labels);
 }
 
 const dateOnly = (d) => new Date(`${d}T12:00:00Z`);
-const fmtDate = (d) => new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
-const fmtWeekday = (d) => new Intl.DateTimeFormat([], { weekday: 'short', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtDate = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtWeekday = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtShort = (d) => new Intl.DateTimeFormat(LOCALE, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
 
 /* ---------- Pull to refresh ---------- */
 // Only on touch, only from the very top, rubber-banded, and it springs home.
-(() => {
-  const main = $('main'), ptr = $('#ptr');
+// Afterwards it says how it went, as Mail does under its title: "Updated
+// just now", or that it couldn't. Works on the setup screen too, where it
+// retries the park list.
+function pullToRefresh(area, ptr, onRefresh) {
   const THRESHOLD = 64, HOLD = 52;
-  let start = null, pull = 0, busy = false, anim = null;
+  let start = null, pull = 0, busy = false, anim = null, armed = false;
   const paint = (v) => {
     pull = v;
-    main.style.transform = v ? `translateY(${v}px)` : '';
+    area.style.transform = v ? `translateY(${v}px)` : '';
     ptr.style.opacity = String(Math.min(1, v / THRESHOLD));
     ptr.style.transform = `translateY(${v / 2 - 30}px) rotate(${v * 4}deg)`;
     ptr.classList.toggle('armed', v >= THRESHOLD);
+    if (v >= THRESHOLD && !armed) haptic();
+    armed = v >= THRESHOLD;
   };
   const settle = (to, done) => {
     anim?.stop();
     if (reducedMotion()) { paint(to); done?.(); return; }
     anim = spring({ from: pull, to, damping: 1, response: 0.3, onUpdate: paint, onDone: done });
   };
-  main.addEventListener('touchstart', (e) => {
+  area.addEventListener('touchstart', (e) => {
     if (busy || sheet.isOpen || scrollY > 0 || e.touches.length > 1) return;
     anim?.stop();
     start = e.touches[0].clientY;
   }, { passive: true });
-  main.addEventListener('touchmove', (e) => {
+  area.addEventListener('touchmove', (e) => {
     if (start == null) return;
     const dy = e.touches[0].clientY - start;
     if (dy <= 0) { if (pull) paint(0); return; }
-    if (e.target.closest('.chart')) { start = null; return; }
-    e.preventDefault();
+    if (e.target.closest('.chart, input')) { start = null; return; }
+    if (e.cancelable) e.preventDefault();
     paint(rubberband(dy, 480, 0.55));
   }, { passive: false });
-  main.addEventListener('touchend', async () => {
+  area.addEventListener('touchend', async () => {
     if (start == null) return;
     start = null;
     if (pull < THRESHOLD) { settle(0); return; }
     busy = true;
     ptr.classList.add('spinning');
-    navigator.vibrate?.(8);
     settle(HOLD);
-    await refresh();
+    await onRefresh();
     ptr.classList.remove('spinning');
     settle(0, () => { busy = false; });
   });
-})();
+}
+
+// A few seconds of "Updated just now" (or why not) in the header's meta line.
+let metaFlash = null; // { text, warn, until }
+function flashMeta(text, warn = false) {
+  metaFlash = { text, warn, until: Date.now() + 3000 };
+  if (dash) renderHeader();
+  setTimeout(() => { if (dash) renderHeader(); }, 3100);
+}
+
+pullToRefresh($('main'), $('#ptr'), async () => {
+  await refresh();
+  if (offline) flashMeta(failure === 'offline' ? "Couldn't refresh: you're offline" : "Couldn't refresh: ParkAlert isn't responding", true);
+  else flashMeta('Updated just now');
+});
+pullToRefresh($('#setup .setup'), $('#setup-ptr'), async () => {
+  parks = [];
+  await renderSetupParks();
+});
+
+// The next background refresh: every 30 seconds while the park is open,
+// every 5 minutes once it has closed for the day, and none while the app is
+// out of sight (coming back refreshes at once).
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  if (!tripCode) return;
+  const closed = dash && alertState().kind === 'closed';
+  refreshTimer = setTimeout(async () => {
+    if (!document.hidden) await refresh();
+    scheduleRefresh();
+  }, closed ? 5 * 60_000 : REFRESH_MS);
+}
+
+/* ---------- Updates ---------- */
+// A home-screen app can stay open for days. When the server says a newer
+// version is deployed, the page reloads the next time it is put away (so
+// nothing changes under the guest's finger), and offers a Reload now.
+const PAGE_VERSION = document.querySelector('meta[name=parkalert-version]')?.content;
+let updateReady = false;
+function noticeVersion(version) {
+  if (!version || !PAGE_VERSION || PAGE_VERSION.startsWith('__') || version === PAGE_VERSION || updateReady) return;
+  updateReady = true;
+  toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && updateReady) location.reload(); });
+// On a first visit the worker takes control too; that isn't an update.
+const hadController = !!navigator.serviceWorker?.controller;
+navigator.serviceWorker?.addEventListener('controllerchange', () => {
+  if (hadController && !updateReady) {
+    updateReady = true;
+    toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
+  }
+});
 
 /* ---------- Data ---------- */
 // The last dashboard is kept on the phone, so opening the app with no signal
@@ -1465,6 +2152,11 @@ async function fetchDashboard() {
   try {
     const next = await api(`/trips/${code}/dashboard`);
     if (code !== tripCode) return; // switched trips while this was on its way
+    confirmTrip(next.trip);
+    noticeVersion(next.version);
+    // A save still on its way wins over this snapshot's trip, which may
+    // predate it; the save's own answer brings the trip up to date.
+    if (savesPending && dash) next.trip = dash.trip;
     dash = next;
     offline = false;
     rememberDash(code, next);
@@ -1477,10 +2169,12 @@ async function fetchDashboard() {
       return;
     }
     offline = true;
+    failure = failureOf(err);
   }
   renderAll();
   if (!offline && sheetContext?.type === 'ride') loadRide(sheetContext.id);
   if (!offline && sheetContext?.type === 'park') loadPark();
+  if (sheetContext?.type === 'hold') updateSheet(holdSheet());
 }
 
 /* ---------- Screens & navigation ---------- */
@@ -1498,16 +2192,37 @@ async function showApp({ firstRun = false } = {}) {
   $('#setup').classList.add('hidden');
   $('#app').classList.remove('hidden');
   document.body.classList.remove('no-tabbar');
-  switchView('down');
+  for (const k of Object.keys(scrollByView)) delete scrollByView[k];
+  switchView('down', { top: true });
   dash ??= recallDash(tripCode);
   renderAll();
   await refresh();
-  clearInterval(refreshTimer);
-  refreshTimer = setInterval(refresh, REFRESH_MS);
-  if (firstRun && dash && !alertsReady()) openAlertSetup();
+  scheduleRefresh();
+  if (pendingOpen) openPending();
+  else if (firstRun && dash && !alertsReady()) openAlertSetup();
 }
 
-function switchView(name) {
+// What a tapped push asked for: its ride's sheet, the hold, or the Down
+// list. Opened once the dashboard is in, so the sheet has real data.
+let pendingOpen = null;
+function openPending() {
+  if (!pendingOpen || !dash) return;
+  const { ride, view } = pendingOpen;
+  pendingOpen = null;
+  switchView('down');
+  if (ride) {
+    if (dash.rides.some((r) => r.id === ride)) openRide(ride);
+    else toast("That ride isn't in today's ride list any more");
+  } else if (view === 'hold' && dash.rides.some((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold')) {
+    openHold();
+  }
+}
+
+// Each tab keeps its own scroll position, as in any tab bar app; only
+// tapping the tab you're already on goes back to the top.
+const scrollByView = {};
+function switchView(name, { top = false } = {}) {
+  if (name !== view) scrollByView[view] = scrollY;
   view = name;
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${name}`));
   document.querySelectorAll('.tab').forEach((t) => {
@@ -1516,7 +2231,7 @@ function switchView(name) {
     if (on) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
   });
-  window.scrollTo({ top: 0 });
+  window.scrollTo({ top: top ? 0 : scrollByView[name] || 0 });
 }
 
 /* ---------- Wire up ---------- */
@@ -1548,6 +2263,7 @@ $('#join-form').onsubmit = async (e) => {
   joinNote('Joining…');
   try {
     await api(`/trips/${code}`);
+    setPendingInvite(null);
     joinNote(JOIN_HINT);
     joinInput.value = '';
     syncJoin();
@@ -1564,7 +2280,12 @@ $('#join-form').onsubmit = async (e) => {
 $('#btn-park').onclick = openParkInfo;
 // Controls that act on the trip's data wait for it rather than failing.
 const withDash = (fn) => () => (dash ? fn() : toast('Still connecting. Try again in a moment.'));
-$('#btn-alerts').onclick = withDash(() => (alertState().kind === 'setup' ? openAlertSetup() : openPause()));
+$('#btn-alerts').onclick = withDash(() => {
+  const kind = alertState().kind;
+  if (kind === 'setup') openAlertSetup();
+  else if (kind === 'none') switchView('rides');
+  else openPause();
+});
 $('#row-setup').onclick = withDash(openAlertSetup);
 $('#row-pause').onclick = withDash(openPause);
 $('#row-park').onclick = withDash(openPark);
@@ -1597,6 +2318,15 @@ $('#btn-share').onclick = async () => {
 };
 
 $('#ride-search').addEventListener('input', () => dash && renderRides());
+// Return, or starting to scroll the results, puts the keyboard away, as in
+// the Settings and Mail search fields. The search itself stays.
+$('#search-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('#ride-search').blur();
+});
+addEventListener('touchmove', () => {
+  if (document.activeElement === $('#ride-search')) $('#ride-search').blur();
+}, { passive: true });
 
 /* ---------- Install ---------- */
 // Chrome (Android, desktop) offers its own install prompt, which it hands us
@@ -1640,44 +2370,124 @@ const nav = $('#nav');
 addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 2), { passive: true });
 
 // Coming back (to the tab, or online) catches up whichever screen is showing.
-const resume = () => (onSetup() ? (!parks.length && renderSetupParks()) : refresh());
+const resume = () => {
+  if (pendingInvite()) tryInvite();
+  return onSetup() ? (!parks.length && renderSetupParks()) : refresh();
+};
 document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
 addEventListener('online', resume);
-addEventListener('offline', () => { offline = true; if (dash) renderHeader(); });
+addEventListener('offline', () => { offline = true; failure = 'offline'; if (dash) renderHeader(); });
 
 // Keep elapsed times honest between refreshes.
 setInterval(() => {
   if (!dash || document.hidden) return;
   renderHeader();
   renderDown();
+  if (sheetContext?.type === 'hold') updateSheet(holdSheet());
 }, TICK_MS);
+
+/* ---------- Invites ---------- */
+// An invite is kept until it has been answered, so one opened with no signal
+// (at the gate, in the parking lot) is still there once the phone
+// reconnects, and its code is waiting in the join field meanwhile.
+const INVITE_KEY = 'parkalert.pendingInvite';
+const pendingInvite = () => { try { return localStorage.getItem(INVITE_KEY); } catch { return null; } };
+function setPendingInvite(code) {
+  try { code ? localStorage.setItem(INVITE_KEY, code) : localStorage.removeItem(INVITE_KEY); } catch {}
+  if (code) { joinInput.value = code; syncJoin(); }
+}
+
+let inviteBusy = false;
+async function tryInvite() {
+  const code = pendingInvite();
+  if (!code || inviteBusy) return false;
+  inviteBusy = true;
+  try {
+    const { trip } = await api(`/trips/${code}`);
+    setPendingInvite(null);
+    joinInput.value = '';
+    syncJoin();
+    if (code === tripCode) {
+      if (!onSetup()) toast(`You're already on trip ${code}`);
+      else showApp();
+      return true;
+    }
+    if (!tripCode) {
+      setTrip(code, { firstRun: true });
+      return true;
+    }
+    // On another trip already: ask first. One tap on a link should never
+    // quietly swap the trip this phone is on.
+    if (onSetup()) showApp();
+    await loadParks().catch(() => {});
+    confirmInvite(code, trip);
+    return true;
+  } catch (err) {
+    if (err.status === 404) {
+      setPendingInvite(null);
+      joinInput.value = '';
+      syncJoin();
+      toast(`Invite code ${code} wasn't found`);
+    } else {
+      toast(`Couldn't open the invite to trip ${code} yet. It will try again when you're back online.`);
+    }
+    return false;
+  } finally {
+    inviteBusy = false;
+  }
+}
+
+function confirmInvite(code, trip) {
+  const park = parks.find((p) => p.id === trip.parkId);
+  const content = el(`<div>
+    ${sheetHead(`Join trip ${code}?`, `${park ? `It's at ${esc(parkLabel(park.name))}. ` : ''}This phone leaves trip <strong>${esc(tripCode)}</strong>, which keeps going for anyone else on it. You can rejoin it with that code.`)}
+    <div class="btn-stack">
+      <button class="btn-primary pressable" type="button" data-act="join">Join trip ${esc(code)}</button>
+      <button class="btn-secondary pressable" type="button" data-act="stay">Stay on ${esc(tripCode)}</button>
+    </div>
+  </div>`);
+  content.querySelector('[data-act=join]').onclick = () => {
+    sheet.close();
+    setTrip(code, { firstRun: true });
+  };
+  content.querySelector('[data-act=stay]').onclick = () => sheet.close();
+  sheet.open(content);
+}
 
 /* ---------- Boot ---------- */
 (async function boot() {
-  const joinParam = new URLSearchParams(location.search).get('join');
+  const params = new URLSearchParams(location.search);
+  const joinParam = params.get('join');
+  // A tapped push: ?trip=CODE and a ride or view to open. On iPhone the link
+  // may open in Safari, which has its own storage and no saved trip, so the
+  // code in the link decides which trip to show.
+  const tripParam = params.get('trip');
+  if (params.get('ride') || params.get('view')) pendingOpen = { ride: params.get('ride'), view: params.get('view') };
+  if (tripParam && !joinParam) {
+    history.replaceState(null, '', '/');
+    const code = tripParam.toUpperCase();
+    if (code !== tripCode) {
+      const previous = tripCode;
+      setTrip(code);
+      if (previous) toast(`Showing trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
+      return;
+    }
+  }
   if (joinParam) {
     history.replaceState(null, '', '/');
-    const code = joinParam.toUpperCase();
-    const previous = tripCode;
-    try {
-      await api(`/trips/${code}`);
-      setTrip(code, { firstRun: previous !== code });
-      // Tapping someone's invite should never silently strand your own trip.
-      if (previous && previous !== code) {
-        toast(`Joined trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
-      }
-      return;
-    } catch (err) {
-      toast(err.status === 404
-        ? `Invite code ${code} wasn't found`
-        : `Couldn't open the invite. Check your connection, or join with code ${code}.`);
-    }
+    setPendingInvite(joinParam.toUpperCase());
+    if (await tryInvite()) return;
   }
 
   // A saved trip opens straight away, online or not. A trip that no longer
   // exists is caught by the first refresh, which says so and leaves it.
   if (tripCode) showApp();
   else showSetup();
+  // An invite opened offline earlier, still waiting.
+  if (!joinParam && pendingInvite()) {
+    setPendingInvite(pendingInvite());
+    if (navigator.onLine !== false) tryInvite();
+  }
 })();
 
 if ('serviceWorker' in navigator) {

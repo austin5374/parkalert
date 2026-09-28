@@ -42,6 +42,38 @@ test('an archive with no weather still scores the ordinary estimates', () => {
     }
   }
   const r = backtest({ P: eps });
-  assert.ok(r['breakdown: when it went down, old'].n > 0);
-  assert.ok(r['breakdown: when it went down, old'].inRange > 0);
+  const s = r['breakdown: when it went down, old'];
+  // Days 2 to 6 are each scored from the days before: 8 outages a day.
+  assert.equal(s.n, 40);
+  // The range is the middle half, so on steady data roughly half land in
+  // it; a range that caught everything or nothing would mean a broken score.
+  assert.ok(s.inRange >= 0.3 && s.inRange <= 0.9, `in range ${s.inRange}`);
+  assert.ok(s.width > 0 && s.width <= 20, `width ${s.width}`);
+});
+
+test('an outage that never reopened counts as a miss once it outlasts the range', () => {
+  const eps = [];
+  for (let d = 1; d <= 6; d++) {
+    for (let i = 0; i < 8; i++) {
+      eps.push({ rideId: 'a', start: Date.parse(`2026-09-0${d}T15:00:00Z`) + i * H, minutes: 10 + (i % 3) * 5, endedAs: 'OPERATING', kind: 'breakdown', date: `2026-09-0${d}` });
+    }
+  }
+  const base = backtest({ P: eps })['breakdown: when it went down, old'];
+  // Day 7: one ordinary reopening, and one that stayed down for 5 hours.
+  eps.push({ rideId: 'a', start: Date.parse('2026-09-07T15:00:00Z'), minutes: 15, endedAs: 'OPERATING', kind: 'breakdown', date: '2026-09-07' });
+  eps.push({ rideId: 'a', start: Date.parse('2026-09-07T17:00:00Z'), minutes: 300, endedAs: 'CLOSED', kind: 'breakdown', date: '2026-09-07' });
+  const withClose = backtest({ P: eps })['breakdown: when it went down, old'];
+  assert.equal(withClose.n, base.n + 2);
+  assert.ok(withClose.inRange < base.inRange + 0.001, 'the stayed-down outage is a miss, not ignored');
+});
+
+test('outages are classified as the live app saw them when they went down', async () => {
+  const { liveKindAt } = await import('../server/backtest.js');
+  const t = Date.parse('2026-09-01T18:00:00Z');
+  const day = Array.from({ length: 6 }, (_, i) => ({ rideId: `r${i}`, start: t + i * 60_000, minutes: 40, from: 'OPERATING' }));
+  // The first four went down before a fifth was: breakdowns, live.
+  assert.equal(liveKindAt(day[0], day), 'breakdown');
+  assert.equal(liveKindAt(day[3], day), 'breakdown');
+  assert.equal(liveKindAt(day[4], day), 'hold');
+  assert.equal(liveKindAt({ ...day[5], from: 'CLOSED' }, day), 'opening');
 });

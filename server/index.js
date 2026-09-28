@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,15 +9,26 @@ import { rideHistory, rideToday, parkSummary } from './insights.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
-import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
-import { PORT, NTFY_BASE, APP_URL } from './config.js';
+import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, appLink } from './poller.js';
+import { PORT, NTFY_BASE, HEALTH_TOKEN } from './config.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
 import { publish } from './notify.js';
 import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert } from './validate.js';
-import { LIMITS, createLimiter, clientKey } from './ratelimit.js';
+import { LIMITS, createLimiter, clientKey, createKnownCodes } from './ratelimit.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+
+// What the app's own files add up to: stamped into index.html as it is
+// served and sent with every dashboard, so a page left open across a
+// deploy can tell it is running old code and reload.
+export const APP_VERSION = (() => {
+  const h = crypto.createHash('sha1');
+  for (const f of ['index.html', 'app.js', 'time.js', 'style.css', 'sw.js']) {
+    try { h.update(fs.readFileSync(path.join(PUBLIC_DIR, f))); } catch {}
+  }
+  return h.digest('hex').slice(0, 12);
+})();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -56,6 +68,7 @@ function json(res, status, body) {
 }
 
 const limit = Object.fromEntries(Object.entries(LIMITS).map(([name, cfg]) => [name, createLimiter(cfg)]));
+const knownCodes = createKnownCodes();
 
 function tooMany(res, waitMs) {
   res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
@@ -123,6 +136,7 @@ async function dashboard(trip) {
       lastCloseTime: schedule?.lastCloseTime || null, // when alerts stop for the day
     },
     ntfyBase: NTFY_BASE,
+    version: APP_VERSION,
     recent: (state.recent || []).filter((e) => e.at > Date.now() - 2 * 3600_000),
     lastPoll: state.lastPoll || null,
     lastError: state.lastError || null,
@@ -150,7 +164,9 @@ async function handleApi(req, res, url) {
   // For an uptime monitor: is every park someone is watching being polled?
   // 503 once any has gone 5 minutes without a good poll, which is what
   // "alerts silently stopped" looks like from outside. (Railway's deploy
-  // check uses /api/parks, so an API outage never blocks a deploy.)
+  // check uses /api/parks, so an API outage never blocks a deploy.) Which
+  // parks have trips on them, and upstream errors, only with HEALTH_TOKEN:
+  // otherwise it would show anyone when a family is at a park.
   if (req.method === 'GET' && url.pathname === '/api/health') {
     const now = Date.now();
     const parks = activeParkIds(now).map((id) => {
@@ -164,7 +180,10 @@ async function handleApi(req, res, url) {
       };
     });
     const ok = parks.every((p) => p.lastPoll && now - p.lastPoll < HEALTH_STALE_MS);
-    return json(res, ok ? 200 : 503, { ok, uptimeSeconds: Math.round(process.uptime()), parks });
+    const detail = HEALTH_TOKEN && url.searchParams.get('token') === HEALTH_TOKEN;
+    return json(res, ok ? 200 : 503, detail
+      ? { ok, uptimeSeconds: Math.round(process.uptime()), parks }
+      : { ok, uptimeSeconds: Math.round(process.uptime()) });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/trips') {
@@ -172,18 +191,23 @@ async function handleApi(req, res, url) {
     const body = requireObject(await readBody(req));
     if (typeof body.parkId !== 'string' || !getPark(body.parkId)) return json(res, 400, { error: 'unknown parkId' });
     const trip = createTrip(body.parkId);
+    knownCodes.add(who, trip.code);
     pollPark(trip.parkId); // warm up state so the first dashboard load is instant
     return json(res, 201, { trip: tripView(trip) });
   }
 
   // Guessing codes costs a token per miss; once they run out, even a right
-  // guess waits, so enumeration gains nothing by pressing on.
-  if (parts[1] === 'trips' && parts[2] && (wait = limit.miss.wait(who))) return tooMany(res, wait);
-  const trip = parts[1] === 'trips' && parts[2] ? getTrip(parts[2]) : null;
-  if (parts[1] === 'trips' && parts[2] && !trip) {
+  // guess waits, so enumeration gains nothing by pressing on. A code this
+  // client has already opened is exempt, so a phone on a trip is never
+  // locked out by misses from someone sharing its address.
+  const code = parts[1] === 'trips' && parts[2] ? String(parts[2]).toUpperCase() : null;
+  if (code && !knownCodes.has(who, code) && (wait = limit.miss.wait(who))) return tooMany(res, wait);
+  const trip = code ? getTrip(code) : null;
+  if (code && !trip) {
     limit.miss.take(who);
     return json(res, 404, { error: 'trip not found' });
   }
+  if (trip) knownCodes.add(who, trip.code);
 
   // Test and simulated alerts are metered per client and per trip, so
   // neither one caller nor many can flood a trip's phones.
@@ -191,8 +215,19 @@ async function handleApi(req, res, url) {
     if ((wait = limit.push.take(who) || limit.push.take(`trip:${trip.code}`))) return tooMany(res, wait);
   }
 
+  // Phones ask every 30 seconds and most answers match the last one, so
+  // the dashboard carries an ETag (over everything but the clock) and an
+  // unchanged one is a 304 with no body: less cellular data in the park.
+  // The browser's cache does the revalidating; the app just calls fetch.
   if (trip && req.method === 'GET' && parts[3] === 'dashboard') {
-    return json(res, 200, await dashboard(trip));
+    const body = await dashboard(trip);
+    const etag = `"d-${crypto.createHash('sha1').update(JSON.stringify({ ...body, now: 0 })).digest('base64url').slice(0, 16)}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+      return res.end();
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', ETag: etag, 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify(body));
   }
 
   // Everything the ride detail sheet shows: live status, today's changes and
@@ -276,7 +311,7 @@ async function handleApi(req, res, url) {
   }
 
   // Fire a fake DOWN or back-up transition through the real notification
-  // pipeline — for testing pushes without waiting for a real ride outage.
+  // pipeline, for testing pushes without waiting for a real ride outage.
   // curl -X POST .../api/trips/CODE/simulate -d '{"type":"up"}'   (or "down")
   if (trip && req.method === 'POST' && parts[3] === 'simulate') {
     const body = requireObject(await readBody(req));
@@ -285,11 +320,12 @@ async function handleApi(req, res, url) {
   }
 
   if (trip && req.method === 'POST' && parts[3] === 'test') {
+    // It goes to every phone on the trip, not just the one that asked, so it
+    // says what it is rather than "this phone".
     const ok = await publish(trip.topic, {
-      title: 'ParkAlert test',
-      message: 'Alerts are working on this phone. Tap to open ParkAlert.',
-      tags: 'white_check_mark',
-      click: APP_URL,
+      title: `ParkAlert test for trip ${trip.code}`,
+      message: 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
+      click: appLink(trip),
     });
     return json(res, ok ? 200 : 502, { ok });
   }
@@ -307,6 +343,15 @@ function serveStatic(req, res, url) {
     filePath = path.join(PUBLIC_DIR, 'index.html');
   }
   const ext = path.extname(filePath);
+  if (filePath === path.join(PUBLIC_DIR, 'index.html')) {
+    const etag = `"html-${APP_VERSION}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+      return res.end();
+    }
+    res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ETag: etag });
+    return res.end(fs.readFileSync(filePath, 'utf8').replace('__APP_VERSION__', APP_VERSION));
+  }
   // Every file revalidates. With a max-age on scripts, a phone could pair a
   // freshly deployed index.html with the previous app.js for five minutes and
   // break; an unchanged file costs a 304 and no body.
@@ -364,9 +409,16 @@ if (isMain) {
     startHistorySync();
     startWeatherSync();
   });
-  // Railway stops the old container with SIGTERM on every deploy.
+  // Railway stops the old container with SIGTERM on every deploy. Let the
+  // poll and pushes under way finish (up to 5 s) so no alert is cut off,
+  // then write everything down.
+  let stopping = false;
   for (const signal of ['SIGTERM', 'SIGINT']) {
-    process.on(signal, () => {
+    process.on(signal, async () => {
+      if (stopping) return;
+      stopping = true;
+      server.close();
+      await stopPolling(5000);
       flushState();
       process.exit(0);
     });

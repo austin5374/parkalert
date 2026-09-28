@@ -4,7 +4,7 @@ import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
-import { estimate, describe, classifyLive } from './predict.js';
+import { estimate, describe, shownWindow, classifyLive, clusterLive } from './predict.js';
 import { weatherOutlook, modelHistory } from './weatheroutlook.js';
 import { refreshWeather } from './weather.js';
 import { isLateOpening } from './episodes.js';
@@ -32,6 +32,8 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
       name: att.name,
       status: att.status,
       waitTime: att.waitTime,
+      ...(att.singleRider ? { singleRider: true } : {}),
+      ...(att.lightningLane ? { lightningLane: att.lightningLane } : {}),
       since: prev && prev.status === att.status ? prev.since : now,
       downSince: null,
       downFrom: null, // status it went DOWN from; CLOSED means it never opened
@@ -43,6 +45,10 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
     if (att.status === 'DOWN') {
       ride.downSince = outage ? outage.downSince : now;
       ride.downFrom = outage ? outage.downFrom ?? null : prev?.status ?? null;
+      if (outage?.liveKind) {
+        ride.liveKind = outage.liveKind;
+        ride.holdSize = outage.holdSize;
+      }
     }
     if (att.status === 'CLOSED' && outage) {
       ride.downSince = outage.downSince;
@@ -75,7 +81,21 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
     const missed = (prev.missed || 0) + 1;
     if (missed <= MISSING_POLLS) rides[id] = { ...prev, missed };
   }
+  rememberHolds(rides);
   return { rides, events };
+}
+
+// A down ride seen in a park-wide hold keeps that for the rest of its
+// outage, and the hold's largest size, however many of the others reopen.
+export function rememberHolds(rides) {
+  for (const [id, r] of Object.entries(rides)) {
+    if (r.status !== 'DOWN') continue;
+    const now = clusterLive(rides, id);
+    if (now.kind === 'hold') {
+      r.liveKind = 'hold';
+      r.holdSize = Math.max(r.holdSize || 0, now.rides);
+    }
+  }
 }
 
 function localTime(ts, timezone) {
@@ -184,6 +204,25 @@ function forgetHeld(parkId) {
   for (const [key, h] of held) if (h.parkId === parkId) held.delete(key);
 }
 
+// The gate lives in memory, so it is copied into the park's saved state each
+// poll and read back after a restart. A redeploy inside the gap window then
+// still sends a held alert, and still knows what each phone last heard.
+export function gateSnapshot(parkId) {
+  const mine = (map) => Object.fromEntries([...map].filter(([k]) => k.startsWith(`${parkId}:`)));
+  return {
+    held: [...held].filter(([, h]) => h.parkId === parkId).map(([key, h]) => [key, h.ev]),
+    lastSent: mine(lastSent),
+    lastNotified: mine(lastNotified),
+  };
+}
+export function restoreGate(parkId, snap) {
+  if (!snap) return;
+  for (const [key, ev] of snap.held || []) if (!held.has(key)) held.set(key, { parkId, ev });
+  for (const [k, v] of Object.entries(snap.lastSent || {})) if (!lastSent.has(k)) lastSent.set(k, v);
+  for (const [k, v] of Object.entries(snap.lastNotified || {})) if (!lastNotified.has(k)) lastNotified.set(k, v);
+}
+const restored = new Set(); // parks whose saved gate has been read this run
+
 // What to tell people about a DOWN ride: what kind of outage it looks like,
 // and a reopen range from past outages of that kind. Shared by alerts and the
 // dashboard so both always say the same thing.
@@ -199,8 +238,8 @@ export function downOutlook(parkId, rideId, elapsedMin, now = Date.now()) {
     ...(w ? { cause: w.cause, weather: w.weather, clearedAt: w.clearedAt ?? null } : {}),
     text: describeOutlook(w, est, parkState[parkId]?.timezone),
     basis: est && !est.longerThanUsual ? { from: est.basis, outages: est.n } : null,
-    // Minutes from now, for the dashboard's timeline; the text is the promise.
-    window: est && !est.longerThanUsual ? { lo: est.p25, hi: est.p75 } : null,
+    // Minutes from now, rounded exactly as the text is: the text is the promise.
+    window: shownWindow(est),
   };
 }
 
@@ -216,6 +255,15 @@ export function describeOutlook(w, est, timezone) {
     ? 'It reopens once the rain stops and the track dries.'
     : 'Rides reopen about 30 min after it passes.';
   return `${lead} ${range ?? fallback}`;
+}
+
+// Where tapping a push should land: the ride it is about, the hold, or the
+// Down list. The trip code rides along because on iPhone a tapped link can
+// open in Safari, whose storage is separate from the home-screen app's; with
+// the code in the link it still opens the right trip there.
+export function appLink(trip, params = {}) {
+  if (!APP_URL) return null;
+  return `${APP_URL}/?${new URLSearchParams({ trip: trip.code, ...params })}`;
 }
 
 // This many alerts of one kind in a single poll become one push. A storm hold
@@ -235,8 +283,9 @@ function downMessage(parkId, ev, parkName, timezone) {
   const lines = [`Went down at ${localTime(since, timezone)} · ${parkName}`];
   if (outlook.kind === 'hold') lines.push(`Park-wide hold: ${outlook.rides} rides closed at once`);
   if (outlook.text) lines.push(outlook.text);
-  // Emoji comes from the ntfy tag (red_circle/green_circle), which apps render as a title prefix.
-  return { title: `${ev.ride.name} is down`, message: lines.join('\n'), tags: 'red_circle', priority: 3 };
+  // No ntfy tags: apps draw them as emoji in front of the title, and the
+  // title already says down, back up or closed.
+  return { title: `${ev.ride.name} is down`, message: lines.join('\n'), priority: 3 };
 }
 
 function upMessage(ev, parkName) {
@@ -244,14 +293,12 @@ function upMessage(ev, parkName) {
     return {
       title: `${ev.ride.name} is now open`,
       message: `Opened ${ev.downtimeMs ? `${formatDuration(ev.downtimeMs)} late` : 'late'} · ${parkName}`,
-      tags: 'green_circle',
       priority: 4,
     };
   }
   return {
     title: `${ev.ride.name} is back up`,
     message: `Was down ${ev.downtimeMs ? formatDuration(ev.downtimeMs) : 'a while'} · ${parkName}`,
-    tags: 'green_circle',
     priority: 4,
   };
 }
@@ -261,7 +308,6 @@ function closedMessage(ev, parkName, timezone) {
   return {
     title: `${ev.ride.name} has closed`,
     message: `${since}. It may not reopen today · ${parkName}`,
-    tags: 'no_entry',
     priority: 3,
   };
 }
@@ -278,13 +324,25 @@ export function groupOutlook(outlooks) {
   return n * 2 >= outlooks.length ? outlooks.find((o) => o.kind === kind) : null;
 }
 
+// How long a group of rides was out, the way a single "back up" says it:
+// "Down 12 min" when they agree to within a few minutes (a hold always
+// does), else the spread, "Down 8 min to 1 hr 5 min".
+function groupDowntime(ms, late) {
+  const known = ms.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  if (!known.length) return null;
+  const lo = known[0];
+  const hi = known[known.length - 1];
+  const span = hi - lo <= 5 * 60_000 ? `about ${formatDuration(known[known.length >> 1])}` : `${formatDuration(lo)} to ${formatDuration(hi)}`;
+  return late ? `Opened ${span} late` : `Down ${span}`;
+}
+
 // late: every ride in the group is a delayed opening, now open.
-export function groupMessage(type, names, parkName, outlook, { late = false } = {}) {
+// downtimes: each ride's downtimeMs, for "back up" and "now open" groups.
+export function groupMessage(type, names, parkName, outlook, { late = false, downtimes = [] } = {}) {
   if (type === 'CLOSED') {
     return {
       title: `${names.length} rides have closed`,
       message: `${listNames(names)}\nThey may not reopen today · ${parkName}`,
-      tags: 'no_entry',
       priority: 3,
     };
   }
@@ -293,12 +351,12 @@ export function groupMessage(type, names, parkName, outlook, { late = false } = 
     if (outlook?.kind === 'hold') lines.push(`Park-wide hold at ${parkName}`);
     else lines.push(parkName);
     if (outlook?.text) lines.push(outlook.text);
-    return { title: `${names.length} rides just went down`, message: lines.join('\n'), tags: 'red_circle', priority: 3 };
+    return { title: `${names.length} rides just went down`, message: lines.join('\n'), priority: 3 };
   }
+  const took = groupDowntime(downtimes, late);
   return {
     title: `${names.length} rides ${late ? 'are now open' : 'are back up'}`,
-    message: `${listNames(names)}\n${parkName}`,
-    tags: 'green_circle',
+    message: `${listNames(names)}\n${took ? `${took} · ` : ''}${parkName}`,
     priority: 4,
   };
 }
@@ -322,17 +380,27 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
     for (const type of ['DOWN', 'UP', 'CLOSED']) {
       const evs = mine.filter((ev) => ev.type === type);
       if (!evs.length) continue;
-      const pushes =
-        evs.length >= GROUP_MIN
-          ? [groupMessage(type, evs.map((ev) => ev.ride.name), parkName,
-              type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null,
-              { late: evs.every((ev) => ev.late) })]
-          : evs.map((ev) => (type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone)
+      let pushes;
+      if (evs.length >= GROUP_MIN) {
+        const outlook = type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null;
+        pushes = [{
+          ...groupMessage(type, evs.map((ev) => ev.ride.name), parkName, outlook, {
+            late: evs.every((ev) => ev.late),
+            downtimes: evs.map((ev) => ev.downtimeMs),
+          }),
+          click: appLink(trip, { view: outlook?.kind === 'hold' ? 'hold' : 'down' }),
+        }];
+      } else {
+        pushes = evs.map((ev) => ({
+          ...(type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone)
             : type === 'CLOSED' ? closedMessage(ev, parkName, state.timezone)
-              : upMessage(ev, parkName)));
+              : upMessage(ev, parkName)),
+          click: appLink(trip, { ride: ev.ride.id }),
+        }));
+      }
       for (const push of pushes) {
         if (simulated) push.message += ' · SIMULATED TEST';
-        if (await publish(trip.topic, { ...push, click: APP_URL })) sent++;
+        if (await publish(trip.topic, push)) sent++;
       }
     }
   }));
@@ -353,8 +421,8 @@ export async function notifyWaitAlerts(parkId, rides, now = Date.now()) {
     if (pruneWaitAlerts(trip, today)) changed = true;
     const paused = trip.mute && (trip.mute.until === null || trip.mute.until > now);
     if (paused || isPastClosing(state, now)) return;
-    for (const { ride, alert } of dueWaitAlerts(trip, rides, today)) {
-      if (!(await publish(trip.topic, { ...waitAlertMessage(ride, alert, parkName), click: APP_URL }))) continue;
+    for (const { rideId, ride, alert } of dueWaitAlerts(trip, rides, today)) {
+      if (!(await publish(trip.topic, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }))) continue;
       alert.sentAt = now;
       alert.sentWait = ride.waitTime;
       changed = true;
@@ -389,16 +457,31 @@ export async function simulateTransition(trip, type) {
   return { simulated: true, type: ev.type, ride: r.name, ...stats };
 }
 
+// Hours change on the day (an extension, an added event), so today's
+// schedule is checked again every hour, and every 15 minutes in the hour
+// before it says the park closes: a stale close would mute alerts while the
+// park is still open.
+export const SCHEDULE_TTL_MS = 60 * 60_000;
+export const SCHEDULE_TTL_NEAR_CLOSE_MS = 15 * 60_000;
+export function scheduleIsFresh(state, now = Date.now()) {
+  const s = state?.schedule;
+  const today = localDate(now, state?.timezone || 'America/New_York');
+  // Schedules saved before lastCloseTime existed are refetched once.
+  if (s?.date !== today || !('lastCloseTime' in s) || !s.fetchedAt) return false;
+  const close = Date.parse(s.lastCloseTime || s.closingTime || '');
+  const nearClose = Number.isFinite(close) && now >= close - 60 * 60_000 && now <= close + 30 * 60_000;
+  return now - s.fetchedAt < (nearClose ? SCHEDULE_TTL_NEAR_CLOSE_MS : SCHEDULE_TTL_MS);
+}
+
 async function refreshSchedule(parkId) {
   const state = parkState[parkId];
-  const today = localDate(Date.now(), state?.timezone || 'America/New_York');
-  // Schedules saved before lastCloseTime existed are refetched once.
-  if (state?.schedule?.date === today && 'lastCloseTime' in state.schedule) return;
+  if (scheduleIsFresh(state)) return;
   try {
     const sched = await fetchSchedule(parkId);
     state.timezone = sched.timezone;
-    state.schedule = sched;
+    state.schedule = { ...sched, fetchedAt: Date.now() };
   } catch (err) {
+    // The last good copy stands (for today only; see currentSchedule).
     console.error(`[poller] schedule fetch failed for ${parkId}:`, err.message);
   }
 }
@@ -422,7 +505,7 @@ export function recordRecent(recent = [], events, now = Date.now()) {
 // Coalesce concurrent polls of the same park (interval tick vs. trip create /
 // park switch / dashboard warm-up). Two racing fetches can resolve out of
 // order and replay a stale snapshot over fresh state, manufacturing a phantom
-// "back up" + duplicate "down" for a single real outage — so callers of an
+// "back up" + duplicate "down" for a single real outage, so callers of an
 // already-in-flight poll just await that one.
 const inFlight = new Map(); // parkId -> Promise
 
@@ -472,7 +555,8 @@ async function doPollPark(parkId) {
     if (baseline && state.lastPoll) {
       console.log(`[poller] ${getPark(parkId)?.name || parkId}: last snapshot is ${Math.round((now - state.lastPoll) / 60_000)} min old, starting afresh`);
       forgetHeld(parkId);
-    }
+    } else if (!restored.has(parkId)) restoreGate(parkId, state.gate);
+    restored.add(parkId);
     const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now);
     state.rides = rides;
     state.recent = recordRecent(state.recent, events, now);
@@ -492,6 +576,7 @@ async function doPollPark(parkId) {
     // Every poll, so an alert held by the cooldown goes out once it passes.
     const news = events.filter((ev) => ev.type !== 'CLOSED' || closingIsNews(state, now));
     const toSend = gateEvents(parkId, news, rides, now);
+    state.gate = gateSnapshot(parkId);
     await Promise.all([
       toSend.length ? notifyTrips(parkId, toSend) : null,
       notifyWaitAlerts(parkId, rides, now),
@@ -524,8 +609,20 @@ async function pollAll() {
   await Promise.all(activeParkIds().map((parkId) => pollPark(parkId)));
 }
 
+let pollTimer = null;
 export function startPolling() {
   pollAll();
-  setInterval(pollAll, POLL_INTERVAL_MS);
+  pollTimer = setInterval(pollAll, POLL_INTERVAL_MS);
   console.log(`[poller] polling every ${POLL_INTERVAL_MS / 1000}s`);
+}
+
+// For shutdown: no new polls, and resolve once the ones under way (and the
+// pushes they are sending) finish, or after waitMs, whichever comes first.
+export async function stopPolling(waitMs = 5000) {
+  clearInterval(pollTimer);
+  pollTimer = null;
+  await Promise.race([
+    Promise.allSettled([...inFlight.values()]),
+    new Promise((r) => setTimeout(r, waitMs).unref()),
+  ]);
 }

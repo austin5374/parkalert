@@ -40,7 +40,7 @@ test('a storm outage gets a second call once the weather clears, and only one', 
   assert.equal(byStage.down.cause, 'lightning');
 });
 
-test('late openings, closings and calls without a range are not scored', () => {
+test('late openings, closings inside the range and calls without a range are not scored', () => {
   const rides = { a: { status: 'DOWN' }, b: { status: 'DOWN' }, c: { status: 'DOWN' } };
   const calls = recordCalls({}, [down('a'), down('b'), down('c')], rides,
     (id) => (id === 'c' ? { kind: 'breakdown', window: null } : { window: { lo: 5, hi: 15 } }), T0);
@@ -76,4 +76,17 @@ test('the scorecard groups by kind of estimate', () => {
     ['other', 2, 50, 33, 50],
   ]);
   assert.deepEqual(scorecard([], T0).groups, []);
+});
+
+test('a ride that closes for the day after its range has passed counts as a miss', () => {
+  const rides = { a: { status: 'DOWN' }, b: { status: 'DOWN' } };
+  const calls = recordCalls({}, [down('a'), down('b')], rides, () => ({ window: { lo: 5, hi: 15 } }), T0);
+  const r = scoreCalls(calls, [], [{ type: 'CLOSED', ride: { id: 'a' } }, up('b')], T0 + 40 * MIN);
+  const a = r.scores.find((x) => x.closed);
+  assert.equal(a.hit, false);
+  assert.equal(a.miss, null);
+  const card = scorecard(r.scores, T0 + 40 * MIN);
+  assert.equal(card.groups[0].n, 2);
+  assert.equal(card.groups[0].inRange, 0);
+  assert.equal(card.groups[0].closed, 1);
 });

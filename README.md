@@ -1,4 +1,4 @@
-# ParkAlert 🎢
+# ParkAlert
 
 Mobile-first PWA that pings your phone the moment a Disney ride goes down or comes back up, with how long it was down and, when it goes down, how long outages like it usually last. When a storm is why, it watches the weather and times the reopening from when the storm passes. It can also ping you when a ride's wait drops to what you'll stand in line for. Built for two phones sharing one trip.
 
@@ -10,7 +10,7 @@ ThemeParks.wiki API ──(poll every 60s)──▶ Node server ──(on status
         └──(history, once a day)─────────────┤
 Airport weather reports ──(every 5 min)─────▶│
 Weather report archive ──(hourly backfill)──▶┤
-                                             └──▶ serves the PWA dashboard (down rides, watch list, mutes)
+                                             └──▶ serves the PWA dashboard (down rides, ride alerts, pause)
 ```
 
 - **No runtime dependencies.** Plain Node 22+. Deploys to Railway in minutes; runs anywhere Node runs. ESLint is the only dev dependency, for `npm run lint`.
@@ -24,7 +24,7 @@ You need **Node 22 or newer** (CI runs 22 and 24) and git. Nothing else.
 ```sh
 git clone https://github.com/austin5374/parkalert.git
 cd parkalert
-npm install        # only installs ESLint; the app itself needs nothing
+npm ci             # only installs ESLint; the app itself needs nothing
 npm start          # http://localhost:3000
 ```
 
@@ -96,7 +96,7 @@ Railway gives you an always-on host with automatic HTTPS: no certs, DNS, or reve
 3. **Attach a volume** (required, because the container filesystem is wiped on every redeploy): in the Railway dashboard, right-click the service → **Attach volume**, mount path `/data`. The app picks it up automatically via `RAILWAY_VOLUME_MOUNT_PATH`; trips and outage history survive redeploys.
 4. **Generate the public URL**: service → Settings → Networking → **Generate Domain**. You get `https://<name>.up.railway.app`, which is what phones load. HTTPS is automatic.
 5. Make sure **Serverless / App Sleep is OFF** for the service (Settings → Deploy). The 60-second poller must stay awake or transitions get missed.
-6. Optional: point an uptime monitor at `https://<name>.up.railway.app/api/health`. It returns 503 if any park a trip is watching has gone 5 minutes without a successful poll, i.e. alerts have quietly stopped.
+6. Optional: point an uptime monitor at `https://<name>.up.railway.app/api/health`. It returns 503 if any park a trip is watching has gone 5 minutes without a successful poll, i.e. alerts have quietly stopped. It says only whether all is well; set `HEALTH_TOKEN` and add `?token=<it>` to see each park and its last error.
 
 ### Settings
 
@@ -112,9 +112,10 @@ No environment variables are required.
 | `THEMEPARKS_BASE` | `https://api.themeparks.wiki/v1` | A stand-in or mirror for the ThemeParks.wiki API. |
 | `WEATHER_BASE` | `https://aviationweather.gov/api/data` | Live airport weather reports (NOAA's Aviation Weather Center). |
 | `WEATHER_ARCHIVE` | `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py` | Past airport weather reports (Iowa State's ASOS archive). |
+| `HEALTH_TOKEN` | none | Unlocks the per-park detail in `/api/health`. |
 | `PORT` | `3000` | Set by Railway. |
 
-**Cost**: the server uses about 90 MB of RAM (measured on Node 22), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
+**Cost**: the server uses about 80 to 90 MB of RAM (measured on Node 22 and 24 in September 2026, with a week of archive), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
 
 ## Simulating a transition (testing pushes)
 
@@ -132,33 +133,34 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 1. Open the app and pick your park, or tap **Use my location**. Location is only asked for when you tap it.
 2. A short setup sheet opens: install the free **ntfy** app, subscribe to your trip (one tap on Android; copy and paste on iPhone), then send a test and confirm it arrived. Until you do, the header says **Set up alerts** instead of **Alerts on**, so a phone that will never be pinged is obvious.
 3. Add it to your home screen for the full-screen experience: Trip tab → **Add to Home Screen** (Chrome offers its own install prompt; on iPhone the sheet shows where Safari's menu item is).
-4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip switches trips with an Undo.
+4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip asks first, and an invite opened with no signal is kept until the phone reconnects.
 
-The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, sorted A–Z or by shortest wait. **Trip** holds the code, alert setup, pause, park and leave.
+The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort (A–Z or shortest wait). A ride with a single rider line or Lightning Lane says so, with the next return time. **Trip** holds the code, alert setup, pause, park and leave.
 
 Almost everything opens something:
 
 - **Any ride** (a down card, a row in Rides, a "back up" row) opens its sheet: the reopen range with the likely clock times and how it was worked out, a wait alert (pick 10 to 60 min; you get one push when the posted wait drops that low, today only), a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages). Rides with a wait alert set carry a timer badge in the Rides list.
 - **The park name** opens today's hours (including evening events), counts for right now and today, the rides with the most outages this week, and how the reopen estimates have done here over the last 14 days.
 - **A park-wide hold** opens the rides caught in it and how long holds usually last.
-- **Pull down** on any list to refresh.
+- **Pull down** on a tab to refresh; it says "Updated just now", or why it couldn't. A sheet whose data fails to load offers Try again.
+- **Back** closes a sheet, or steps back to the hold or park sheet a ride was opened from. Ride sheets open halfway; drag up for the rest.
 
 With no signal, the app still opens: it shows the last rides it saw, marked `Offline · as of 3:42 PM`, and catches up by itself when the connection is back.
 
 ### Notifications
 
-- 🔴 `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
-- 🟢 `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
-- ⛔ `Space Mountain has closed` with `Down since 2:10 PM, now closed. It may not reopen today` when a down ride switches to CLOSED in the middle of the day (not before opening or around closing, when that is just the park's hours). If it reopens within 8 hours you get `is back up` with the whole outage.
-- ⏱️ `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
-- 🟢 `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
-- Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are.
-- Tapping an alert opens the app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else.
+- `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
+- `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
+- `Space Mountain has closed` with `Down since 2:10 PM, now closed. It may not reopen today` when a down ride switches to CLOSED in the middle of the day (not before opening or around closing, when that is just the park's hours). If it reopens within 8 hours you get `is back up` with the whole outage.
+- `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
+- `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
+- Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are, and a grouped "back up" says how long they were down. A ride still down when the rest of its hold reopens stays in the hold, with the hold's estimate.
+- Tapping an alert opens what it is about: the ride's sheet, the hold, or Down now. The link carries the trip code, so it opens the right trip even where it lands in Safari rather than the home-screen app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else. Pushes carry no emoji tags; the title says what happened.
 - Pausing (1 hour, 3 hours, until 7am on the park's clock) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
 - Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
 - After a gap in polling (the trip hopped to another park and back, or the server or the API was down for more than 15 minutes), the next poll starts afresh with no alerts, because nobody knows when things changed in between. The dashboard shows the current state straight away.
-- Follow list: every ride by default. It is shared across the trip, and each park keeps its own, so hopping parks and back restores it.
+- Ride alerts: on for every ride by default. They are shared across the trip, and each park keeps its own, so hopping parks and back restores them.
 
 ## Reopen estimates
 
@@ -198,7 +200,7 @@ Everything the app uses, all JSON. A trip code is the only credential.
 | Route | |
 |---|---|
 | `GET /api/parks` | The parks the app knows. Railway's deploy healthcheck. |
-| `GET /api/health` | Last successful poll per watched park; 503 once one is 5 minutes stale. |
+| `GET /api/health` | `ok`, and 503 once a watched park is 5 minutes stale. With `?token=` (`HEALTH_TOKEN`), each park's last poll and error. |
 | `POST /api/trips` `{parkId}` | Create a trip. Returns its code and ntfy topic. |
 | `GET /api/trips/:code` | The trip. |
 | `PATCH /api/trips/:code` | Any of `parkId`, `watched` (null or ride ids), `mute` (null or `{until}`), `rideMutes`. Validated as a whole: one bad field rejects the request. |
@@ -220,8 +222,8 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 ## Troubleshooting
 
 - **No alerts on one phone**: Trip tab → Alerts on this phone. Send a test; if it doesn't arrive, check that notifications are allowed for ntfy and that the topic you subscribed to matches exactly.
-- **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride isn't followed (Rides tab switch). Check `/api/health` to see whether the park is being polled at all.
-- **Header says "reconnecting"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health` shows the last error. Alerts resume on their own when it answers again.
+- **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride's alerts are off (its switch on the Rides tab). Check `/api/health?token=…` to see whether the park is being polled at all.
+- **Header says "Ride times may be out of date"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. Alerts resume on their own when it answers again.
 - **Estimates say nothing**: fewer than 5 comparable past outages yet. Set `THEMEPARKS_API_KEY` to backfill 30 days instead of 7.
 - **A storm outage gets an ordinary estimate**: the weather reports are more than 75 minutes old (the feed is down; the server log says so), or the archive hasn't yet shown that ride closing for storms on two days.
 

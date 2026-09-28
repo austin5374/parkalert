@@ -70,6 +70,7 @@
 }
 
 html {
+  overscroll-behavior-y: none;
   font: 100%/1.4 -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, sans-serif;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
@@ -81,7 +82,9 @@ body {
   font-size: 1.0625rem;
   letter-spacing: -0.01em;
   min-height: 100dvh;
-  overscroll-behavior-y: contain; /* the app's own pull-to-refresh, not a page reload */
+  /* The app's own pull to refresh, not a page reload, and not stacked on
+     top of iOS's rubber band: with the bounce off, only the pull moves. */
+  overscroll-behavior-y: none;
 }
 button, input { font: inherit; color: inherit; letter-spacing: inherit; }
 button { background: none; border: none; cursor: pointer; text-align: left; }
@@ -178,13 +181,16 @@ a, a:visited { color: var(--accent); }
 .nav-meta .meta-chevron { transform: rotate(90deg); }
 .nav .large-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav .large-title.wrap {
-  white-space: normal; overflow-wrap: anywhere;
+  white-space: normal; overflow-wrap: break-word;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
 .nav-meta { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
 #park-meta.warn { color: var(--orange); }
 
+/* The pill is drawn 33px tall but answers to a 44px finger. */
+.pill::before { content: ''; position: absolute; inset: -0.4rem -0.15rem; }
 .pill {
+  position: relative;
   display: inline-flex; align-items: center; gap: 0.35rem; flex: none;
   padding: 0.42rem 0.8rem 0.42rem 0.65rem; margin-bottom: 0.3rem;
   border-radius: 999px; background: var(--fill); font-size: 0.875rem; font-weight: 600;
@@ -240,13 +246,24 @@ main {
 .hold-header .chevron { color: var(--orange); opacity: 0.7; width: 0.8rem; height: 0.8rem; }
 .hold-header:active { opacity: 0.6; }
 .cards + .section-label { padding-top: 1.4rem; }
+.hold-card { cursor: default; }
+.hold-card:active { transform: none; background: var(--surface); }
+.hold-card .hold-header { padding: 0 0 0.2rem; }
+.hold-rides { margin: 0.7rem calc(-1 * var(--gutter)) -0.9rem; border-top: 0.5px solid var(--separator); }
+.hold-ride {
+  width: 100%; display: flex; align-items: center; gap: 0.75rem; min-height: 2.75rem;
+  padding: 0.5rem var(--gutter); position: relative;
+}
+.hold-ride + .hold-ride::before { content: ''; position: absolute; top: 0; left: var(--gutter); right: 0; border-top: 0.5px solid var(--separator); }
+.hold-ride:active { background: var(--press); }
+.hold-ride.unfollowed .row-label { color: var(--label-2); }
 
 .empty { text-align: center; padding: 3.5rem 2rem 1.5rem; }
 .empty svg { width: 3.25rem; height: 3.25rem; stroke-width: 1.3; color: var(--green); margin-bottom: 0.8rem; }
 .empty .title-2 { margin-bottom: 0.35rem; }
 .empty p { color: var(--label-2); line-height: 1.4; }
 .empty + .group { margin-top: 1.2rem; }
-.empty.offline svg { color: var(--label-2); }
+.empty.offline svg, .empty.closed svg { color: var(--label-2); }
 .empty.loading { padding-top: 4rem; color: var(--label-2); }
 .empty .btn-secondary { margin: 1.4rem auto 0; max-width: 16rem; }
 
@@ -300,9 +317,14 @@ main {
 }
 .row-main:active { background: var(--press); }
 .meta-chevron { width: 0.7rem; height: 0.7rem; stroke-width: 2.6; color: var(--label-3); margin-left: 0.1rem; }
+.tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.tag { font-size: 0.75rem; font-weight: 500; letter-spacing: 0; color: var(--label-2); background: var(--fill); border-radius: 0.35rem; padding: 0.1rem 0.4rem; }
+.segmented + .segmented { margin-top: 0.45rem; }
 .no-results { padding: 1.4rem var(--gutter); color: var(--label-2); text-align: center; }
 
-/* Switch: the familiar on/off control, one per ride. */
+/* Switch: the familiar on/off control, one per ride. As in Settings, the
+   whole trailing end of the row toggles it, not just the drawn switch. */
+.switch::before { content: ''; position: absolute; top: -0.9rem; bottom: -0.9rem; left: -0.75rem; right: -1rem; }
 .switch {
   position: relative; width: 3.1rem; height: 1.9rem; flex: none; border-radius: 999px;
   background: var(--fill-strong); transition: background-color 200ms ease;
@@ -313,7 +335,11 @@ main {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
   transition: transform 260ms cubic-bezier(0.3, 1.3, 0.5, 1), width 160ms ease;
 }
-.switch[aria-checked='true'] { background: var(--green); }
+.switch { touch-action: pan-y; } /* sideways drags reach the switch, not the page */
+.switch[aria-checked='true'], .switch.slide-on { background: var(--green); }
+.switch.slide-off { background: var(--fill-strong); }
+.switch.slide-on::after { transform: translateX(1.2rem); }
+.switch.slide-off::after { transform: none; }
 .switch[aria-checked='true']::after { transform: translateX(1.2rem); }
 .switch:active::after { width: 1.95rem; }
 .switch[aria-checked='true']:active::after { transform: translateX(0.9rem); }
@@ -362,8 +388,12 @@ main {
 }
 
 /* ---- Sheet ---- */
+/* Behind a full-height sheet the page recedes onto black, as on iOS. */
+html.sheet-up { background: #000; }
+html.sheet-up body { background: transparent; }
+#app { transform-origin: 50% 0; }
 .sheet-layer { position: fixed; inset: 0; z-index: 50; }
-.scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; }
+.scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; touch-action: none; }
 .sheet {
   position: absolute; left: 0; right: 0; bottom: 0; margin: 0 auto; max-width: 40rem;
   max-height: calc(100dvh - env(safe-area-inset-top) - 1.5rem);
@@ -375,7 +405,13 @@ main {
 .grabber-zone { flex: none; display: flex; justify-content: center; padding: 0.45rem 0 0.35rem; touch-action: none; cursor: grab; }
 .grabber { width: 2.3rem; height: 0.3rem; border-radius: 999px; background: var(--label-3); }
 .sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.sheet-head { padding: 0.4rem var(--gutter) 0.9rem; touch-action: none; }
+.sheet-head { padding: 0.4rem var(--gutter) 0.9rem; }
+.sheet-back {
+  display: inline-flex; align-items: center; gap: 0.1rem; color: var(--accent); font-size: 1.0625rem;
+  min-height: 2.75rem; margin: -0.5rem 0 0 -0.4rem; padding: 0 0.4rem;
+}
+.sheet-back .back-chevron { width: 1.1rem; height: 1.1rem; stroke-width: 2.4; transform: scaleX(-1); }
+.sheet-back:active { opacity: 0.5; }
 .sheet-head p { color: var(--label-2); margin-top: 0.3rem; font-size: 0.9375rem; line-height: 1.4; }
 .sheet .group { background: var(--surface); }
 @media (prefers-color-scheme: dark) { .sheet .group { background: var(--surface-2); } }
@@ -398,7 +434,9 @@ main {
   display: flex; align-items: center; gap: 0.5rem; background: var(--fill); border-radius: 0.65rem;
   padding: 0.55rem 0.55rem 0.55rem 0.8rem; margin-bottom: 0.5rem;
 }
-.topic code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 0.875rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A long-press selects the whole topic at once (the copy fallback tells
+   guests to press and hold), and it wraps rather than scrolling sideways. */
+.topic code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 0.875rem ui-monospace, SFMono-Regular, Menlo, monospace; -webkit-user-select: all; user-select: all; }
 .topic button { color: var(--accent); font-weight: 600; font-size: 0.9375rem; flex: none; margin-right: -0.3rem; }
 .tip { font-size: 0.875rem !important; }
 .wait-state { color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; }
@@ -409,6 +447,11 @@ main {
 }
 .chip[aria-pressed='true'] { background: var(--accent); color: #fff; font-weight: 600; }
 .chip.pressable:active { transform: scale(0.96); }
+/* Wait limits: one segmented row (Off, 10, 15, ...), as a picker in Settings. */
+.segmented.wait-limits { margin: 0.75rem 0 0; }
+.segmented.wait-limits .chip { flex: 1; min-height: 2.25rem; padding: 0; border-radius: 0.5rem; background: none; font-size: 0.9375rem; color: var(--label); }
+.segmented.wait-limits .chip[aria-pressed='true'] { background: var(--surface); color: var(--label); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.sheet .segmented.wait-limits { background: var(--fill); }
 .wait-badge { display: inline-flex; align-items: center; gap: 0.1rem; color: var(--accent); font-weight: 600; margin-left: 0.3rem; }
 .wait-badge svg { width: 0.9rem; height: 0.9rem; stroke-width: 2; }
 .inline-icon { width: 1.1em; height: 1.1em; vertical-align: -0.2em; color: var(--accent); }
@@ -429,6 +472,9 @@ main {
 .toast.show { opacity: 1; transform: none; pointer-events: auto; }
 .toast button { color: var(--accent); font-weight: 600; flex: none; }
 .no-tabbar .toast { bottom: calc(env(safe-area-inset-bottom) + 1.2rem); }
+/* Over a sheet, a toast drops from the top instead of covering its buttons. */
+.toast.top { bottom: auto; top: calc(env(safe-area-inset-top) + 0.6rem); transform: translateY(-1rem) scale(0.96); }
+.toast.top.show { transform: none; }
 
 /* ---- Detail sheets ---- */
 .group.padded { padding: 0.9rem var(--gutter) 1rem; }
@@ -451,7 +497,6 @@ main {
 .chart .grid { stroke: var(--separator); stroke-width: 1; }
 .chart .axis { stroke: var(--separator); stroke-width: 1; }
 .chart text { stroke: none; }
-.chart .tick { fill: var(--label-2); font-size: 11px; letter-spacing: 0; }
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chart .area { fill: var(--accent); opacity: 0.1; stroke: none; }
 .chart .crosshair { stroke: var(--label-2); stroke-width: 1; }
@@ -463,11 +508,30 @@ main {
 .chart .hit { fill: transparent; stroke: none; cursor: pointer; outline: none; }
 .chart .hit:focus-visible { fill: var(--fill); }
 .chart-readout { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.5rem; font-variant-numeric: tabular-nums; min-height: 1.3em; letter-spacing: 0; }
-.chart-x { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--label-2); margin-top: 0.3rem; letter-spacing: 0; }
+.chart-x { position: relative; display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--label-2); margin-top: 0.3rem; letter-spacing: 0; }
+.chart-x .mid { position: absolute; transform: translateX(-50%); }
+.chart-plot { position: relative; margin-top: 1.1rem; }
+.chart-y { position: absolute; inset: 0; pointer-events: none; font-size: 0.75rem; color: var(--label-2); letter-spacing: 0; }
+.chart-y span { position: absolute; left: 0; }
+.chart-y span:first-child { top: -1.1rem; }
+.chart-y span:last-child { bottom: 0.15rem; left: 0.2rem; }
+.chart .grid.faint { opacity: 0.5; stroke-dasharray: 2 3; }
 .chart-days { display: grid; text-align: center; font-size: 0.75rem; color: var(--label-2); margin-top: 0.35rem; letter-spacing: 0; }
+
+/* An activity indicator in a row's trailing slot. */
+.spinner {
+  width: 1.1rem; height: 1.1rem; flex: none; border-radius: 50%;
+  border: 2px solid var(--fill-strong); border-top-color: var(--label-2);
+  animation: spin 800ms linear infinite;
+}
+#setup-parks.busy .row:not(:has(.spinner)) { opacity: 0.5; pointer-events: none; }
 
 /* ---- Pull to refresh ---- */
 main { position: relative; transition: none; }
+#setup { position: relative; }
+#setup-ptr { top: calc(env(safe-area-inset-top) + 0.5rem); }
+.retry { padding-bottom: 0.4rem; }
+.retry .btn-secondary { margin: 0.6rem var(--gutter) 0; width: auto; }
 .ptr {
   position: absolute; left: 50%; top: 0; margin-left: -0.9rem; width: 1.8rem; height: 1.8rem;
   opacity: 0; pointer-events: none; color: var(--label-2);
@@ -496,3 +560,33 @@ main { position: relative; transition: none; }
 @media (min-width: 44rem) {
   :root { --gutter: 1.25rem; }
 }
+
+/* ---- Accessibility text sizes (html.ax-type, 150% and up) ----
+   Stack instead of squeeze: the title and the alerts pill each get the full
+   width, list headers wrap, and a row's switch moves under its label. The
+   tab bar stays one size, as iOS keeps it. */
+.ax-type .nav-inner { flex-wrap: wrap; align-items: flex-start; }
+.ax-type .nav-titles { flex-basis: 100%; }
+.ax-type .nav .large-title.wrap { -webkit-line-clamp: 3; }
+.ax-type .nav .large-title.ax { overflow-wrap: normal; display: block; overflow: visible; }
+/* The header scrolls away rather than covering half the screen. */
+.ax-type .nav { position: relative; }
+.ax-type .pill { margin: 0.4rem 0 0; }
+.ax-type .list-header { flex-wrap: wrap; gap: 0.3rem 1rem; }
+.ax-type .ride-row { flex-wrap: wrap; padding-bottom: 0.7rem; }
+.ax-type .ride-row .row-main { flex-basis: 100%; }
+.ax-type .ride-row .switch { margin-left: var(--gutter); }
+.ax-type .row:has(> .switch) { flex-wrap: wrap; }
+.ax-type .row:has(> .switch) .row-label { flex-basis: calc(100% - 3rem); }
+.ax-type .card-top { flex-wrap: wrap; }
+.ax-type .card-title { flex-basis: 100%; }
+.ax-type .stats { grid-template-columns: 1fr; }
+.ax-type .segmented { flex-wrap: wrap; }
+.ax-type .segmented button { flex-basis: 45%; }
+.ax-type { --tabbar-h: 56px; }
+.ax-type .tab { font-size: 11px; }
+.ax-type .tab svg { width: 26px; height: 26px; }
+.ax-type .badge { font-size: 11px; min-width: 18px; height: 18px; line-height: 18px; }
+.ax-type .ride-row .meta { align-items: flex-start; }
+.ax-type .ride-row .meta .dot { margin-top: 0.4em; }
+@media (prefers-color-scheme: dark) { .segmented.wait-limits .chip[aria-pressed='true'] { background: #636366; } }

@@ -63,7 +63,11 @@ export function recordCalls(calls = {}, events, rides, outlookOf, now = Date.now
 }
 
 // Score the calls of every ride that just came back up. A late opening was
-// never an outage the app estimated, so it is not scored.
+// never an outage the app estimated, so it is not scored. A ride that closed
+// for the day after its range had passed is a miss, and the kind guests
+// remember; leaving those out made the hit rate look better than it was.
+// One that closed while its range was still open (the park closing on it,
+// say) never got its answer, and is not scored.
 // Returns { calls, scores }.
 export function scoreCalls(calls = {}, scores = [], events, now = Date.now()) {
   const nextCalls = { ...calls };
@@ -72,15 +76,19 @@ export function scoreCalls(calls = {}, scores = [], events, now = Date.now()) {
     if (ev.type !== 'UP' && ev.type !== 'CLOSED') continue;
     const list = nextCalls[ev.ride.id];
     delete nextCalls[ev.ride.id];
-    // Closing for the day is not reopening; nothing to score.
-    if (ev.type !== 'UP' || ev.late || !list) continue;
+    if (ev.late || !list) continue;
     for (const c of list) {
+      const width = Math.round((c.hi - c.lo) / MIN);
+      if (ev.type === 'CLOSED') {
+        if (now > c.hi) added.push({ at: now, stage: c.stage, cause: c.cause, hit: false, width, miss: null, closed: true });
+        continue;
+      }
       added.push({
         at: now,
         stage: c.stage,
         cause: c.cause,
         hit: now >= c.lo && now <= c.hi,
-        width: Math.round((c.hi - c.lo) / MIN),
+        width,
         miss: Math.round(Math.abs(now - c.mid) / MIN * 10) / 10,
       });
     }
@@ -118,7 +126,8 @@ export function scorecard(scores = [], now = Date.now()) {
       n: rows.length,
       inRange: Math.round((rows.filter((s) => s.hit).length / rows.length) * 100),
       width: Math.round(median(rows.map((s) => s.width))),
-      within15: Math.round((rows.filter((s) => s.miss <= 7.5).length / rows.length) * 100),
+      within15: Math.round((rows.filter((s) => s.miss != null && s.miss <= 7.5).length / rows.length) * 100),
+      closed: rows.filter((s) => s.closed).length,
     });
   }
   return { days: Math.round(SCORE_KEEP_MS / (24 * 3600_000)), groups };

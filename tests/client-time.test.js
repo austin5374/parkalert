@@ -45,3 +45,19 @@ test('durations read the same in the app as in pushes', async () => {
     assert.equal(formatDuration(ms), text, `push ${ms}`);
   }
 });
+
+test('ride search ignores accents, apostrophes, "the" and word order', () => {
+  const { matchesSearch } = ctx;
+  const cases = [
+    ['Rémy’s Ratatouille Adventure', ['remy', 'remys', 'rémy', 'ratatouille remy']],
+    ["Peter Pan's Flight", ['peter pans', 'peterpan', 'pans flight', 'PETER']],
+    ["it's a small world", ['its a small', 'small world', "it's"]],
+    ['Space Mountain', ['mountain space', 'space mtn'.slice(0, 5), 'the space']],
+    ['Casey Jr. Splash ’N’ Soak Station', ['splash n soak', 'casey jr', 'soak']],
+    ['Haunted Mansion', ['the haunted', 'haunted the'.split(' ')[0]]],
+  ];
+  for (const [name, queries] of cases) for (const q of queries) assert.ok(matchesSearch(name, q), `${q} -> ${name}`);
+  assert.ok(!matchesSearch('Space Mountain', 'thunder'));
+  assert.ok(!matchesSearch('Haunted Mansion', 'haunted pirates'));
+  assert.ok(matchesSearch('Anything', '   '));
+});

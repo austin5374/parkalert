@@ -33,3 +33,7 @@ export const WEATHER_ARCHIVE = env.WEATHER_ARCHIVE || 'https://mesonet.agron.ias
 // How far back to backfill history. The archive refuses anything older than
 // the key allows (7 days anonymous, 30 with a free key), so this is a ceiling.
 export const HISTORY_DAYS = Number(env.HISTORY_DAYS) || (THEMEPARKS_API_KEY ? 30 : 7);
+
+// /api/health says only ok or not to everyone; with ?token= matching this,
+// it also lists each watched park and its last error.
+export const HEALTH_TOKEN = env.HEALTH_TOKEN || null;

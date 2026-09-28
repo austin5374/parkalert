@@ -1,6 +1,6 @@
 /* Park-clock helpers. A classic script like app.js and loaded before it, so
    these are plain globals; nothing here touches the DOM, so tests can run it. */
-/* exported localDay, nextLocalHour, fmtDuration */
+/* exported localDay, nextLocalHour, fmtDuration, matchesSearch */
 
 // "<1 min", "47 min", "1 hr 5 min". server/notify.js says it the same way,
 // so a push and the app never describe one outage differently.
@@ -42,4 +42,27 @@ function nextLocalHour(now, timeZone, hour) {
     t += wall - Date.UTC(q.year, q.month - 1, q.day, q.hour, q.minute, q.second);
   }
   return t;
+}
+
+// Ride search, the way Apple's search fields behave: case, accents and
+// apostrophes don't matter ("remys" finds "Rémy's"), a leading "the" is
+// ignored, and every word typed must start some word of the name, in any
+// order ("mountain space" finds Space Mountain).
+function searchWords(text) {
+  return String(text)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['\u2018\u2019`]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+function matchesSearch(name, query) {
+  let words = searchWords(query);
+  if (words.length > 1 && words[0] === 'the') words = words.slice(1);
+  if (!words.length) return true;
+  const hay = searchWords(name);
+  const joined = hay.join('');
+  return words.every((w) => hay.some((h) => h.startsWith(w))) || joined.includes(words.join(''));
 }

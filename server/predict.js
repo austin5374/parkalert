@@ -99,7 +99,18 @@ function everywhere(history, kind) {
 // Which kind of outage is this live DOWN ride? Same rules the history
 // classifier uses, applied to current park state (rides: parkState[p].rides).
 // Returns { kind, rides } where rides is the hold size for a 'hold'.
+// A ride the poller has already seen in a hold stays in it (ride.liveKind)
+// until it reopens: once the others come back, the last ones still down are
+// the same storm, not a fresh breakdown with a shorter estimate.
 export function classifyLive(rides, rideId) {
+  const ride = rides[rideId];
+  if (isLateOpening({ from: ride?.downFrom })) return { kind: 'opening' };
+  if (ride?.liveKind === 'hold') return { kind: 'hold', rides: ride.holdSize };
+  return clusterLive(rides, rideId);
+}
+
+// The hold test on this snapshot alone, ignoring any remembered kind.
+export function clusterLive(rides, rideId) {
   const ride = rides[rideId];
   if (isLateOpening({ from: ride?.downFrom })) return { kind: 'opening' };
   if (ride?.status === 'DOWN' && ride.downSince) {
@@ -197,15 +208,34 @@ function roundMin(m) {
   return v < 15 ? v : Math.round(v / 5) * 5;
 }
 
+// The range as guests read it, in minutes from now: the same rounding as the
+// text, so the card's bar, the sheet's clock times and the scorecard all
+// measure what the alert said, not the unrounded quartiles behind it.
+export function shownWindow(est) {
+  if (!est || est.longerThanUsual) return null;
+  const lo = roundMin(est.p25 ?? est.p50);
+  const hi = est.p75 === null || est.p75 === undefined ? null : roundMin(est.p75);
+  return hi !== null && hi > lo ? { lo, hi } : { lo: roundMin(est.p50), hi: null };
+}
+
+// Minutes the way a person says them: "40 min", past an hour "1 hr 30 min".
+function spoken(m) {
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h} hr ${r} min` : `${h} hr`;
+}
+
 // One short line for a push notification or the dashboard, or null.
+// From the 30-minute lightning rule rather than this park's history, it
+// says so instead of "usually", which would claim a record it doesn't have.
 export function describe(est) {
   if (!est) return null;
   if (est.longerThanUsual) return 'Down longer than most outages here';
-  const lo = roundMin(est.p25 ?? est.p50);
-  const hi = est.p75 === null ? null : roundMin(est.p75);
-  let text = hi !== null && hi > lo
-    ? `Usually back in ${lo} to ${hi} min`
-    : `Usually back in about ${roundMin(est.p50)} min`;
+  const w = shownWindow(est);
+  const span = w.hi !== null
+    ? (w.hi < 60 ? `${w.lo} to ${w.hi} min` : `${spoken(w.lo)} to ${spoken(w.hi)}`)
+    : `about ${spoken(w.lo)}`;
+  let text = est.basis === 'rule' ? `By the 30-minute rule, back in ${span}` : `Usually back in ${span}`;
   const pct = Math.round(est.stayedDownShare * 100);
   if (pct >= 10) text += `. About ${pct}% stay closed for the day`;
   return text;
