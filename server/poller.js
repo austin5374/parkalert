@@ -9,6 +9,7 @@ import { weatherOutlook, modelHistory } from './weatheroutlook.js';
 import { refreshWeather } from './weather.js';
 import { isLateOpening } from './episodes.js';
 import { recordWaits } from './insights.js';
+import { recordCalls, scoreCalls } from './scorecard.js';
 import { localDate } from './time.js';
 
 const POLL_INTERVAL_MS = 60_000;
@@ -480,6 +481,7 @@ async function doPollPark(parkId) {
     state.waits = recordWaits(state.waits, rides, now, baseline && state.lastPoll ? state.lastPoll + POLL_INTERVAL_MS : null);
     state.lastPoll = now;
     state.lastError = null;
+    trackEstimates(parkId, state, events, now);
     saveState();
     if (events.length) {
       console.log(
@@ -497,6 +499,22 @@ async function doPollPark(parkId) {
   } catch (err) {
     state.lastError = err.message;
     console.error(`[poller] poll failed for ${parkId}:`, err.message);
+  }
+}
+
+// Score the estimates of rides that just reopened, then write down what the
+// app is saying now about rides that went down or whose weather cleared.
+// Never allowed to break a poll: it is bookkeeping, not alerting.
+function trackEstimates(parkId, state, events, now) {
+  try {
+    const scored = scoreCalls(state.calls, state.scores, events, now);
+    state.scores = scored.scores;
+    state.calls = recordCalls(scored.calls, events, state.rides, (id) => {
+      const since = state.rides[id]?.downSince ?? now;
+      return downOutlook(parkId, id, (now - since) / 60_000, now);
+    }, now);
+  } catch (err) {
+    console.error(`[poller] scoring estimates for ${parkId}:`, err.message);
   }
 }
 

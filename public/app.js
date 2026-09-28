@@ -1198,6 +1198,14 @@ function parkSheet(info) {
       wrap.appendChild(el(`<p class="footnote">Park-wide holds happened on ${info.week.holdDays} of those ${info.week.days} days.</p>`));
     }
   }
+  if (info?.estimates?.groups.length) {
+    // How the reopen estimates have done here, scored as rides came back.
+    wrap.appendChild(el(`<h2 class="section-label">How the estimates did, last ${info.estimates.days} days</h2>`));
+    wrap.appendChild(el(`<div class="group plain">${info.estimates.groups.map((g) => `
+      <div class="row"><span class="row-label">${esc(g.label)}<small>${g.n} reopening${g.n === 1 ? '' : 's'} · ranges about ${g.width} min wide</small></span>
+      <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>`));
+    wrap.appendChild(el('<p class="footnote">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>'));
+  }
   wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on any list to refresh.</p>`));
   wrap.appendChild(el('<div style="height:1rem"></div>'));
   return wrap;

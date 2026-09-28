@@ -31,11 +31,12 @@ function saveAtomic(file, obj, indent) {
 //   lastSeenAt: last dashboard load, written at most hourly (see touchTrip)
 export const trips = load(TRIPS_FILE, {});
 
-// parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides, recent, waits } }
+// parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides, recent, waits, calls, scores } }
 //   rides: { [rideId]: { name, status, waitTime, since, downSince, downFrom, missed? } }
 //     downFrom: the status it went DOWN from; missed: polls it has been absent
 //   recent: today's transitions, newest first (see recordRecent in poller.js)
 //   waits: { [rideId]: [[epoch-ms, minutes | null], ...] } (see recordWaits)
+//   calls, scores: reopen estimates and how they turned out (see scorecard.js)
 export const parkState = load(STATE_FILE, {});
 
 // history: { fetched: { [parkId]: [YYYY-MM-DD, ...] }, episodes: { [parkId]: episode[] } }

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary } from './insights.js';
+import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
 import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
@@ -226,6 +227,7 @@ async function handleApi(req, res, url) {
         rides: new Set(today.filter((e) => e.type === 'DOWN').map((e) => e.id)).size,
       },
       week: parkSummary(history.episodes[trip.parkId] || [], history.fetched[trip.parkId] || [], names),
+      estimates: scorecard(state.scores),
     });
   }
 
