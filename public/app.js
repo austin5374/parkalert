@@ -713,6 +713,8 @@ function alertState() {
   const close = dash.park.lastCloseTime || dash.park.lateEvent?.closingTime || dash.park.closingTime;
   if (close && Date.now() > Date.parse(close)) return { kind: 'closed' };
   if (!alertsReady()) return { kind: 'setup' };
+  // Alerts on, about nothing: say so instead of a reassuring bell.
+  if (!dash.rides.some((r) => isFollowing(r.id))) return { kind: 'none' };
   return { kind: 'on' };
 }
 
@@ -767,6 +769,7 @@ function renderHeader() {
     paused: ['pause', 'Paused'],
     closed: ['moon', 'Park closed'],
     setup: ['bell-off', 'Set up alerts'],
+    none: ['bell-off', 'No rides on'],
   }[st.kind];
   const pill = $('#btn-alerts');
   pill.className = `pill pressable ${st.kind}`;
@@ -2134,7 +2137,12 @@ $('#join-form').onsubmit = async (e) => {
 $('#btn-park').onclick = openParkInfo;
 // Controls that act on the trip's data wait for it rather than failing.
 const withDash = (fn) => () => (dash ? fn() : toast('Still connecting. Try again in a moment.'));
-$('#btn-alerts').onclick = withDash(() => (alertState().kind === 'setup' ? openAlertSetup() : openPause()));
+$('#btn-alerts').onclick = withDash(() => {
+  const kind = alertState().kind;
+  if (kind === 'setup') openAlertSetup();
+  else if (kind === 'none') switchView('rides');
+  else openPause();
+});
 $('#row-setup').onclick = withDash(openAlertSetup);
 $('#row-pause').onclick = withDash(openPause);
 $('#row-park').onclick = withDash(openPark);
