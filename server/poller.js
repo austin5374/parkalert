@@ -1,7 +1,8 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
 import { publish, formatDuration } from './notify.js';
-import { trips, parkState, saveState, activeParkIds } from './store.js';
+import { trips, parkState, saveState, activeParkIds, history } from './store.js';
 import { getPark } from './parks.js';
+import { estimate, describe, classifyLive } from './predict.js';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -18,9 +19,12 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
       waitTime: att.waitTime,
       since: prev && prev.status === att.status ? prev.since : now,
       downSince: null,
+      downFrom: null, // status it went DOWN from; CLOSED means it never opened
     };
     if (att.status === 'DOWN') {
-      ride.downSince = prev?.status === 'DOWN' ? prev.downSince : now;
+      const already = prev?.status === 'DOWN';
+      ride.downSince = already ? prev.downSince : now;
+      ride.downFrom = already ? prev.downFrom ?? null : prev?.status ?? null;
     }
     if (prev && prev.status !== att.status) {
       if (prev.status === 'OPERATING' && att.status === 'DOWN') {
@@ -74,6 +78,19 @@ export function cooldownOk(key, now = Date.now()) {
   return true;
 }
 
+// What to tell people about a DOWN ride: what kind of outage it looks like,
+// and a reopen range from past outages of that kind. Shared by alerts and the
+// dashboard so both always say the same thing.
+export function downOutlook(parkId, rideId, elapsedMin) {
+  const live = classifyLive(parkState[parkId]?.rides || {}, rideId);
+  const est = estimate(history.episodes, parkId, rideId, elapsedMin, live.kind);
+  return {
+    ...live,
+    text: describe(est),
+    basis: est && !est.longerThanUsual ? { from: est.basis, outages: est.n } : null,
+  };
+}
+
 async function notifyTrips(parkId, events, { simulated = false } = {}) {
   const state = parkState[parkId];
   const park = getPark(parkId);
@@ -92,6 +109,11 @@ async function notifyTrips(parkId, events, { simulated = false } = {}) {
     let message = isDown
       ? `Went down at ${localTime(Date.now(), state.timezone)} · ${parkName}`
       : `Was down ${ev.downtimeMs ? formatDuration(ev.downtimeMs) : 'a while'} · ${parkName}`;
+    if (isDown) {
+      const outlook = downOutlook(parkId, ev.ride.id, 0);
+      if (outlook.kind === 'hold') message += `\nPark-wide hold: ${outlook.rides} rides closed at once`;
+      if (outlook.text) message += `\n${outlook.text}`;
+    }
     if (simulated) message += ' · SIMULATED TEST';
     for (const trip of subscribers) {
       if (isTripMuted(trip, ev.ride.id, state)) {

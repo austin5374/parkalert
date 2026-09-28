@@ -131,6 +131,21 @@ function renderHeader() {
   btn.classList.toggle('muted', !!muted);
 }
 
+// Reopen range from past outages, computed server-side so it matches the push.
+function outlookLine(o) {
+  if (!o) return '';
+  const bits = [];
+  if (o.kind === 'hold') bits.push(`<span class="hold">Park-wide hold, ${o.rides} rides closed</span>`);
+  if (o.kind === 'opening') bits.push('Delayed opening');
+  if (o.text) bits.push(o.text);
+  // Say how much history the range rests on; 6 outages and 100 are not the same claim.
+  if (o.basis) {
+    const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
+    bits.push(`from ${o.basis.outages} past outages ${where}`);
+  }
+  return bits.length ? `<div class="ride-outlook">${bits.join(' · ')}</div>` : '';
+}
+
 function renderDown() {
   const list = $('#down-list');
   const down = dash.rides
@@ -148,6 +163,7 @@ function renderDown() {
         <div class="ride-info">
           <div class="ride-name">${r.name}</div>
           <div class="ride-sub">Down since ${fmtLocal(new Date(r.downSince).toISOString())}${isWatched(r.id) ? '' : ' · not watching'}</div>
+          ${outlookLine(r.outlook)}
         </div>
         <div class="down-time">${ago(r.downSince)}</div>
       </div>`));

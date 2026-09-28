@@ -4,7 +4,7 @@
 // history the median time left barely moved as an outage dragged on (about
 // 24 min at the start, 21 min after 30 min down, 48 min after an hour), so a
 // single "back at 3:40" would be wrong most of the time.
-import { isResolved, stayedDown, CLUSTER_WINDOW_MS, CLUSTER_MIN_RIDES } from './episodes.js';
+import { isResolved, stayedDown, isLateOpening, CLUSTER_WINDOW_MS, CLUSTER_MIN_RIDES } from './episodes.js';
 
 // Below this many comparable past outages we say nothing rather than guess.
 export const MIN_SAMPLES = 5;
@@ -40,29 +40,39 @@ export function remaining(episodes, elapsedMin) {
   };
 }
 
-// Is this DOWN ride part of a weather hold right now? Same rule the history
-// classifier uses: at least CLUSTER_MIN_RIDES rides (this one included) went
-// down within CLUSTER_WINDOW_MS of each other.
-export function weatherHold(rides, rideId) {
+// Which kind of outage is this live DOWN ride? Same rules the history
+// classifier uses, applied to current park state (rides: parkState[p].rides).
+// Returns { kind, rides } where rides is the hold size for a 'hold'.
+export function classifyLive(rides, rideId) {
   const ride = rides[rideId];
-  if (ride?.status !== 'DOWN' || !ride.downSince) return null;
-  const together = Object.values(rides).filter(
-    (r) => r.status === 'DOWN' && r.downSince && Math.abs(r.downSince - ride.downSince) <= CLUSTER_WINDOW_MS
-  );
-  return together.length >= CLUSTER_MIN_RIDES ? { rides: together.length } : null;
+  if (isLateOpening({ from: ride?.downFrom })) return { kind: 'opening' };
+  if (ride?.status === 'DOWN' && ride.downSince) {
+    const together = Object.values(rides).filter(
+      (r) =>
+        r.status === 'DOWN' &&
+        r.downSince &&
+        !isLateOpening({ from: r.downFrom }) &&
+        Math.abs(r.downSince - ride.downSince) <= CLUSTER_WINDOW_MS
+    );
+    if (together.length >= CLUSTER_MIN_RIDES) return { kind: 'hold', rides: together.length };
+  }
+  return { kind: 'breakdown' };
 }
 
 // Pick the most specific history that has enough data, and estimate from it.
-//   history: { [parkId]: episode[] }
-// Breakdowns use the ride's own record when it has enough, else the park's.
-// Weather holds are a park-wide event, so they always pool the park, and fall
-// back to every park when this one has not had enough storms yet.
-export function estimate(history, parkId, rideId, elapsedMin, weather) {
-  const kind = weather ? 'weather' : 'breakdown';
+//   history: { [parkId]: episode[] }, kind: 'breakdown' | 'opening' | 'hold'
+// Breakdowns and late openings use the ride's own record when it has enough,
+// else the park's. A hold is a park-wide event, so it pools the park. Rarer
+// kinds fall back to every park when this one has not seen enough of them.
+export function estimate(history, parkId, rideId, elapsedMin, kind) {
   const park = (history[parkId] || []).filter((ep) => ep.kind === kind);
-  const pools = weather
-    ? [['park', park], ['all parks', Object.values(history).flat().filter((ep) => ep.kind === kind)]]
-    : [['ride', park.filter((ep) => ep.rideId === rideId), RIDE_MIN_SAMPLES], ['park', park]];
+  const everywhere = () => Object.values(history).flat().filter((ep) => ep.kind === kind);
+  const ride = ['ride', park.filter((ep) => ep.rideId === rideId), RIDE_MIN_SAMPLES];
+  const pools = {
+    breakdown: [ride, ['park', park]],
+    opening: [ride, ['park', park], ['all parks', everywhere()]],
+    hold: [['park', park], ['all parks', everywhere()]],
+  }[kind];
 
   let sawHistory = false;
   for (const [basis, eps, min = MIN_SAMPLES] of pools) {

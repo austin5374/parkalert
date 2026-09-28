@@ -52,9 +52,16 @@ test('a ride still DOWN at day end is censored at the end of the day', () => {
   assert.ok(stayedDown(eps[0]));
 });
 
-test('going DOWN straight from CLOSED (failing to open) still counts', () => {
+test('going DOWN straight from CLOSED is a late opening, not a breakdown', () => {
   const eps = extractEpisodes({ entities: [ride('a', [['12:00', 'DOWN'], ['12:40', 'OPERATING']])] });
   assert.equal(eps[0].minutes, 40);
+  assert.equal(eps[0].from, 'CLOSED');
+  assert.equal(eps[0].kind, 'opening');
+});
+
+test('a breakdown records that it went down from OPERATING', () => {
+  const [ep] = extractEpisodes({ entities: [ride('a', [['12:00', 'OPERATING'], ['13:00', 'DOWN'], ['13:30', 'OPERATING']])] });
+  assert.equal(ep.from, 'OPERATING');
 });
 
 test('non-attractions are ignored', () => {
@@ -67,22 +74,33 @@ test('under a minute back to OPERATING is a blip', () => {
   assert.equal(ep.kind, 'blip');
 });
 
-test('five rides down within ten minutes is a weather hold; four is not', () => {
-  const mk = (n, gapMin) =>
-    Array.from({ length: n }, (_, i) => ({
-      rideId: `r${i}`,
-      start: i * gapMin * 60_000,
-      minutes: 45,
-      endedAs: 'OPERATING',
-    }));
-  assert.ok(classify(mk(5, 2)).every((ep) => ep.kind === 'weather'));
-  assert.ok(classify(mk(4, 2)).every((ep) => ep.kind === 'breakdown'));
+const cluster = (n, gapMin, from = 'OPERATING') =>
+  Array.from({ length: n }, (_, i) => ({
+    rideId: `r${i}`,
+    start: i * gapMin * 60_000,
+    minutes: 45,
+    from,
+    endedAs: 'OPERATING',
+  }));
+
+test('five running rides down within ten minutes is a park-wide hold; four is not', () => {
+  assert.ok(classify(cluster(5, 2)).every((ep) => ep.kind === 'hold'));
+  assert.ok(classify(cluster(4, 2)).every((ep) => ep.kind === 'breakdown'));
   // Five rides, but spread over an hour: independent breakdowns.
-  assert.ok(classify(mk(5, 15)).every((ep) => ep.kind === 'breakdown'));
+  assert.ok(classify(cluster(5, 15)).every((ep) => ep.kind === 'breakdown'));
 });
 
-test('one ride flapping five times is not a weather hold', () => {
-  const eps = Array.from({ length: 5 }, (_, i) => ({ rideId: 'a', start: i * 60_000, minutes: 3, endedAs: 'OPERATING' }));
+// Disneyland, 2026-09-21 and 22 at 8:01am: six or seven rides went CLOSED to
+// DOWN together at rope drop. The first classifier called that weather.
+test('several rides failing to open together at rope drop is not a hold', () => {
+  assert.ok(classify(cluster(7, 1, 'CLOSED')).every((ep) => ep.kind === 'opening'));
+  // Late openers do not count toward a hold for the running rides either.
+  const mixed = classify([...cluster(4, 1), ...cluster(3, 1, 'CLOSED').map((ep) => ({ ...ep, rideId: `x${ep.rideId}` }))]);
+  assert.ok(mixed.filter((ep) => ep.from === 'OPERATING').every((ep) => ep.kind === 'breakdown'));
+});
+
+test('one ride flapping five times is not a park-wide hold', () => {
+  const eps = Array.from({ length: 5 }, (_, i) => ({ rideId: 'a', start: i * 60_000, minutes: 3, from: 'OPERATING', endedAs: 'OPERATING' }));
   assert.ok(classify(eps).every((ep) => ep.kind === 'breakdown'));
 });
 

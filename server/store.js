@@ -11,6 +11,7 @@ const DATA_DIR =
   path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const TRIPS_FILE = path.join(DATA_DIR, 'trips.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 
 function load(file, fallback) {
   try {
@@ -36,6 +37,15 @@ export const trips = load(TRIPS_FILE, {});
 // parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides } }
 //   rides: { [rideId]: { name, status, since, downSince, waitTime } }
 export const parkState = load(STATE_FILE, {});
+
+// history: { fetched: { [parkId]: [YYYY-MM-DD, ...] }, episodes: { [parkId]: episode[] } }
+//   fetched: park-local days already pulled from the archive, so each is fetched once
+//   episodes: see server/episodes.js
+export const history = load(HISTORY_FILE, { fetched: {}, episodes: {} });
+
+export function saveHistory() {
+  saveAtomic(HISTORY_FILE, history);
+}
 
 export function saveTrips() {
   saveAtomic(TRIPS_FILE, trips);

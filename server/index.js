@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips } from './store.js';
-import { startPolling, pollPark, simulateTransition } from './poller.js';
+import { startPolling, pollPark, simulateTransition, downOutlook } from './poller.js';
+import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
 
 const PORT = process.env.PORT || 3000;
@@ -65,7 +66,13 @@ async function dashboard(trip) {
     lastPoll: state.lastPoll || null,
     lastError: state.lastError || null,
     now: Date.now(),
-    rides: Object.entries(state.rides || {}).map(([id, r]) => ({ id, ...r })),
+    rides: Object.entries(state.rides || {}).map(([id, r]) => ({
+      id,
+      ...r,
+      ...(r.status === 'DOWN' && r.downSince
+        ? { outlook: downOutlook(trip.parkId, id, (Date.now() - r.downSince) / 60_000) }
+        : {}),
+    })),
   };
 }
 
@@ -175,4 +182,5 @@ server.listen(PORT, () => {
   console.log(`[server] ParkAlert listening on http://localhost:${PORT}`);
   console.log(`[server] ${Object.keys(trips).length} trip(s) loaded`);
   startPolling();
+  startHistorySync();
 });
