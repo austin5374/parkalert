@@ -1094,6 +1094,10 @@ function renderAll() {
   renderDown();
   renderRides();
   renderTrip();
+  // The open ride sheet's switch follows the trip too, so a failed save
+  // moves it back along with the list.
+  const sw = document.querySelector('#sheet .switch[data-act=follow]');
+  if (sw && sheetContext?.type === 'ride') sw.setAttribute('aria-checked', String(isFollowing(sheetContext.id)));
 }
 
 /* ---------- Sheets ---------- */
@@ -1447,10 +1451,7 @@ function rideSheet(r, detail, back = null) {
       <span class="row-label">Alerts for this ride</span>
       <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}" data-act="follow"></button>
     </div></div>`);
-  follow.querySelector('.switch').onclick = (e) => {
-    toggleFollow(r.id);
-    e.currentTarget.setAttribute('aria-checked', String(isFollowing(r.id)));
-  };
+  follow.querySelector('.switch').onclick = () => toggleFollow(r.id);
   wrap.appendChild(follow);
   wrap.appendChild(waitAlertBlock(r));
 
