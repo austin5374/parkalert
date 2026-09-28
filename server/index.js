@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, parkDayStart } from './insights.js';
-import { startPolling, pollPark, simulateTransition, downOutlook, APP_URL } from './poller.js';
+import { startPolling, pollPark, simulateTransition, downOutlook, currentSchedule, APP_URL } from './poller.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
 
@@ -58,15 +58,16 @@ async function dashboard(trip) {
   if (!parkState[trip.parkId]?.lastPoll) await pollPark(trip.parkId);
   const state = parkState[trip.parkId] || {};
   const park = getPark(trip.parkId);
+  const schedule = currentSchedule(state);
   return {
     trip: tripView(trip),
     park: {
       id: trip.parkId,
       name: park?.name || 'Unknown park',
       timezone: state.timezone || null,
-      openingTime: state.schedule?.openingTime || null,
-      closingTime: state.schedule?.closingTime || null,
-      lateEvent: state.schedule?.lateEvent || null,
+      openingTime: schedule?.openingTime || null,
+      closingTime: schedule?.closingTime || null,
+      lateEvent: schedule?.lateEvent || null,
     },
     ntfyBase: NTFY_BASE,
     recent: (state.recent || []).filter((e) => e.at > Date.now() - 2 * 3600_000),

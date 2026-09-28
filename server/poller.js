@@ -4,6 +4,7 @@ import { trips, parkState, saveState, activeParkIds, history } from './store.js'
 import { getPark } from './parks.js';
 import { estimate, describe, classifyLive } from './predict.js';
 import { recordWaits } from './insights.js';
+import { localDate } from './history.js';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -51,8 +52,18 @@ function localTime(ts, timezone) {
   }).format(new Date(ts));
 }
 
+// Hours count only on the park day they describe. If today's schedule could
+// not be fetched, yesterday's is still in state, and its closing time would
+// mute every alert all day; unknown hours mean no auto-mute instead.
+export function currentSchedule(state, now = Date.now()) {
+  const s = state?.schedule;
+  if (!s?.date) return null;
+  return s.date === localDate(now, state.timezone || s.timezone || 'America/New_York') ? s : null;
+}
+
 function isPastClosing(state, now = Date.now()) {
-  const closing = state?.schedule?.lastCloseTime ?? state?.schedule?.closingTime;
+  const s = currentSchedule(state, now);
+  const closing = s?.lastCloseTime ?? s?.closingTime;
   return closing ? now > new Date(closing).getTime() : false;
 }
 
