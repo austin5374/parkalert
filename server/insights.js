@@ -60,7 +60,7 @@ export function rideToday(recent = [], rideId, dayStart) {
 
 // Park-wide summary: which rides have been least reliable lately, and how long
 // a typical breakdown here lasts.
-export function parkSummary(episodes, fetchedDates, names, now = Date.now(), days = 7) {
+export function parkSummary(episodes, fetchedDates, names, days = 7) {
   const dates = new Set([...new Set(fetchedDates)].sort().slice(-days));
   const window = episodes.filter((ep) => dates.has(ep.date) && real(ep));
   const byRide = new Map();
