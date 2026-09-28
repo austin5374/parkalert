@@ -69,3 +69,10 @@ test('after a gap in polling, the wait chart breaks instead of holding the old w
   const w = recordWaits({ a: [[1000, 30]] }, { a: { status: 'OPERATING', waitTime: 30 } }, 9000, 2000);
   assert.deepEqual(w.a, [[1000, 30], [2000, null], [9000, 30]]);
 });
+
+test("on daylight-saving days the park's day still starts at midnight", () => {
+  // Nov 1 2026: clocks go back at 2am. 3pm EST is 16 hours after midnight EDT.
+  assert.equal(new Date(parkDayStart('America/New_York', Date.parse('2026-11-01T20:00:00Z'))).toISOString(), '2026-11-01T04:00:00.000Z');
+  // Mar 8 2026: clocks go forward at 2am. 3pm EDT is 14 hours after midnight EST.
+  assert.equal(new Date(parkDayStart('America/New_York', Date.parse('2026-03-08T19:00:00Z'))).toISOString(), '2026-03-08T05:00:00.000Z');
+});

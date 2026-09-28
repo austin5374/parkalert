@@ -7,13 +7,22 @@ export function localDate(ts, timezone) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(ts));
 }
 
-// Midnight in the park's zone, as epoch ms, for "today" filters.
+// Midnight in the park's zone, as epoch ms, for "today" filters. Found by
+// walking from the wall-clock reading, so a daylight-saving day (23 or 25
+// hours long) still starts at midnight rather than an hour off.
 export function parkDayStart(timezone, now = Date.now()) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric',
-    }).formatToParts(new Date(now)).map((p) => [p.type, Number(p.value)])
-  );
-  const sinceMidnight = ((parts.hour * 60 + parts.minute) * 60 + parts.second) * 1000;
-  return now - sinceMidnight - (now % 1000);
+  const wallOf = (t) => {
+    const p = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone, hourCycle: 'h23',
+        year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+      }).formatToParts(new Date(t)).filter((x) => x.type !== 'literal').map((x) => [x.type, Number(x.value)])
+    );
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  };
+  const [y, m, d] = localDate(now, timezone).split('-').map(Number);
+  const midnight = Date.UTC(y, m - 1, d);
+  let t = midnight - (wallOf(now) - (now - (now % 1000)));
+  for (let i = 0; i < 2; i++) t += midnight - wallOf(t);
+  return t;
 }
