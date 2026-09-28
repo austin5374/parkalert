@@ -1,4 +1,5 @@
 import http from 'node:http';
+import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -333,40 +334,54 @@ async function handleApi(req, res, url) {
   json(res, 404, { error: 'not found' });
 }
 
+// The app's files never change while a version is deployed, so each is read,
+// version-stamped (the page and the service worker carry APP_VERSION) and
+// gzipped once, then served from memory. Text is sent compressed: app.js is
+// 110 KB raw, a real wait on one bar of park signal. Every file revalidates
+// by ETag, which is the version, so a deploy is picked up on the next load
+// and an unchanged file costs a 304.
+const STAMPED = new Set(['index.html', 'sw.js']);
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.webmanifest', '.svg']);
+const fileCache = new Map(); // relative path -> { type, raw, gz, etag }
+
+function loadStatic(rel) {
+  if (fileCache.has(rel)) return fileCache.get(rel);
+  const ext = path.extname(rel);
+  let raw = fs.readFileSync(path.join(PUBLIC_DIR, rel));
+  if (STAMPED.has(rel)) raw = Buffer.from(raw.toString('utf8').replaceAll('__APP_VERSION__', APP_VERSION));
+  const entry = {
+    type: MIME[ext] || 'application/octet-stream',
+    raw,
+    gz: COMPRESSIBLE.has(ext) ? zlib.gzipSync(raw, { level: 9 }) : null,
+    etag: `"${APP_VERSION}-${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12)}"`,
+  };
+  fileCache.set(rel, entry);
+  return entry;
+}
+
 function serveStatic(req, res, url) {
-  let filePath = path.normalize(path.join(PUBLIC_DIR, url.pathname));
+  let filePath = path.normalize(path.join(PUBLIC_DIR, decodeURIComponent(url.pathname)));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     return res.end();
   }
+  // Any path that isn't a file is a screen of the app (/, /ride/<id>, a
+  // tapped push's link), and gets the page, which routes itself.
   if (url.pathname === '/' || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     filePath = path.join(PUBLIC_DIR, 'index.html');
   }
-  const ext = path.extname(filePath);
-  if (filePath === path.join(PUBLIC_DIR, 'index.html')) {
-    const etag = `"html-${APP_VERSION}"`;
-    if (req.headers['if-none-match'] === etag) {
-      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
-      return res.end();
-    }
-    res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ETag: etag });
-    return res.end(fs.readFileSync(filePath, 'utf8').replace('__APP_VERSION__', APP_VERSION));
-  }
-  // Every file revalidates. With a max-age on scripts, a phone could pair a
-  // freshly deployed index.html with the previous app.js for five minutes and
-  // break; an unchanged file costs a 304 and no body.
-  const stat = fs.statSync(filePath);
-  const etag = `"${stat.size.toString(36)}-${Math.floor(stat.mtimeMs).toString(36)}"`;
-  if (req.headers['if-none-match'] === etag) {
-    res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+  const file = loadStatic(path.relative(PUBLIC_DIR, filePath));
+  const headers = { 'Content-Type': file.type, 'Cache-Control': 'no-cache', ETag: file.etag, Vary: 'Accept-Encoding' };
+  if (req.headers['if-none-match'] === file.etag) {
+    res.writeHead(304, headers);
     return res.end();
   }
-  res.writeHead(200, {
-    'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': 'no-cache',
-    ETag: etag,
-  });
-  fs.createReadStream(filePath).pipe(res);
+  const gzip = file.gz && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+  if (gzip) headers['Content-Encoding'] = 'gzip';
+  const body = gzip ? file.gz : file.raw;
+  headers['Content-Length'] = body.length;
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 export const server = http.createServer(async (req, res) => {

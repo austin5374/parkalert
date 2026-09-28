@@ -43,17 +43,6 @@ const platform = /android/i.test(navigator.userAgent)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const icon = (name, cls = '') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
-// Re-rendering a list replaces its nodes, which drops keyboard and
-// screen-reader focus to the top of the page every refresh and on every
-// toggle. Note which control had focus and put it back on its replacement.
-function keepFocus(root, render) {
-  const a = document.activeElement;
-  const attr = a && a !== root && root.contains(a) ? ['data-id', 'data-ride', 'data-act'].find((n) => a.hasAttribute(n)) : null;
-  const selector = attr && `${a.tagName.toLowerCase()}[${attr}="${CSS.escape(a.getAttribute(attr))}"]`;
-  render();
-  if (selector && !root.contains(a)) root.querySelector(selector)?.focus({ preventScroll: true });
-}
-
 function el(html) {
   const t = document.createElement('template');
   t.innerHTML = html.trim();
@@ -215,6 +204,83 @@ const haptic = (() => {
   };
 })();
 
+/* ---------- In-place updates ---------- */
+// Refreshes patch what is on screen instead of replacing it. Replacing the
+// nodes every 15 seconds was the root of most of the jank: a tap landing
+// mid-rebuild hit a node that no longer existed, press states and focus cut
+// out, and a switch was redrawn already in its new position, so it never
+// slid. Nodes are matched by data-key (or data-ride, data-id, id) and
+// otherwise by position and tag; only changed attributes and text are
+// touched. A chart box is rebuilt only when its data-sig changes.
+// Which attribute a key came from is part of it: a row's name button
+// (data-ride) and its switch (data-id) carry the same ride id.
+const keyOf = (n) => {
+  if (n.nodeType !== 1) return null;
+  for (const [attr, tag] of [['data-key', 'k'], ['data-ride', 'r'], ['data-id', 'i'], ['id', '#']]) {
+    const v = n.getAttribute(attr);
+    if (v) return `${tag}:${v}`;
+  }
+  return null;
+};
+
+function fragment(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content;
+}
+
+function morph(target, next) {
+  morphChildren(target, typeof next === 'string' ? fragment(next) : next);
+}
+
+function morphChildren(parent, src) {
+  const keyed = new Map();
+  for (const n of parent.childNodes) {
+    const k = keyOf(n);
+    if (k != null) keyed.set(`${n.nodeName}#${k}`, n);
+  }
+  let ref = parent.firstChild;
+  for (const nn of [...src.childNodes]) {
+    if (nn.nodeType === 8) continue; // comments
+    const k = keyOf(nn);
+    let match = null;
+    if (k != null) {
+      match = keyed.get(`${nn.nodeName}#${k}`) || null;
+      if (match) keyed.delete(`${nn.nodeName}#${k}`);
+    } else if (ref && keyOf(ref) == null && ref.nodeName === nn.nodeName) {
+      match = ref;
+    }
+    if (match) {
+      if (match === ref) ref = ref.nextSibling;
+      else parent.insertBefore(match, ref);
+      patchNode(match, nn);
+    } else {
+      parent.insertBefore(nn, ref);
+    }
+  }
+  while (ref) {
+    const next = ref.nextSibling;
+    ref.remove();
+    ref = next;
+  }
+}
+
+function patchNode(a, b) {
+  if (a.nodeType === 3) {
+    if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue;
+    return;
+  }
+  if (a.nodeType !== 1) return;
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
+  for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
+  if (a.hasAttribute('data-chart')) {
+    // Same data: keep the drawn chart, with its scrub position and listeners.
+    if (a._drawn !== a.getAttribute('data-sig')) a.replaceChildren();
+    return;
+  }
+  morphChildren(a, b);
+}
+
 /* ---------- Spring (damping ratio + response, as Apple frames it) ---------- */
 function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate, onDone }) {
   const k = (2 * Math.PI / response) ** 2;
@@ -243,74 +309,78 @@ function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate
 }
 
 // Where a flick would come to rest, the way scroll deceleration projects it.
-// 0.998 is UIScrollView's normal rate: a short, fast flick carries far.
-const project = (v, rate = 0.998) => ((v / 1000) * rate) / (1 - rate);
+const project = (v, rate = 0.99) => ((v / 1000) * rate) / (1 - rate);
 
 function rubberband(overshoot, dimension, constant = 0.55) {
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
 }
 
+// Velocity in px/s from the last 80 ms of samples: a finger that stopped
+// before lifting has none, however fast it moved earlier.
+function releaseVelocity(samples, t) {
+  const s = samples.filter((p) => t - p.t <= 80);
+  const a = s[0], b = s[s.length - 1];
+  return s.length > 1 && b.t > a.t ? ((b.v - a.v) / (b.t - a.t)) * 1000 : 0;
+}
+
+/* ---------- Back ---------- */
+// Each page and the sheet add one history entry, so Back (the browser's,
+// Android's, or a page's own chevron) closes the top one instead of leaving
+// the app. Closing one any other way (a swipe, the scrim, a button) closes it
+// at once and then takes its entry back off, quietly.
+const backStack = []; // { onBack, done }
+let quietPops = 0;
+function addBack(onBack, url) {
+  const entry = { onBack, done: false };
+  backStack.push(entry);
+  history.pushState({ parkalert: backStack.length }, '', url || location.pathname + location.search);
+  return entry;
+}
+function leave(entry, closeNow) {
+  if (!entry || entry.done) return;
+  entry.done = true;
+  closeNow?.();
+  quietPops++;
+  history.back();
+}
+addEventListener('popstate', () => {
+  if (quietPops) {
+    quietPops--;
+    backStack.pop();
+    return;
+  }
+  const entry = backStack.pop();
+  if (entry && !entry.done) {
+    entry.done = true;
+    entry.onBack();
+  }
+});
+
 /* ---------- Sheet ---------- */
+// For short tasks only (pause, park, leave, alert setup, an invite): one at a
+// time, never stacked. Detail lives on pages. It drags down from anywhere
+// while its content is scrolled to the top, and a flick closes it.
 const sheet = (() => {
   const layer = $('#sheet-layer'), panel = $('#sheet'), scrim = $('#scrim'), body = $('#sheet-body');
-  let y = 0, h = 1, anim = null, isOpen = false, returnFocus = null, onClosed = null;
-  // closing: the close animation is running (isOpen is already false).
-
-  // The sheet's height changes after it opens (a ride's history loads in),
-  // so it is read again whenever a close or a drag needs it.
+  let y = 0, h = 1, anim = null, isOpen = false, closing = false, entry = null, returnFocus = null, onClosed = null;
   const measure = () => { h = panel.getBoundingClientRect().height || h; return h; };
-  // Detents, as in Maps: a tall ride sheet rests at a medium height (rest > 0,
-  // the offset that leaves 55% of the screen showing) and a drag up or a
-  // flick takes it to full height (rest = 0). Short sheets only have full.
-  let rest = 0;
-  let medium = 0; // the medium detent's offset, or 0 when there isn't one
-  let wantMedium = false; // this sheet has a medium detent once it is tall enough
-  let pendingMedium = false; // opened short; take the medium detent when it grows
-  const MEDIUM_SHARE = 0.55;
-  // Worked out again whenever the content's height changes (a ride's
-  // history loads after the sheet opens): a sheet resting at medium stays
-  // there, now with the same 55% of the screen showing.
-  const setDetents = () => {
-    const wasMedium = medium > 0 && rest === medium;
-    measure();
-    medium = wantMedium && h > innerHeight * (MEDIUM_SHARE + 0.07) ? Math.round(h - innerHeight * MEDIUM_SHARE) : 0;
-    return wasMedium;
-  };
-  const app = $('#app');
-  // While a full-height sheet is up, the page behind recedes a little, as
-  // behind an iOS page sheet; nothing moves under reduced motion.
-  const recede = (v) => {
-    const full = h >= innerHeight - 80 && !reducedMotion();
-    const p = full ? Math.max(0, Math.min(1, 1 - v / (medium || h))) : 0;
-    app.style.transform = p ? `scale(${1 - 0.06 * p})` : '';
-    app.style.borderRadius = p ? `${Math.round(12 * p)}px` : '';
-    document.documentElement.classList.toggle('sheet-up', p > 0);
-  };
   const paint = (v) => {
     y = v;
-    panel.style.transform = `translateY(${v}px)`;
+    panel.style.transform = `translate3d(0,${v}px,0)`;
     scrim.style.opacity = String(Math.max(0, Math.min(1, 1 - v / h)));
-    recede(v);
   };
-
   function animateTo(target, velocity = 0, damping = 1, done) {
     anim?.stop();
-    if (reducedMotion()) {
-      paint(target);
-      done?.();
-      return;
-    }
+    // Hidden, frames don't run: land at once rather than wait for the next look.
+    if (reducedMotion() || document.hidden) { paint(target); done?.(); return; }
     // Always from the live, on-screen value, so a sheet grabbed mid-flight never jumps.
     anim = spring({ from: y, to: target, velocity, damping, response: 0.32, onUpdate: paint, onDone: done });
   }
+  const background = () => [$('#app'), $('#setup'), $('#pages')];
+  const setInert = (on) => background().forEach((n) => { n.inert = on; });
 
-  // While a sheet is up, the page behind it is out of reach: Tab stays in the
-  // sheet and screen readers don't wander into the page, as aria-modal says.
-  const background = [$('#app'), $('#setup')];
-  const setInert = (on) => background.forEach((n) => { n.inert = on; });
-
-  function finishClose() {
-    recede(h);
+  function finish() {
+    closing = false;
     layer.classList.add('hidden');
     setInert(false);
     body.replaceChildren();
@@ -319,137 +389,59 @@ const sheet = (() => {
     onClosed = null;
     cb?.();
   }
+  function slideAway(velocity = 0) {
+    isOpen = false;
+    closing = true;
+    animateTo(measure(), velocity, 1, finish);
+  }
 
-  // Back (the browser's, Android's, or a sheet's own back button) closes the
-  // sheet, or steps back through sheets opened from sheets, instead of
-  // leaving the app. Each open or pushed view adds a history entry; closing
-  // any other way (scrim, drag, Escape) takes them back off.
-  let depth = 0; // history entries this sheet has added
-  let skipPops = 0; // popstate events caused by our own history.go()
-  let onBack = null; // app hook: step back one view; false when at the first
-  let entryAfterPop = false; // a sheet opened while our history.go() was still pending
-  addEventListener('popstate', () => {
-    if (skipPops) {
-      skipPops--;
-      if (!skipPops && entryAfterPop) { entryAfterPop = false; history.pushState({ parkalertSheet: depth }, ''); }
+  function open(content, { onClose } = {}) {
+    if (isOpen) {
+      // Already up: a new task replaces the old one in place.
+      onClosed?.();
+      onClosed = onClose || null;
+      body.replaceChildren(content);
+      body.scrollTop = 0;
+      measure();
       return;
     }
-    if (!isOpen) { depth = 0; return; }
-    depth = Math.max(0, depth - 1);
-    if (onBack?.()) return;
-    depth = 0;
-    dismiss();
-  });
-  // history.go() is asynchronous: an entry pushed before it lands would be
-  // the one it takes away, so it waits for that popstate.
-  const addEntry = () => {
-    if (skipPops) { entryAfterPop = true; depth++; return; }
-    history.pushState({ parkalertSheet: depth + 1 }, '');
-    depth++;
-  };
-
-  function open(content, { onClose, detent = 'large' } = {}) {
-    // Opened again while still closing: finish the old sheet's bookkeeping
-    // and rise from where it is now, rather than snapping to the bottom.
-    const wasClosing = closing;
-    if (closing) {
-      closing = false;
-      const cb = onClosed;
-      onClosed = null;
-      cb?.();
-    }
-    // Focus goes back to what opened the first sheet, not to a row inside a
-    // sheet that is about to be replaced.
-    if (!isOpen) {
-      if (!wasClosing) returnFocus = document.activeElement;
-      addEntry();
-    }
+    if (closing) { closing = false; onClosed?.(); }
+    else returnFocus = document.activeElement;
     onClosed = onClose || null;
     body.replaceChildren(content);
     body.scrollTop = 0;
     layer.classList.remove('hidden');
     setInert(true);
-    h = panel.getBoundingClientRect().height || 400;
-    wantMedium = detent === 'medium';
-    setDetents();
-    // A medium sheet that opens short (its content still loading) takes the
-    // medium detent as soon as it grows into one.
-    rest = medium;
-    pendingMedium = wantMedium && !medium;
-    if (!isOpen && !wasClosing) paint(h);
+    const wasHidden = !closing && y >= h - 1;
+    measure();
+    if (wasHidden || !anim) paint(h);
     isOpen = true;
-    animateTo(rest);
+    entry = addBack(() => slideAway());
+    animateTo(0);
     panel.focus({ preventScroll: true });
-  }
-
-  // A view opened from the current one (a ride from the hold list): same
-  // sheet, new content, one more step for Back.
-  function push(content) {
-    addEntry();
-    replace(content);
-  }
-  function replace(content) {
-    body.replaceChildren(content);
-    body.scrollTop = 0;
-    panel.focus({ preventScroll: true });
-    if (setDetents()) {
-      rest = medium;
-      animateTo(rest);
-    }
-  }
-
-  let closing = false;
-  function dismiss(velocity = 0) {
-    if (!isOpen) return;
-    isOpen = false;
-    closing = true;
-    animateTo(measure(), velocity, 1, () => { closing = false; finishClose(); });
   }
   function close(velocity = 0) {
     if (!isOpen) return;
-    if (depth) {
-      skipPops++;
-      history.go(-depth);
-      depth = 0;
-    }
-    dismiss(velocity);
+    leave(entry, () => slideAway(velocity));
   }
 
-  // Drag: 1:1 with the finger from where it grabbed, rubber-banded above the
-  // top, and on release the flick's projected resting point decides.
+  // Drag, 1:1 from where the finger landed, rubber-banded above the top.
   let drag = null;
-  function begin(clientY, t) {
-    anim?.stop();
-    measure();
-    drag = { startY: clientY, from: y, samples: [{ t, y }] };
-  }
-  function follow(clientY, t) {
-    let next = drag.from + (clientY - drag.startY);
+  const begin = (cy, t) => { anim?.stop(); measure(); drag = { startY: cy, from: y, samples: [{ t, v: y }] }; };
+  const follow = (cy, t) => {
+    let next = drag.from + (cy - drag.startY);
     if (next < 0) next = rubberband(next, h);
     paint(next);
-    drag.samples.push({ t, y: next });
+    drag.samples.push({ t, v: next });
     if (drag.samples.length > 8) drag.samples.shift();
-  }
-  function release(t) {
-    // Only the last 80 ms count: a finger that stopped before lifting has no
-    // velocity, however fast it was moving earlier.
-    const s = drag.samples.filter((p) => t - p.t <= 80);
-    const a = s[0], b = s[s.length - 1];
-    const v = s.length > 1 && b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
+  };
+  const release = (t) => {
+    const v = releaseVelocity(drag.samples, t);
     drag = null;
-    const to = y + project(v);
-    // Past 45% of the way from the lowest detent to the bottom closes; else
-    // the nearest detent to where the flick would come to rest.
-    const low = medium || 0;
-    if (to > low + (h - low) * 0.45) return close(v);
-    const next = medium && to > medium / 2 ? medium : 0;
-    if (next !== rest) haptic(); // settling into another detent
-    rest = next;
-    // Settling back after a flick carries its momentum, so a little give reads right.
-    animateTo(rest, v, Math.abs(v) > 300 ? 0.82 : 1);
-  }
+    if (y + project(v, 0.995) > h * 0.45) close(v);
+    else animateTo(0, v, Math.abs(v) > 300 ? 0.82 : 1);
+  };
 
-  // The grabber drags with any pointer (a mouse included).
   const grabber = $('#grabber');
   grabber.addEventListener('pointerdown', (e) => {
     if (e.button > 0 || !isOpen) return;
@@ -462,14 +454,13 @@ const sheet = (() => {
     grabber.addEventListener(type, (e) => { if (drag?.id === e.pointerId) release(e.timeStamp); });
   }
 
-  // Anywhere else on the sheet, as in Maps: a downward pull while the
-  // content is at the top moves the sheet; otherwise the content scrolls. A
-  // scroll that reaches the top mid-gesture hands over to the sheet, one
-  // continuous motion. Charts keep their horizontal scrub.
-  let touch = null; // { startY, lastY, mode: null | 'sheet' | 'scroll' }
+  // Anywhere else: a downward pull while the content is at its top moves the
+  // sheet; otherwise the content scrolls. One continuous motion either way.
+  let touch = null;
   body.addEventListener('touchstart', (e) => {
-    if (!isOpen || e.touches.length > 1 || e.target.closest('.chart')) { touch = null; return; }
-    touch = { startY: e.touches[0].clientY, lastY: e.touches[0].clientY, mode: null };
+    touch = !isOpen || e.touches.length > 1 || e.target.closest('.chart, input')
+      ? null
+      : { startY: e.touches[0].clientY, lastY: e.touches[0].clientY, mode: null };
   }, { passive: true });
   body.addEventListener('touchmove', (e) => {
     if (!touch) return;
@@ -481,12 +472,8 @@ const sheet = (() => {
       follow(cy, e.timeStamp);
       return;
     }
-    const atTop = body.scrollTop <= 0;
-    if (touch.mode === null && Math.abs(cy - touch.startY) < 6) return;
-    // Below full height, the content doesn't scroll: the sheet moves, up to
-    // full height or down to close.
-    const belowFull = y > 0.5;
-    if (((atTop && goingDown) || belowFull) && e.cancelable) {
+    if (touch.mode || Math.abs(cy - touch.startY) < 6) return;
+    if (body.scrollTop <= 0 && goingDown && e.cancelable) {
       touch.mode = 'sheet';
       e.preventDefault();
       begin(cy, e.timeStamp);
@@ -502,69 +489,158 @@ const sheet = (() => {
   body.addEventListener('touchcancel', touchEnd);
 
   scrim.addEventListener('click', () => close());
-  // A drag on the dimmed page is not a scroll of the page under it (iOS
-  // would chain it through the fixed layer); the page stays put.
+  // A drag on the dimmed page is not a scroll of the page under it.
   scrim.addEventListener('touchmove', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
-  // A finger on the sheet (dragging it, scrubbing a chart) or a scroll still
-  // coasting holds off live refreshes: replacing the content then would
-  // jump under the finger or stop the momentum dead. The newest refresh
-  // waits and lands once the sheet is still.
-  let touching = false;
-  let lastScroll = 0;
-  let pending = null; // { content, after }
-  let retry = null;
-  body.addEventListener('pointerdown', () => { touching = true; });
-  body.addEventListener('touchstart', () => { touching = true; }, { passive: true });
-  grabber.addEventListener('pointerdown', () => { touching = true; });
-  body.addEventListener('scroll', () => { lastScroll = performance.now(); }, { passive: true });
-  const settle = () => {
-    touching = false;
-    flush();
-  };
-  for (const t of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) addEventListener(t, settle, true);
-
-  const busy = () => touching || !!drag || performance.now() - lastScroll < 250;
-  function flush() {
-    clearTimeout(retry);
-    if (!pending || !isOpen) { pending = null; return; }
-    if (busy()) { retry = setTimeout(flush, 250); return; }
-    const { content, after } = pending;
-    pending = null;
-    const top = body.scrollTop;
-    keepFocus(body, () => body.replaceChildren(content));
-    body.scrollTop = top;
-    const wasMedium = setDetents();
-    if (medium && (wasMedium || pendingMedium)) {
-      pendingMedium = false;
-      rest = medium;
-      animateTo(rest);
-    }
-    after?.();
-  }
-
-  // Swap content in place (live refresh), keeping the reader's scroll
-  // position and focus.
-  function update(content, after) {
-    if (!isOpen) return;
-    pending = { content, after };
-    flush();
-  }
-
-  return {
-    open, push, replace, update, close: () => close(),
-    get isOpen() { return isOpen; },
-    set onBack(fn) { onBack = fn; },
-  };
+  return { open, close: () => close(), get isOpen() { return isOpen; } };
 })();
 
-// back: the label of the view this one was opened from ("Hold"), shown as
-// a back button above the title, as a pushed card in Find My has.
-function sheetHead(title, html, back = null) {
-  return `<div class="sheet-head">${back ? `<button class="sheet-back pressable" type="button" data-act="back">${icon('chevron', 'back-chevron')}<span>${esc(back)}</span></button>` : ''}<h2 class="title-2" id="sheet-title">${esc(title)}</h2>${html ? `<p>${html}</p>` : ''}</div>`;
+function sheetHead(title, html) {
+  return `<div class="sheet-head"><h2 class="title-2" id="sheet-title">${esc(title)}</h2>${html ? `<p>${html}</p>` : ''}</div>`;
 }
-document.addEventListener('click', (e) => { if (e.target.closest('#sheet [data-act=back]')) history.back(); });
+
+/* ---------- Pages ---------- */
+// A ride, the park or a hold opens as a page that slides in from the right,
+// as a detail screen does in any iPhone app (and in the WDW transport app):
+// a back chevron naming where you came from, its own address, Back and a
+// swipe from the left edge to go back. Pages stack (a ride from a hold) and
+// each stays live: refreshes patch it in place.
+//
+// A page is { key, url, back, title(), render() -> html, charts?() -> data,
+// load?() }. The page underneath is never transformed when it is the app
+// itself: a transform there would break the fixed tab bar.
+const pages = (() => {
+  const host = $('#pages');
+  const shade = host.querySelector('.page-shade');
+  const stack = [];
+  const width = () => innerWidth;
+
+  const paint = (p, x) => {
+    p.x = x;
+    p.el.style.transform = `translate3d(${x}px,0,0)`;
+    const i = stack.indexOf(p);
+    const below = stack[i - 1];
+    const progress = 1 - x / width();
+    if (below) below.el.style.transform = `translate3d(${(-0.3 * width() * progress).toFixed(1)}px,0,0)`;
+    else shade.style.opacity = String(progress);
+  };
+  let anim = null;
+  function animate(p, to, velocity = 0, done) {
+    anim?.stop();
+    if (reducedMotion() || document.hidden) { paint(p, to); done?.(); return; }
+    anim = spring({ from: p.x, to, velocity, damping: 1, response: 0.38, onUpdate: (x) => paint(p, x), onDone: done });
+  }
+
+  function syncInert() {
+    $('#app').inert = stack.length > 0;
+    stack.forEach((p, i) => { p.el.inert = i < stack.length - 1; });
+    host.classList.toggle('hidden', !stack.length);
+  }
+
+  function draw(p) {
+    if (!p.el.isConnected) return;
+    morph(p.body, `<h1 class="page-title large-title" data-key="page-title">${esc(p.title())}</h1>${p.render()}`);
+    p.el.querySelector('.page-nav-title').textContent = p.title();
+    mountCharts(p.body, p.charts?.());
+  }
+
+  function push(p) {
+    const top = stack[stack.length - 1];
+    if (top?.key === p.key) return top;
+    p.returnFocus = document.activeElement;
+    p.el = el(`
+      <section class="page" aria-label="${esc(p.title())}">
+        <header class="page-nav">
+          <button class="page-back pressable" type="button" data-act="page-back">${icon('chevron', 'back-chevron')}<span>${esc(p.back)}</span></button>
+          <span class="page-nav-title" aria-hidden="true"></span>
+        </header>
+        <div class="page-body"></div>
+      </section>`);
+    p.body = p.el.querySelector('.page-body');
+    p.body.addEventListener('scroll', () => p.el.classList.toggle('titled', p.body.scrollTop > 36), { passive: true });
+    host.appendChild(p.el);
+    stack.push(p);
+    syncInert();
+    draw(p);
+    paint(p, width());
+    p.entry = addBack(() => slideOut(p), p.url);
+    animate(p, 0);
+    p.el.querySelector('.page-back').focus({ preventScroll: true });
+    p.load?.();
+    return p;
+  }
+
+  function remove(p) {
+    p.el.remove();
+    stack.splice(stack.indexOf(p), 1);
+    const below = stack[stack.length - 1];
+    if (below) below.el.style.transform = '';
+    else shade.style.opacity = '0';
+    syncInert();
+    p.returnFocus?.focus?.({ preventScroll: true });
+  }
+  function slideOut(p, velocity = 0) {
+    animate(p, width(), velocity, () => remove(p));
+  }
+  function back() {
+    const p = stack[stack.length - 1];
+    if (p) leave(p.entry, () => slideOut(p));
+  }
+
+  // Swipe back from the left edge, 1:1 with the finger; release past the
+  // middle (or with a flick) completes it, otherwise it springs home.
+  let swipe = null;
+  host.addEventListener('touchstart', (e) => {
+    const p = stack[stack.length - 1];
+    const t = e.touches[0];
+    swipe = p && e.touches.length === 1 && t.clientX < 28
+      ? { p, x0: t.clientX, y0: t.clientY, mode: null, samples: [{ t: e.timeStamp, v: 0 }] }
+      : null;
+    if (swipe) anim?.stop();
+  }, { passive: true });
+  host.addEventListener('touchmove', (e) => {
+    if (!swipe) return;
+    const t = e.touches[0];
+    const dx = t.clientX - swipe.x0, dy = t.clientY - swipe.y0;
+    if (!swipe.mode) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      swipe.mode = dx > Math.abs(dy) ? 'back' : 'none';
+    }
+    if (swipe.mode !== 'back') return;
+    if (e.cancelable) e.preventDefault();
+    const x = Math.max(0, dx);
+    paint(swipe.p, x);
+    swipe.samples.push({ t: e.timeStamp, v: x });
+    if (swipe.samples.length > 8) swipe.samples.shift();
+  }, { passive: false });
+  const endSwipe = (e) => {
+    if (!swipe) return;
+    const { p, mode, samples } = swipe;
+    swipe = null;
+    if (mode !== 'back') return;
+    const v = releaseVelocity(samples, e.timeStamp);
+    if (p.x + project(v, 0.995) > width() * 0.5) {
+      haptic();
+      leave(p.entry, () => slideOut(p, v));
+    } else {
+      animate(p, 0, v);
+    }
+  };
+  host.addEventListener('touchend', endSwipe);
+  host.addEventListener('touchcancel', endSwipe);
+  host.addEventListener('click', (e) => { if (e.target.closest('[data-act=page-back]')) back(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && stack.length && !sheet.isOpen) back(); });
+
+  return {
+    push,
+    back,
+    draw,
+    refresh() { stack.forEach(draw); },
+    get top() { return stack[stack.length - 1] || null; },
+    get depth() { return stack.length; },
+  };
+})();
 
 /* ---------- Parks ---------- */
 const parkLabel = (name) => name.replace(' (CA)', '');
@@ -828,8 +904,9 @@ function fitTitle() {
   }
   if (h.scrollWidth > h.clientWidth) h.classList.add('wrap');
 }
-addEventListener('resize', () => dash && fitTitle());
+addEventListener('resize', () => { lastFit = null; if (dash) renderHeader(); });
 
+let lastFit = null;
 function renderHeader() {
   $('#park-name').textContent = parkLabel(dash.park.name);
   document.title = `${parkLabel(dash.park.name)} · ParkAlert`;
@@ -854,8 +931,14 @@ function renderHeader() {
   }[st.kind];
   const pill = $('#btn-alerts');
   pill.className = `pill pressable ${st.kind}`;
-  pill.innerHTML = `${icon(glyph)}<span>${label}</span>`;
-  fitTitle(); // after the pill, whose label sets the room left
+  morph(pill, `${icon(glyph)}<span>${label}</span>`);
+  // Re-fit only when the title, the pill (whose label sets the room left)
+  // or the width changed: fitting measures the text step by step.
+  const fitKey = `${dash.park.name}|${label}|${innerWidth}|${getComputedStyle(document.documentElement).fontSize}`;
+  if (fitKey !== lastFit) {
+    lastFit = fitKey;
+    fitTitle();
+  }
   pill.setAttribute('aria-label', st.kind === 'paused' && st.until ? `Alerts paused until ${fmtUntil(st.until)}` : label);
 
   const down = dash.rides.filter((r) => r.status === 'DOWN' && isFollowing(r.id)).length;
@@ -907,36 +990,31 @@ function downCard(r) {
     </article>`;
 }
 
-function setupRow() {
-  const row = el(`
-    <div class="group" style="margin-top:1.2rem"><button class="row pressable" type="button">
-      ${icon('bell', 'row-icon tint-accent')}
-      <span class="row-label">Set up alerts on this phone</span>
-      ${icon('chevron', 'chevron')}
-    </button></div>`);
-  row.querySelector('button').onclick = openAlertSetup;
-  return row;
-}
+const setupRowHtml = () => `
+  <div class="group" style="margin-top:1.2rem" data-key="setup-row"><button class="row pressable" type="button" data-act="setup-alerts">
+    ${icon('bell', 'row-icon tint-accent')}
+    <span class="row-label">Set up alerts on this phone</span>
+    ${icon('chevron', 'chevron')}
+  </button></div>`;
 
 function renderDown() {
-  keepFocus($('#view-down'), drawDown);
+  morph($('#down-list'), downHtml());
+  renderRecent(new Set(dash.rides.filter((r) => r.status === 'DOWN' && r.downSince).map((r) => r.id)));
 }
 
-function drawDown() {
-  const list = $('#down-list');
+function downHtml() {
   const down = dash.rides
     .filter((r) => r.status === 'DOWN' && r.downSince)
     .sort((a, b) => (isFollowing(b.id) - isFollowing(a.id)) || b.downSince - a.downSince);
-  list.replaceChildren();
-
+  const parts = [];
   if (!dash.lastPoll) {
     // No ride data yet is not the same as nothing being down.
-    list.appendChild(el(`
-      <div class="empty offline">
+    parts.push(`
+      <div class="empty offline" data-key="empty">
         ${icon('wifi-off')}
         <h2 class="title-2">No ride data yet</h2>
         <p>The park's ride feed isn't answering right now. This updates on its own.</p>
-      </div>`));
+      </div>`);
   } else if (!down.length) {
     // Only a live, open park gets the green check. Closed, not open yet,
     // and old or offline data each say what they are.
@@ -947,24 +1025,24 @@ function drawDown() {
         : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride with alerts on is late to open.`]
           : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, 'This catches up as soon as ParkAlert can be reached again.']
             : ['check-circle', '', "Everything's running", "You'll get an alert when a ride with alerts on goes down."];
-    list.appendChild(el(`
-      <div class="empty ${cls}">
+    parts.push(`
+      <div class="empty ${cls}" data-key="empty">
         ${icon(glyph)}
         <h2 class="title-2">${esc(title)}</h2>
         <p>${esc(text)}</p>
-      </div>`));
+      </div>`);
   } else {
     const holds = down.filter((r) => r.outlook?.kind === 'hold');
     const rest = down.filter((r) => r.outlook?.kind !== 'hold');
     if (holds.length) {
       // One card for the hold, not a card per ride: in a storm that was
       // thirty identical cards before the breakdowns below. The rides are
-      // rows inside it, each still opening its own sheet.
+      // rows inside it, each opening its own page.
       const first = holds.reduce((a, r) => (r.downSince < a.downSince ? r : a));
       const o = first.outlook || {};
-      const card = el(`
-        <div class="card hold-card">
-          <button class="hold-header pressable" type="button">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
+      parts.push(`
+        <div class="cards" data-key="hold"><div class="card hold-card">
+          <button class="hold-header pressable" type="button" data-act="open-hold">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
           <p class="card-sub">Since ${fmtTime(first.downSince)} · ${fmtDuration(Date.now() - first.downSince)}</p>
           ${timeline(first)}
           ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
@@ -975,23 +1053,20 @@ function drawDown() {
               <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
               ${icon('chevron', 'chevron')}
             </button>`).join('')}</div>
-        </div>`);
-      card.querySelector('.hold-header').onclick = () => openHold();
-      list.appendChild(el('<div class="cards"></div>')).appendChild(card);
+        </div></div>`);
     }
     if (rest.length) {
-      if (holds.length) list.appendChild(el('<h2 class="section-label">Down</h2>'));
-      list.appendChild(el(`<div class="cards">${rest.map(downCard).join('')}</div>`));
+      if (holds.length) parts.push('<h2 class="section-label" data-key="down-label">Down</h2>');
+      parts.push(`<div class="cards" data-key="down">${rest.map(downCard).join('')}</div>`);
     }
   }
-  if (!alertsReady()) list.appendChild(setupRow());
-  renderRecent(new Set(down.map((r) => r.id)));
+  if (!alertsReady()) parts.push(setupRowHtml());
+  return parts.join('');
 }
 
 // Rides that came back, or gave up and closed, recently: so an alert opened
 // late still makes sense. Each ride's latest word only.
 function renderRecent(downIds) {
-  const block = $('#recent-block');
   const status = new Map(dash.rides.map((r) => [r.id, r.status]));
   const seen = new Set();
   const latest = (dash.recent || []).filter((e) => {
@@ -1001,26 +1076,28 @@ function renderRecent(downIds) {
   });
   const ups = latest.filter((e) => e.type === 'UP');
   const closed = latest.filter((e) => e.type === 'CLOSED');
-  block.replaceChildren();
+  const parts = [];
   if (closed.length) {
-    block.appendChild(el('<h2 class="section-label">Closed after an outage</h2>'));
-    block.appendChild(el(`<div class="group">${closed.map((e) => `
+    parts.push(`<h2 class="section-label" data-key="closed-label">Closed after an outage</h2>
+      <div class="group" data-key="closed">${closed.map((e) => `
       <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
         ${icon('moon', 'row-icon tint-orange')}
         <span class="row-label">${esc(e.name)}<small>Closed at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)} down` : ''}</small></span>
         ${icon('chevron', 'chevron')}
-      </button>`).join('')}</div>`));
+      </button>`).join('')}</div>`);
   }
-  if (!ups.length) return;
-  block.appendChild(el('<h2 class="section-label">Back up recently</h2>'));
-  block.appendChild(el(`<div class="group">${ups.map((e) => `
-    <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
-      ${icon('arrow-up', 'row-icon tint-green')}
-      <span class="row-label">${esc(e.name)}<small>${e.late
-        ? `Opened at ${fmtTime(e.at)}${e.downtimeMs ? `, ${fmtDuration(e.downtimeMs)} late` : ''}`
-        : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
-      ${icon('chevron', 'chevron')}
-    </button>`).join('')}</div>`));
+  if (ups.length) {
+    parts.push(`<h2 class="section-label" data-key="up-label">Back up recently</h2>
+      <div class="group" data-key="up">${ups.map((e) => `
+      <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
+        ${icon('arrow-up', 'row-icon tint-green')}
+        <span class="row-label">${esc(e.name)}<small>${e.late
+          ? `Opened at ${fmtTime(e.at)}${e.downtimeMs ? `, ${fmtDuration(e.downtimeMs)} late` : ''}`
+          : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
+        ${icon('chevron', 'chevron')}
+      </button>`).join('')}</div>`);
+  }
+  morph($('#recent-block'), parts.join(''));
 }
 
 /* ---------- Rides ---------- */
@@ -1097,7 +1174,7 @@ document.querySelectorAll('[data-sort]').forEach((b) => { b.onclick = () => setR
 setRideSort(rideSort);
 
 function renderRides() {
-  keepFocus($('#rides-list'), drawRides);
+  drawRides();
 }
 
 function drawRides() {
@@ -1116,13 +1193,13 @@ function drawRides() {
   const list = $('#rides-list');
   list.className = 'group rides';
   if (!shown.length) {
-    list.innerHTML = `<p class="no-results">${q ? `No rides match “${esc(q)}”.` : esc(FILTER_EMPTY[rideFilter] || 'No rides.')}</p>`;
+    morph(list, `<p class="no-results" data-key="none">${q ? `No rides match “${esc(q)}”.` : esc(FILTER_EMPTY[rideFilter] || 'No rides.')}</p>`);
     return;
   }
-  list.innerHTML = shown.map((r) => {
+  morph(list, shown.map((r) => {
     const on = isFollowing(r.id);
     return `
-      <div class="row ride-row">
+      <div class="row ride-row" data-key="${esc(r.id)}">
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
             <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}</span>
@@ -1132,7 +1209,7 @@ function drawRides() {
         <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
                 aria-label="Alerts for ${esc(r.name)}"></button>
       </div>`;
-  }).join('');
+  }).join(''));
 }
 
 // Switches slide as well as tap, as in Settings: the knob follows a
@@ -1230,6 +1307,7 @@ function renderNoData() {
   $('#park-name').textContent = 'ParkAlert';
   $('#park-name').style.fontSize = '';
   $('#park-name').classList.remove('wrap');
+  lastFit = null;
   const meta = $('#park-meta');
   meta.textContent = offline ? (failure === 'offline' ? 'Offline. Waiting for a connection…' : `${FAILURE_META[failure]}…`) : 'Loading…';
   meta.classList.toggle('warn', offline);
@@ -1238,25 +1316,29 @@ function renderNoData() {
   $('#trip-code').textContent = tripCode;
   for (const id of ['#setup-detail', '#pause-detail', '#park-detail', '#follow-summary']) $(id).textContent = '';
   $('#btn-follow-all').classList.add('hidden');
-  $('#recent-block').replaceChildren();
+  morph($('#recent-block'), '');
 
-  const state = offline
-    ? el(`<div class="empty offline">
+  morph($('#down-list'), offline
+    ? `<div class="empty offline" data-key="empty">
         ${icon('wifi-off')}
         <h2 class="title-2">${failure === 'offline' ? "You're offline" : "Can't reach ParkAlert"}</h2>
         <p>${failure === 'offline' ? 'Rides show up here as soon as your phone reconnects.' : "Your connection is fine; ParkAlert isn't answering. This tries again on its own."}</p>
-        <button class="btn-secondary pressable" type="button">Try again</button>
-      </div>`)
-    : el('<div class="empty loading" role="status"><p>Loading rides…</p></div>');
-  state.querySelector('button')?.addEventListener('click', () => {
-    offline = false;
-    renderAll();
-    refresh();
-  });
-  $('#down-list').replaceChildren(state);
+        <button class="btn-secondary pressable" type="button" data-act="retry-dash">Try again</button>
+      </div>`
+    : skeleton('cards'));
   $('#rides-list').className = 'group rides';
-  $('#rides-list').innerHTML = `<p class="no-results">${offline ? (failure === 'offline' ? 'Rides show up once your phone reconnects.' : "Rides show up once ParkAlert answers.") : 'Loading rides…'}</p>`;
+  morph($('#rides-list'), offline
+    ? `<p class="no-results" data-key="none">${failure === 'offline' ? 'Rides show up once your phone reconnects.' : 'Rides show up once ParkAlert answers.'}</p>`
+    : Array.from({ length: 6 }, (_, i) => `<div class="row sk-row" data-key="sk${i}" aria-hidden="true"><span class="row-label"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>`).join(''));
 }
+
+// Actions inside the main views, delegated so patched content keeps working.
+$('#app').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'setup-alerts') openAlertSetup();
+  else if (act === 'open-hold') openHold();
+  else if (act === 'retry-dash') { offline = false; renderAll(); refresh(); }
+});
 
 function renderAll() {
   if (!dash) return renderNoData();
@@ -1264,10 +1346,9 @@ function renderAll() {
   renderDown();
   renderRides();
   renderTrip();
-  // The open ride sheet's switch follows the trip too, so a failed save
-  // moves it back along with the list.
-  const sw = document.querySelector('#sheet .switch[data-act=follow]');
-  if (sw && sheetContext?.type === 'ride') sw.setAttribute('aria-checked', String(isFollowing(sheetContext.id)));
+  // Open pages follow too, so a ride's switch moves back with the list if a
+  // save fails, and elapsed times stay current.
+  pages.refresh();
 }
 
 /* ---------- Sheets ---------- */
@@ -1458,47 +1539,10 @@ function openAlertSetup() {
   sheet.open(content);
 }
 
-/* ---------- Detail sheets ---------- */
-// What the open sheet is showing, so a background refresh can bring it up to date.
-let sheetContext = null;
-
-// Sheets opened from sheets (a ride from the hold or park sheet) stack:
-// Back returns to the one below, rebuilt with fresh data.
-const sheetStack = [];
-function openSheet(content, context) {
-  // The context is set after open(), which may first finish off a sheet
-  // still closing (whose onClose clears the context). Ride sheets open at
-  // the medium detent, so the list stays in view behind them.
-  sheet.open(content, {
-    detent: context.type === 'ride' ? 'medium' : 'large',
-    onClose: () => { sheetContext = null; sheetStack.length = 0; },
-  });
-  sheetStack.length = 0;
-  sheetContext = context;
-  mountCharts($('#sheet-body'));
-}
-function pushSheet(content, context) {
-  sheetStack.push(sheetContext);
-  sheetContext = context;
-  sheet.push(content);
-  mountCharts($('#sheet-body'));
-}
-sheet.onBack = () => {
-  if (!sheetStack.length) return false;
-  sheetContext = sheetStack.pop();
-  if (sheetContext.type === 'hold') sheet.replace(holdSheet());
-  if (sheetContext.type === 'park') {
-    sheet.replace(parkSheet(lastParkInfo));
-    loadPark();
-  }
-  mountCharts($('#sheet-body'));
-  return true;
-};
-const BACK_LABEL = { hold: 'Hold', park: 'Park' };
-
-function updateSheet(content) {
-  sheet.update(content, () => mountCharts($('#sheet-body')));
-}
+/* ---------- Detail pages ---------- */
+const TAB_TITLE = { down: 'Down now', rides: 'Rides', trip: 'Trip' };
+// Where Back goes, in words: the page underneath, or the tab it came from.
+const backLabel = () => pages.top?.title() || TAB_TITLE[view] || 'Back';
 
 const KIND_NOTE = {
   hold: 'Several rides went down together, which usually means lightning nearby or another park-wide hold. These run longer than a breakdown, and the rides tend to reopen together.',
@@ -1518,7 +1562,6 @@ function basisLine(o) {
     return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
   }
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
-  // The same noun as the sheet's explanation: holds from holds.
   const what = { hold: 'holds', opening: 'delayed openings' }[o.kind] || 'outages';
   return `From ${o.basis.outages} past ${what} ${where}`;
 }
@@ -1541,34 +1584,33 @@ function estimateExplainer(o) {
   return `Based on ${o.basis.outages} past ${kind} ${where} that lasted at least as long as this one has so far. The middle half of them reopened within the range above.`;
 }
 
-async function openRide(rideId) {
-  const r = dash?.rides.find((x) => x.id === rideId);
-  if (!r) return;
-  // Open at once with what is already known; the history fills in a moment later.
-  const from = sheet.isOpen && BACK_LABEL[sheetContext?.type];
-  const context = { type: 'ride', id: rideId, back: from || null };
-  if (from) pushSheet(rideSheet(r, null, from), context);
-  else openSheet(rideSheet(r, null), context);
-  await loadRide(rideId);
-}
+const liveRide = (id) => dash?.rides.find((r) => r.id === id) || null;
 
-async function loadRide(rideId) {
-  try {
-    const detail = await api(`/trips/${tripCode}/rides/${encodeURIComponent(rideId)}`);
-    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) updateSheet(rideSheet(detail.ride, detail, sheetContext.back));
-  } catch {
-    if (sheetContext?.id === rideId) {
-      const note = $('#sheet-body [data-loading]');
-      if (note) {
-        note.replaceWith(el(`<div class="retry"><p class="footnote">Couldn't load this ride's wait times and history.</p>
-          <button class="btn-secondary pressable" type="button" data-act="retry-ride">Try again</button></div>`));
-        $('#sheet-body [data-act=retry-ride]').onclick = (e) => {
-          e.currentTarget.parentElement.replaceWith(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
-          loadRide(rideId);
-        };
+// Opens at once with what is already known; the history fills in after.
+function openRide(rideId) {
+  const known = liveRide(rideId);
+  if (!known) return;
+  const page = {
+    key: `ride:${rideId}`,
+    url: `/ride/${encodeURIComponent(rideId)}`,
+    back: backLabel(),
+    rideId,
+    detail: null,
+    failed: false,
+    title: () => liveRide(rideId)?.name || known.name,
+    render() { return rideHtml(liveRide(rideId) || this.detail?.ride || known, this.detail, this.failed); },
+    charts() { return this.detail ? rideCharts(this.detail) : null; },
+    async load() {
+      try {
+        this.detail = await api(`/trips/${tripCode}/rides/${encodeURIComponent(rideId)}`);
+        this.failed = false;
+      } catch {
+        this.failed = true;
       }
-    }
-  }
+      pages.draw(this);
+    },
+  };
+  pages.push(page);
 }
 
 // Wait alert: "tell me when the wait is at most N". Only limits under the
@@ -1576,7 +1618,7 @@ async function loadRide(rideId) {
 // once; a ride that isn't posting a wait can take any of them.
 const WAIT_CHOICES = [10, 15, 20, 30, 45, 60];
 
-function waitAlertBlock(r) {
+function waitAlertHtml(r) {
   const alert = dash.trip.waitAlerts?.[r.id];
   const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
   const armed = alert && !alert.sentAt;
@@ -1591,26 +1633,16 @@ function waitAlertBlock(r) {
         : posted != null
           ? `Now ${posted} min. Tell me when the wait is at most (minutes):`
           : 'When it reopens, tell me if the wait is at most (minutes):';
-  const box = el(`
-    <div>
-      <h2 class="section-label">Wait alert</h2>
-      <div class="group padded wait-alert">
-        <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
-        ${choices.length ? `<div class="segmented wait-limits" role="group" aria-label="Wait alert limit">
-          ${armed ? `<button class="chip" type="button" data-act="wait-off" aria-pressed="false">Off</button>` : ''}
-          ${choices.map((m) => `<button class="chip" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}" aria-label="${m} minutes">${m}</button>`).join('')}
-        </div>` : ''}
-      </div>
-      <p class="footnote">Goes to everyone on this trip, once, and only today.</p>
-    </div>`);
-  box.querySelectorAll('.chip').forEach((b) => {
-    b.onclick = () => {
-      haptic();
-      const m = b.dataset.act.slice(5);
-      setWaitAlert(r.id, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
-    };
-  });
-  return box;
+  return `
+    <h2 class="section-label" data-key="wait-label">Wait alert</h2>
+    <div class="group padded wait-alert" data-key="wait-alert">
+      <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
+      ${choices.length ? `<div class="segmented wait-limits" role="group" aria-label="Wait alert limit">
+        ${armed ? '<button class="chip" type="button" data-act="wait-off" data-key="off" aria-pressed="false">Off</button>' : ''}
+        ${choices.map((m) => `<button class="chip" type="button" data-act="wait-${m}" data-key="${m}" aria-pressed="${armed && alert.max === m}" aria-label="${m} minutes">${m}</button>`).join('')}
+      </div>` : ''}
+    </div>
+    <p class="footnote" data-key="wait-foot">Goes to everyone on this trip, once, and only today.</p>`;
 }
 
 async function setWaitAlert(rideId, max) {
@@ -1620,26 +1652,39 @@ async function setWaitAlert(rideId, max) {
     dash.trip = trip;
     confirmTrip(trip);
     renderAll();
-    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) loadRide(rideId);
     toast(max == null ? 'Wait alert off' : `Wait alert set for ${max} min or less`);
   } catch {
     toast("Couldn't save that. Check your connection and try again.");
   }
 }
 
-function rideSheet(r, detail, back = null) {
-  const o = detail ? detail.outlook : r.outlook;
+// A signature of a chart's data: the chart is redrawn only when it changes.
+const sigOf = (data) => {
+  const s = JSON.stringify(data);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return `${s.length}-${h}`;
+};
+
+function rideCharts(detail) {
+  return {
+    wait: { waits: detail.waits, now: detail.now },
+    days: detail.history?.archivedDays ? { days: detail.history.days } : null,
+  };
+}
+
+function rideHtml(r, detail, failed) {
+  const o = (r.status === 'DOWN' ? r.outlook : null) || (detail?.ride?.status === 'DOWN' ? detail.outlook : null);
   const down = r.status === 'DOWN' && r.downSince;
-  const wrap = el(`<div class="ride-sheet">${sheetHead(r.name, esc(statusLine(r)), back)}</div>`);
-  wrap.querySelector('.sheet-head p').classList.toggle('tint-red', !!down);
+  const parts = [`<p class="page-sub ${down ? 'tint-red' : ''}" data-key="status">${esc(statusLine(r))}</p>`];
 
   if (down) {
     const w = o?.window;
     const clock = w && w.lo != null
       ? `Likely back between ${fmtTime(Date.now() + w.lo * 60000)} and ${fmtTime(Date.now() + (w.hi ?? w.lo * 2) * 60000)}`
       : '';
-    wrap.appendChild(el(`
-      <div class="group padded outlook-block">
+    parts.push(`
+      <div class="group padded outlook-block" data-key="outlook">
         ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · park-wide hold' : ''}</p>`
           : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
         ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
@@ -1648,183 +1693,213 @@ function rideSheet(r, detail, back = null) {
         ${timeline({ ...r, outlook: o })}
         ${o?.text ? `<p class="explain">${esc(estimateExplainer(o))}</p>` : ''}
         ${o?.cause ? `<p class="explain">${esc(WEATHER_NOTE[o.cause])}</p>` : KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
-      </div>`));
+      </div>`);
   }
 
-  const follow = el(`
-    <div class="group ${down ? 'spaced-sm' : ''}"><div class="row">
+  parts.push(`
+    <div class="group ${down ? 'spaced-sm' : ''}" data-key="follow"><div class="row">
       ${icon('bell', 'row-icon tint-accent')}
       <span class="row-label">Alerts for this ride</span>
       <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}" data-act="follow"></button>
     </div></div>`);
-  follow.querySelector('.switch').onclick = () => toggleFollow(r.id);
-  wrap.appendChild(follow);
-  wrap.appendChild(waitAlertBlock(r));
+  parts.push(waitAlertHtml(r));
 
   if (!detail) {
-    wrap.appendChild(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
-    return wrap;
+    parts.push(failed
+      ? `<div class="retry" data-key="retry"><p class="footnote">Couldn't load this ride's wait times and history.</p>
+          <button class="btn-secondary pressable" type="button" data-act="retry">Try again</button></div>`
+      : skeleton('ride'));
+    return parts.join('');
   }
 
   // Wait times today
-  const numeric = detail.waits.filter(([, v]) => v != null);
-  if (numeric.length) {
-    wrap.appendChild(el('<h2 class="section-label">Wait times today</h2>'));
-    const box = el('<div class="group padded" data-chart="wait"></div>');
-    box._data = { waits: detail.waits, now: detail.now };
-    wrap.appendChild(box);
-    wrap.appendChild(el('<p class="footnote">Drag across the chart to see the wait at any time. Gaps are when it was down or closed.</p>'));
+  if (detail.waits.some(([, v]) => v != null)) {
+    parts.push(`<h2 class="section-label" data-key="waits-label">Wait times today</h2>
+      <div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
+      <p class="footnote" data-key="waits-foot">Drag across the chart to see the wait at any time. Gaps are when it was down or closed.</p>`);
   }
 
   // Today. If the ride went down before today's log begins, the live
   // down-since time still says when, so show that rather than nothing.
-  wrap.appendChild(el('<h2 class="section-label">Today</h2>'));
   const today = [...detail.today];
   if (down && !today.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) {
     today.push({ type: 'DOWN', at: r.downSince, opening: o?.kind === 'opening' });
     today.sort((a, b) => a.at - b.at);
   }
-  if (today.length) {
-    wrap.appendChild(el(`<div class="group">${today.map((e) => `
-      <div class="row">
+  parts.push('<h2 class="section-label" data-key="today-label">Today</h2>');
+  parts.push(today.length
+    ? `<div class="group" data-key="today">${today.map((e) => `
+      <div class="row" data-key="${e.type}-${e.at}">
         ${e.type === 'CLOSED' ? icon('moon', 'row-icon tint-orange') : icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
         <span class="row-label">${e.type === 'CLOSED' ? 'Closed' : e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${
           e.type === 'UP' && e.downtimeMs ? `<small>${e.late ? `${fmtDuration(e.downtimeMs)} late` : `after ${fmtDuration(e.downtimeMs)}`}</small>`
           : e.type === 'CLOSED' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)} down</small>` : ''}</span>
         <span class="row-detail">${fmtTime(e.at)}</span>
-      </div>`).join('')}</div>`));
-  } else {
-    wrap.appendChild(el('<div class="group plain"><div class="row"><span class="row-label muted">No outages so far today</span></div></div>'));
-  }
+      </div>`).join('')}</div>`
+    : '<div class="group plain" data-key="today"><div class="row"><span class="row-label muted">No outages so far today</span></div></div>');
 
   // History
   const h = detail.history;
-  if (h.archivedDays) {
-    wrap.appendChild(el(`<h2 class="section-label">Last ${h.days.length} days</h2>`));
-    const stats = el(`
-      <div class="group padded">
+  if (h?.archivedDays) {
+    parts.push(`<h2 class="section-label" data-key="hist-label">Last ${h.days.length} days</h2>
+      <div class="group padded" data-key="hist">
         <div class="stats">
           <div><p class="stat-label">Outages</p><p class="stat-value">${h.days.reduce((n, d) => n + d.outages, 0)}</p></div>
           <div><p class="stat-label">Typical</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'n/a'}</p></div>
           <div><p class="stat-label">Longest</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'n/a'}</p></div>
         </div>
-        <div data-chart="days"></div>
+        <div data-chart="days" data-key="days-chart" data-sig="${sigOf(h.days)}"></div>
       </div>`);
-    stats.querySelector('[data-chart]')._data = { days: h.days };
-    wrap.appendChild(stats);
     if (h.last.length) {
-      wrap.appendChild(el('<h2 class="section-label">Recent outages</h2>'));
-      wrap.appendChild(el(`<div class="group plain">${h.last.map((ep) => `
-        <div class="row">
+      parts.push(`<h2 class="section-label" data-key="last-label">Recent outages</h2>
+        <div class="group plain" data-key="last">${h.last.map((ep) => `
+        <div class="row" data-key="${ep.start}">
           <span class="row-label">${esc(fmtDay(ep.start))}<small>${esc([
             `Went down at ${fmtTime(ep.start)}`,
             { hold: 'park-wide hold', opening: 'delayed opening' }[ep.kind],
             ep.reopened ? '' : "didn't reopen that day",
           ].filter(Boolean).join(' · '))}</small></span>
           <span class="row-detail">${ep.reopened ? fmtDuration(ep.minutes * 60000) : ''}</span>
-        </div>`).join('')}</div>`));
+        </div>`).join('')}</div>`);
     }
-    wrap.appendChild(el(`<p class="footnote">Outage history comes from the ThemeParks.wiki archive, ${h.archivedDays} days so far and growing nightly.</p>`));
+    parts.push(`<p class="footnote" data-key="hist-foot">Outage history comes from the ThemeParks.wiki archive, ${h.archivedDays} days so far and growing nightly.</p>`);
   }
-  wrap.appendChild(el('<div style="height:1rem"></div>'));
-  return wrap;
+  return parts.join('');
 }
 
 function fmtDay(ts) {
   return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: dash?.park.timezone }).format(new Date(ts));
 }
 
-async function openParkInfo() {
+function openParkInfo() {
   if (!dash) return;
-  openSheet(parkSheet(null), { type: 'park' });
-  await loadPark();
+  pages.push({
+    key: 'park',
+    url: '/park',
+    back: backLabel(),
+    info: null,
+    failed: false,
+    title: () => parkLabel(dash.park.name),
+    render() { return parkHtml(this.info, this.failed); },
+    async load() {
+      try {
+        this.info = await api(`/trips/${tripCode}/park`);
+        this.failed = false;
+      } catch {
+        this.failed = true;
+      }
+      pages.draw(this);
+    },
+  });
 }
 
-let lastParkInfo = null;
-async function loadPark() {
-  try {
-    const info = await api(`/trips/${tripCode}/park`);
-    lastParkInfo = info;
-    if (sheetContext?.type === 'park') updateSheet(parkSheet(info));
-  } catch {
-    const box = $('#sheet-body [data-park-loading]');
-    if (sheetContext?.type === 'park' && box) {
-      box.replaceWith(el(`<div class="retry"><p class="footnote">Couldn't load this park's week and scorecard.</p>
-        <button class="btn-secondary pressable" type="button" data-act="retry-park">Try again</button></div>`));
-      $('#sheet-body [data-act=retry-park]').onclick = () => loadPark();
-    }
-  }
-}
-
-function parkSheet(info) {
+function parkHtml(info, failed) {
   const downNow = dash.rides.filter((r) => r.status === 'DOWN').length;
-  const wrap = el(`<div>${sheetHead(parkLabel(dash.park.name), esc(hoursText()))}</div>`);
+  const parts = [`<p class="page-sub" data-key="hours">${esc(hoursText())}</p>`];
   const { openingTime: open, closingTime: close, lateEvent } = dash.park;
   if (open || close) {
-    wrap.appendChild(el(`<div class="group plain">
-      ${open ? `<div class="row"><span class="row-label">Opens</span><span class="row-detail">${fmtTime(Date.parse(open))}</span></div>` : ''}
-      ${close ? `<div class="row"><span class="row-label">Closes</span><span class="row-detail">${fmtTime(Date.parse(close))}</span></div>` : ''}
-      ${lateEvent ? `<div class="row"><span class="row-label">${esc(lateEvent.name)}<small>Alerts keep going until it ends</small></span><span class="row-detail">until ${fmtTime(Date.parse(lateEvent.closingTime))}</span></div>` : ''}
-    </div>`));
+    parts.push(`<div class="group plain" data-key="hours-list">
+      ${open ? `<div class="row" data-key="opens"><span class="row-label">Opens</span><span class="row-detail">${fmtTime(Date.parse(open))}</span></div>` : ''}
+      ${close ? `<div class="row" data-key="closes"><span class="row-label">Closes</span><span class="row-detail">${fmtTime(Date.parse(close))}</span></div>` : ''}
+      ${lateEvent ? `<div class="row" data-key="event"><span class="row-label">${esc(lateEvent.name)}<small>Alerts keep going until it ends</small></span><span class="row-detail">until ${fmtTime(Date.parse(lateEvent.closingTime))}</span></div>` : ''}
+    </div>`);
   }
-  wrap.appendChild(el(`<div class="group padded spaced-sm"><div class="stats">
+  parts.push(`<div class="group padded spaced-sm" data-key="stats"><div class="stats">
     <div><p class="stat-label">Down now</p><p class="stat-value">${downNow}</p></div>
-    <div><p class="stat-label">Outages today</p><p class="stat-value">${info ? info.today.downs : '…'}</p></div>
-    <div><p class="stat-label">Typical outage</p><p class="stat-value">${info?.week.typicalBreakdownMinutes != null ? fmtDuration(info.week.typicalBreakdownMinutes * 60000) : info ? 'n/a' : '…'}</p></div>
-  </div></div>`));
+    <div><p class="stat-label">Outages today</p><p class="stat-value">${info ? info.today.downs : '<span class="sk sk-num"></span>'}</p></div>
+    <div><p class="stat-label">Typical outage</p><p class="stat-value">${info?.week.typicalBreakdownMinutes != null ? fmtDuration(info.week.typicalBreakdownMinutes * 60000) : info ? 'n/a' : '<span class="sk sk-num"></span>'}</p></div>
+  </div></div>`);
   if (info?.week.leastReliable.length) {
-    wrap.appendChild(el(`<h2 class="section-label">Most outages, last ${info.week.days} days</h2>`));
-    // Only rides in today's live data have a sheet to open; one that has been
+    parts.push(`<h2 class="section-label" data-key="least-label">Most outages, last ${info.week.days} days</h2>`);
+    // Only rides in today's live data have a page to open; one that has been
     // renamed or closed for the season is listed, not offered as a button.
     const live = new Set(dash.rides.map((r) => r.id));
-    wrap.appendChild(el(`<div class="group plain">${info.week.leastReliable.map((r) => {
+    parts.push(`<div class="group plain" data-key="least">${info.week.leastReliable.map((r) => {
       const label = `<span class="row-label">${esc(r.name)}<small>${r.outages} outage${r.outages === 1 ? '' : 's'}, ${fmtDuration(r.minutes * 60000)} down in total</small></span>`;
       return live.has(r.id)
         ? `<button class="row pressable" type="button" data-ride="${esc(r.id)}">${label}${icon('chevron', 'chevron')}</button>`
-        : `<div class="row">${label}</div>`;
-    }).join('')}</div>`));
+        : `<div class="row" data-key="gone-${esc(r.id)}">${label}</div>`;
+    }).join('')}</div>`);
     if (info.week.holdDays) {
-      wrap.appendChild(el(`<p class="footnote">Park-wide holds happened on ${info.week.holdDays} of those ${info.week.days} days.</p>`));
+      parts.push(`<p class="footnote" data-key="holds-foot">Park-wide holds happened on ${info.week.holdDays} of those ${info.week.days} days.</p>`);
     }
   }
   if (info?.estimates?.groups.length) {
-    // How the reopen estimates have done here, scored as rides came back.
-    wrap.appendChild(el(`<h2 class="section-label">How the estimates did, last ${info.estimates.days} days</h2>`));
-    wrap.appendChild(el(`<div class="group plain">${info.estimates.groups.map((g) => `
-      <div class="row"><span class="row-label">${esc(g.label)}<small>${g.n} outage${g.n === 1 ? '' : 's'}${g.closed ? `, ${g.closed} closed for the day` : ''} · ranges about ${g.width} min wide</small></span>
-      <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>`));
-    wrap.appendChild(el('<p class="footnote">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>'));
+    parts.push(`<h2 class="section-label" data-key="est-label">How the estimates did, last ${info.estimates.days} days</h2>
+      <div class="group plain" data-key="est">${info.estimates.groups.map((g) => `
+      <div class="row" data-key="${esc(g.label)}"><span class="row-label">${esc(g.label)}<small>${g.n} outage${g.n === 1 ? '' : 's'}${g.closed ? `, ${g.closed} closed for the day` : ''} · ranges about ${g.width} min wide</small></span>
+      <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>
+      <p class="footnote" data-key="est-foot">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>`);
   }
-  if (!info) wrap.appendChild(el('<p class="footnote" data-park-loading>Loading this week…</p>'));
-  wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on a list to refresh.</p>`));
-  wrap.appendChild(el('<div style="height:1rem"></div>'));
-  return wrap;
+  if (!info) {
+    parts.push(failed
+      ? `<div class="retry" data-key="retry"><p class="footnote">Couldn't load this park's week and scorecard.</p>
+          <button class="btn-secondary pressable" type="button" data-act="retry">Try again</button></div>`
+      : skeleton('rows'));
+  }
+  parts.push(`<p class="footnote" data-key="updated">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}.` : ''}</p>`);
+  return parts.join('');
 }
 
 function openHold() {
-  openSheet(holdSheet(), { type: 'hold' });
+  if (!dash) return;
+  pages.push({
+    key: 'hold',
+    url: '/hold',
+    back: backLabel(),
+    title: () => 'Park-wide hold',
+    render: holdHtml,
+  });
 }
 
-function holdSheet() {
+function holdHtml() {
   const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold');
-  const text = holds[0]?.outlook?.text;
-  const wrap = el(`<div>${sheetHead('Park-wide hold', esc(KIND_NOTE.hold))}</div>`);
+  const parts = [`<p class="page-sub" data-key="note">${esc(KIND_NOTE.hold)}</p>`];
   if (!holds.length) {
     // Left open while the rides came back: say so rather than go blank.
-    wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">The hold is over</p><p class="explain">Every ride in it is running again or has closed. They're listed under Back up recently on Down now.</p></div>`));
-    return wrap;
+    parts.push(`<div class="group padded" data-key="over"><p class="big-outlook">The hold is over</p><p class="explain">Every ride in it is running again or has closed. They're listed under Back up recently on Down now.</p></div>`);
+    return parts.join('');
   }
-  if (text) wrap.appendChild(el(`<div class="group padded"><p class="big-outlook">${esc(text)}</p><p class="explain">${esc(estimateExplainer(holds[0].outlook))}</p></div>`));
-  wrap.appendChild(el(`<h2 class="section-label">${holds.length} ride${holds.length === 1 ? '' : 's'} still in this hold</h2>`));
-  wrap.appendChild(el(`<div class="group plain">${holds.map((r) => `
+  const text = holds[0]?.outlook?.text;
+  if (text) parts.push(`<div class="group padded" data-key="range"><p class="big-outlook">${esc(text)}</p><p class="explain">${esc(estimateExplainer(holds[0].outlook))}</p></div>`);
+  parts.push(`<h2 class="section-label" data-key="count">${holds.length} ride${holds.length === 1 ? '' : 's'} still in this hold</h2>
+    <div class="group plain" data-key="rides">${holds.map((r) => `
     <button class="row pressable" type="button" data-ride="${esc(r.id)}">
       <span class="row-label">${esc(r.name)}<small>Down since ${fmtTime(r.downSince)}</small></span>
       <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
       ${icon('chevron', 'chevron')}
-    </button>`).join('')}</div>`));
-  wrap.appendChild(el('<div style="height:1rem"></div>'));
-  return wrap;
+    </button>`).join('')}</div>`);
+  return parts.join('');
 }
+
+// Placeholder shapes while something loads, so content settles into place
+// instead of popping in under the reader.
+function skeleton(kind) {
+  if (kind === 'cards') {
+    return `<div class="cards" data-key="skeleton">${[0, 1].map(() => `
+      <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>`).join('')}</div>`;
+  }
+  const rows = kind === 'ride' ? 3 : 5;
+  return `<div class="group sk-group" data-key="skeleton" aria-hidden="true">${Array.from({ length: rows }, () => `
+    <div class="row"><span class="row-label"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>`).join('')}</div>`;
+}
+
+// Taps on pages: one delegated listener, so patched content never loses a
+// handler.
+$('#pages').addEventListener('click', (e) => {
+  const page = pages.top;
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (!page || !act) return;
+  if (act === 'follow' && page.rideId) toggleFollow(page.rideId);
+  else if (act === 'retry') { page.failed = false; pages.draw(page); page.load?.(); }
+  else if (act.startsWith('wait-') && page.rideId) {
+    haptic();
+    const alert = dash.trip.waitAlerts?.[page.rideId];
+    const armed = alert && !alert.sentAt;
+    const m = act.slice(5);
+    setWaitAlert(page.rideId, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
+  }
+});
 
 // Any element carrying a ride id opens that ride, wherever it sits.
 document.addEventListener('click', (e) => {
@@ -1853,12 +1928,17 @@ function svgEl(tag, attrs = {}) {
   return n;
 }
 
-function mountCharts(root) {
+// Chart boxes are placeholders in the page's HTML; the data comes from the
+// page. A box is drawn once per data signature (see patchNode).
+function mountCharts(root, data) {
+  if (!data) return;
   for (const box of root.querySelectorAll('[data-chart]')) {
-    if (box._mounted || !box._data) continue;
-    box._mounted = true;
-    if (box.dataset.chart === 'wait') waitChart(box, box._data);
-    if (box.dataset.chart === 'days') dayBars(box, box._data);
+    const d = data[box.dataset.chart];
+    if (!d || box._drawn === box.dataset.sig) continue;
+    box.replaceChildren();
+    box._drawn = box.dataset.sig;
+    if (box.dataset.chart === 'wait') waitChart(box, d);
+    if (box.dataset.chart === 'days') dayBars(box, d);
   }
 }
 
@@ -2038,7 +2118,7 @@ function pullToRefresh(area, ptr, onRefresh) {
     anim = spring({ from: pull, to, damping: 1, response: 0.3, onUpdate: paint, onDone: done });
   };
   area.addEventListener('touchstart', (e) => {
-    if (busy || sheet.isOpen || scrollY > 0 || e.touches.length > 1) return;
+    if (busy || sheet.isOpen || pages.depth || scrollY > 0 || e.touches.length > 1) return;
     anim?.stop();
     start = e.touches[0].clientY;
   }, { passive: true });
@@ -2095,25 +2175,47 @@ function scheduleRefresh() {
 }
 
 /* ---------- Updates ---------- */
-// A home-screen app can stay open for days. When the server says a newer
-// version is deployed, the page reloads the next time it is put away (so
-// nothing changes under the guest's finger), and offers a Reload now.
-const PAGE_VERSION = document.querySelector('meta[name=parkalert-version]')?.content;
-let updateReady = false;
-function noticeVersion(version) {
-  if (!version || !PAGE_VERSION || PAGE_VERSION.startsWith('__') || version === PAGE_VERSION || updateReady) return;
-  updateReady = true;
-  toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
+// A home-screen app can stay open for days. A new version downloads in the
+// background (the service worker installs it whole), then waits: it takes
+// over the moment the guest taps Reload, or when the app is next put away,
+// so nothing changes under a finger mid-use.
+let waitingWorker = null;
+let reloading = false;
+function offerUpdate(worker) {
+  if (!worker || waitingWorker === worker) return;
+  waitingWorker = worker;
+  toast('A new version of ParkAlert is ready', { label: 'Reload', run: () => worker.postMessage('activate'), sticky: true });
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden && updateReady) location.reload(); });
-// On a first visit the worker takes control too; that isn't an update.
-const hadController = !!navigator.serviceWorker?.controller;
-navigator.serviceWorker?.addEventListener('controllerchange', () => {
-  if (hadController && !updateReady) {
-    updateReady = true;
-    toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
-  }
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // The first install taking control isn't an update; a replacement is.
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register('/sw.js').then((reg) => {
+    if (reg.waiting && hadController) offerUpdate(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const incoming = reg.installing;
+      incoming?.addEventListener('statechange', () => {
+        if (incoming.state === 'installed' && navigator.serviceWorker.controller) offerUpdate(incoming);
+      });
+    });
+    // Look for a new version whenever the app comes back.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(() => {});
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && waitingWorker) waitingWorker.postMessage('activate');
 });
+// The server names its version on every dashboard; a newer one means the
+// worker should go and look now rather than at the next launch.
+const PAGE_VERSION = document.querySelector('meta[name=parkalert-version]')?.content;
+function noticeVersion(version) {
+  if (!version || !PAGE_VERSION || PAGE_VERSION.startsWith('__') || version === PAGE_VERSION) return;
+  navigator.serviceWorker?.getRegistration().then((reg) => reg?.update()).catch(() => {});
+}
 
 /* ---------- Data ---------- */
 // The last dashboard is kept on the phone, so opening the app with no signal
@@ -2172,9 +2274,8 @@ async function fetchDashboard() {
     failure = failureOf(err);
   }
   renderAll();
-  if (!offline && sheetContext?.type === 'ride') loadRide(sheetContext.id);
-  if (!offline && sheetContext?.type === 'park') loadPark();
-  if (sheetContext?.type === 'hold') updateSheet(holdSheet());
+  // The page on top reloads its own detail (a ride's history, the park's week).
+  if (!offline) pages.top?.load?.();
 }
 
 /* ---------- Screens & navigation ---------- */
@@ -2215,6 +2316,8 @@ function openPending() {
     else toast("That ride isn't in today's ride list any more");
   } else if (view === 'hold' && dash.rides.some((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold')) {
     openHold();
+  } else if (view === 'park') {
+    openParkInfo();
   }
 }
 
@@ -2383,7 +2486,7 @@ setInterval(() => {
   if (!dash || document.hidden) return;
   renderHeader();
   renderDown();
-  if (sheetContext?.type === 'hold') updateSheet(holdSheet());
+  pages.refresh();
 }, TICK_MS);
 
 /* ---------- Invites ---------- */
@@ -2463,6 +2566,11 @@ function confirmInvite(code, trip) {
   // code in the link decides which trip to show.
   const tripParam = params.get('trip');
   if (params.get('ride') || params.get('view')) pendingOpen = { ride: params.get('ride'), view: params.get('view') };
+  // A page's own address (reloaded, or opened from a bookmark): open it
+  // over the app, with the app as the entry Back returns to.
+  const route = location.pathname.match(/^\/(ride)\/([^/]+)$|^\/(park|hold)$/);
+  if (route) pendingOpen = route[1] ? { ride: decodeURIComponent(route[2]) } : { view: route[3] };
+  if (location.pathname !== '/') history.replaceState(null, '', '/' + location.search);
   if (tripParam && !joinParam) {
     history.replaceState(null, '', '/');
     const code = tripParam.toUpperCase();
@@ -2499,6 +2607,3 @@ function confirmInvite(code, trip) {
   }
 })();
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}

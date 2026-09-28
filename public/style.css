@@ -205,8 +205,6 @@ main {
   max-width: 40rem; margin: 0 auto;
   padding: 0.4rem 0 calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 2rem);
 }
-.view { animation: view-in 180ms ease-out; }
-@keyframes view-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---- Down now ---- */
 .cards { display: flex; flex-direction: column; gap: 0.65rem; padding: 0 var(--gutter); }
@@ -388,9 +386,6 @@ main {
 }
 
 /* ---- Sheet ---- */
-/* Behind a full-height sheet the page recedes onto black, as on iOS. */
-html.sheet-up { background: #000; }
-html.sheet-up body { background: transparent; }
 #app { transform-origin: 50% 0; }
 .sheet-layer { position: fixed; inset: 0; z-index: 50; }
 .scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; touch-action: none; }
@@ -543,7 +538,6 @@ main { position: relative; transition: none; }
 
 /* ---- Accessibility preferences ---- */
 @media (prefers-reduced-motion: reduce) {
-  .view { animation: none; }
   .pressable, .pressable:active { transform: none !important; }
   .switch::after, .toast { transition-duration: 1ms; }
   .ptr.spinning svg { animation-duration: 2.4s; }
@@ -590,3 +584,53 @@ main { position: relative; transition: none; }
 .ax-type .ride-row .meta { align-items: flex-start; }
 .ax-type .ride-row .meta .dot { margin-top: 0.4em; }
 @media (prefers-color-scheme: dark) { .segmented.wait-limits .chip[aria-pressed='true'] { background: #636366; } }
+
+/* ---- Pages: detail screens that push in from the right ---- */
+.pages { position: fixed; inset: 0; z-index: 40; }
+.page-shade { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.14); opacity: 0; pointer-events: none; }
+.page {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  background: var(--bg); will-change: transform;
+  box-shadow: -1px 0 0 var(--separator), -12px 0 32px rgba(0, 0, 0, 0.12);
+}
+.page-nav {
+  flex: none; position: relative; display: flex; align-items: center; min-height: 2.75rem;
+  padding: calc(env(safe-area-inset-top) + 0.25rem) 0.4rem 0.25rem;
+  background: var(--bg); transition: background-color 200ms ease, box-shadow 200ms ease;
+}
+.page.titled .page-nav {
+  background: var(--chrome); box-shadow: 0 0.5px 0 var(--separator);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+}
+.page-back {
+  position: relative; z-index: 1; display: flex; align-items: center; gap: 0.1rem;
+  min-height: 2.75rem; max-width: 45%; padding: 0 0.5rem 0 0.1rem; color: var(--accent); font-size: 1.0625rem;
+}
+.page-back span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.page-back .back-chevron { width: 1.5rem; height: 1.5rem; stroke-width: 2.2; transform: scaleX(-1); flex: none; }
+.page-back:active { opacity: 0.4; transition: none; }
+.page-nav-title {
+  position: absolute; left: 50%; bottom: 0.8rem; transform: translateX(-50%); max-width: 48%;
+  font-weight: 600; font-size: 1.0625rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 0; transition: opacity 150ms ease; pointer-events: none;
+}
+.page.titled .page-nav-title { opacity: 1; }
+.page-body {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 2.5rem);
+}
+.page-body > * { max-width: 40rem; margin-left: auto; margin-right: auto; }
+.page-body > .group { margin-left: max(var(--gutter), calc((100% - 40rem) / 2 + var(--gutter))); margin-right: max(var(--gutter), calc((100% - 40rem) / 2 + var(--gutter))); }
+.page-title { padding: 0.1rem var(--gutter) 0; }
+.page-sub { color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; padding: 0.3rem var(--gutter) 1rem; }
+.page-sub.tint-red { color: var(--red-text); font-weight: 600; }
+
+/* ---- Skeletons: the shape of what's coming, not a word ---- */
+.sk { display: block; border-radius: 0.35rem; background: var(--fill); animation: sk-pulse 1.4s ease-in-out infinite; }
+.sk-line { height: 0.8rem; margin: 0.25rem 0; }
+.sk-line.w60 { width: 60%; } .sk-line.w50 { width: 50%; } .sk-line.w35 { width: 35%; }
+.sk-bar { height: 0.3rem; width: 100%; margin: 0.8rem 0 0.5rem; border-radius: 999px; }
+.sk-num { display: inline-block; width: 2.2rem; height: 1.1rem; vertical-align: middle; }
+.sk-card { display: flex; flex-direction: column; }
+@keyframes sk-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
