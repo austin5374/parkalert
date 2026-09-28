@@ -8,18 +8,57 @@ const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const WEATHER_FILE = path.join(DATA_DIR, 'weather.json');
 
-function load(file, fallback) {
+// A missing file is a fresh start. A file that exists but won't parse is
+// never silently replaced: it is moved aside (file.corrupt-<time>) for a
+// person to recover, and the last daily backup is used if there is one.
+// Otherwise the next save would write an empty object over every trip.
+export function loadFile(file, fallback) {
+  let text;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return fallback;
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
   } catch {
-    return fallback;
+    const aside = `${file}.corrupt-${Date.now()}`;
+    fs.renameSync(file, aside);
+    console.error(`[store] ${path.basename(file)} is unreadable; moved it to ${path.basename(aside)}`);
+    try {
+      const backup = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'));
+      console.error(`[store] using ${path.basename(file)}.bak instead`);
+      return backup;
+    } catch {
+      return fallback;
+    }
   }
 }
+const load = loadFile;
 
-function saveAtomic(file, obj, indent) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// Write to a temp file, flush it to disk, then rename over the old one, so a
+// crash leaves either the old file or the new one, never half of either.
+// With keepBackup, the file being replaced is copied to file.bak once a day.
+export function saveAtomic(file, obj, indent, { keepBackup = false } = {}) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, indent));
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, JSON.stringify(obj, null, indent));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (keepBackup) {
+    try {
+      const bak = `${file}.bak`;
+      const age = Date.now() - (fs.statSync(bak, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+      if (age > 24 * 3600_000 && fs.existsSync(file)) fs.copyFileSync(file, bak);
+    } catch (err) {
+      console.error('[store] backup failed:', err.message);
+    }
+  }
   fs.renameSync(tmp, file);
 }
 
@@ -60,7 +99,7 @@ export function saveHistory() {
 }
 
 export function saveTrips() {
-  saveAtomic(TRIPS_FILE, trips, 1);
+  saveAtomic(TRIPS_FILE, trips, 1, { keepBackup: true });
 }
 
 // Every park's poll lands within the same second or so, and each used to
