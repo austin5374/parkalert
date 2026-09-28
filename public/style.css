@@ -512,6 +512,10 @@ html.sheet-up body { background: transparent; }
 
 /* ---- Pull to refresh ---- */
 main { position: relative; transition: none; }
+#setup { position: relative; }
+#setup-ptr { top: calc(env(safe-area-inset-top) + 0.5rem); }
+.retry { padding-bottom: 0.4rem; }
+.retry .btn-secondary { margin: 0.6rem var(--gutter) 0; width: auto; }
 .ptr {
   position: absolute; left: 50%; top: 0; margin-left: -0.9rem; width: 1.8rem; height: 1.8rem;
   opacity: 0; pointer-events: none; color: var(--label-2);

@@ -185,6 +185,30 @@ function hideToast() {
   if (next) setTimeout(() => showToast(next), 250);
 }
 
+/* ---------- Haptics ---------- */
+// A light tick where native apps give one. Android has vibrate(); iOS
+// Safari doesn't, but toggling a native switch input (iOS 17.4+) plays the
+// system tick, so a hidden one is flipped inside the gesture.
+const haptic = (() => {
+  let label = null;
+  return () => {
+    if (navigator.vibrate) { navigator.vibrate(8); return; }
+    if (platform !== 'ios') return;
+    if (!label) {
+      label = document.createElement('label');
+      label.setAttribute('aria-hidden', 'true');
+      label.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('switch', '');
+      input.tabIndex = -1;
+      label.appendChild(input);
+      document.body.appendChild(label);
+    }
+    label.click();
+  };
+})();
+
 /* ---------- Spring (damping ratio + response, as Apple frames it) ---------- */
 function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate, onDone }) {
   const k = (2 * Math.PI / response) ** 2;
@@ -727,12 +751,13 @@ function renderHeader() {
 
   const meta = $('#park-meta');
   const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS || !!dash.lastError;
-  meta.textContent = offline
+  const flash = metaFlash && Date.now() < metaFlash.until ? metaFlash : null;
+  meta.textContent = flash ? flash.text : offline
     ? `${FAILURE_META[failure]} · as of ${fmtUntil(dash.lastPoll)}`
     : stale
       ? `Updated ${dash.lastPoll ? fmtDuration(Date.now() - dash.lastPoll) : 'a while'} ago · reconnecting`
       : hoursText();
-  meta.classList.toggle('warn', offline || stale);
+  meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
 
   const st = alertState();
   const [glyph, label] = {
@@ -1412,7 +1437,14 @@ async function loadRide(rideId) {
   } catch {
     if (sheetContext?.id === rideId) {
       const note = $('#sheet-body [data-loading]');
-      if (note) note.textContent = "Couldn't load this ride's history. Pull down on the list to retry.";
+      if (note) {
+        note.replaceWith(el(`<div class="retry"><p class="footnote">Couldn't load this ride's wait times and history.</p>
+          <button class="btn-secondary pressable" type="button" data-act="retry-ride">Try again</button></div>`));
+        $('#sheet-body [data-act=retry-ride]').onclick = (e) => {
+          e.currentTarget.parentElement.replaceWith(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
+          loadRide(rideId);
+        };
+      }
     }
   }
 }
@@ -1590,7 +1622,14 @@ async function loadPark() {
     const info = await api(`/trips/${tripCode}/park`);
     lastParkInfo = info;
     if (sheetContext?.type === 'park') updateSheet(parkSheet(info));
-  } catch {}
+  } catch {
+    const box = $('#sheet-body [data-park-loading]');
+    if (sheetContext?.type === 'park' && box) {
+      box.replaceWith(el(`<div class="retry"><p class="footnote">Couldn't load this park's week and scorecard.</p>
+        <button class="btn-secondary pressable" type="button" data-act="retry-park">Try again</button></div>`));
+      $('#sheet-body [data-act=retry-park]').onclick = () => loadPark();
+    }
+  }
 }
 
 function parkSheet(info) {
@@ -1632,7 +1671,8 @@ function parkSheet(info) {
       <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>`));
     wrap.appendChild(el('<p class="footnote">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>'));
   }
-  wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on any list to refresh.</p>`));
+  if (!info) wrap.appendChild(el('<p class="footnote" data-park-loading>Loading this week…</p>'));
+  wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on a list to refresh.</p>`));
   wrap.appendChild(el('<div style="height:1rem"></div>'));
   return wrap;
 }
@@ -1820,48 +1860,69 @@ const fmtWeekday = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', ti
 
 /* ---------- Pull to refresh ---------- */
 // Only on touch, only from the very top, rubber-banded, and it springs home.
-(() => {
-  const main = $('main'), ptr = $('#ptr');
+// Afterwards it says how it went, as Mail does under its title: "Updated
+// just now", or that it couldn't. Works on the setup screen too, where it
+// retries the park list.
+function pullToRefresh(area, ptr, onRefresh) {
   const THRESHOLD = 64, HOLD = 52;
-  let start = null, pull = 0, busy = false, anim = null;
+  let start = null, pull = 0, busy = false, anim = null, armed = false;
   const paint = (v) => {
     pull = v;
-    main.style.transform = v ? `translateY(${v}px)` : '';
+    area.style.transform = v ? `translateY(${v}px)` : '';
     ptr.style.opacity = String(Math.min(1, v / THRESHOLD));
     ptr.style.transform = `translateY(${v / 2 - 30}px) rotate(${v * 4}deg)`;
     ptr.classList.toggle('armed', v >= THRESHOLD);
+    if (v >= THRESHOLD && !armed) haptic();
+    armed = v >= THRESHOLD;
   };
   const settle = (to, done) => {
     anim?.stop();
     if (reducedMotion()) { paint(to); done?.(); return; }
     anim = spring({ from: pull, to, damping: 1, response: 0.3, onUpdate: paint, onDone: done });
   };
-  main.addEventListener('touchstart', (e) => {
+  area.addEventListener('touchstart', (e) => {
     if (busy || sheet.isOpen || scrollY > 0 || e.touches.length > 1) return;
     anim?.stop();
     start = e.touches[0].clientY;
   }, { passive: true });
-  main.addEventListener('touchmove', (e) => {
+  area.addEventListener('touchmove', (e) => {
     if (start == null) return;
     const dy = e.touches[0].clientY - start;
     if (dy <= 0) { if (pull) paint(0); return; }
-    if (e.target.closest('.chart')) { start = null; return; }
-    e.preventDefault();
+    if (e.target.closest('.chart, input')) { start = null; return; }
+    if (e.cancelable) e.preventDefault();
     paint(rubberband(dy, 480, 0.55));
   }, { passive: false });
-  main.addEventListener('touchend', async () => {
+  area.addEventListener('touchend', async () => {
     if (start == null) return;
     start = null;
     if (pull < THRESHOLD) { settle(0); return; }
     busy = true;
     ptr.classList.add('spinning');
-    navigator.vibrate?.(8);
     settle(HOLD);
-    await refresh();
+    await onRefresh();
     ptr.classList.remove('spinning');
     settle(0, () => { busy = false; });
   });
-})();
+}
+
+// A few seconds of "Updated just now" (or why not) in the header's meta line.
+let metaFlash = null; // { text, warn, until }
+function flashMeta(text, warn = false) {
+  metaFlash = { text, warn, until: Date.now() + 3000 };
+  if (dash) renderHeader();
+  setTimeout(() => { if (dash) renderHeader(); }, 3100);
+}
+
+pullToRefresh($('main'), $('#ptr'), async () => {
+  await refresh();
+  if (offline) flashMeta(failure === 'offline' ? "Couldn't refresh: you're offline" : "Couldn't refresh: ParkAlert isn't responding", true);
+  else flashMeta('Updated just now');
+});
+pullToRefresh($('#setup .setup'), $('#setup-ptr'), async () => {
+  parks = [];
+  await renderSetupParks();
+});
 
 /* ---------- Updates ---------- */
 // A home-screen app can stay open for days. When the server says a newer
