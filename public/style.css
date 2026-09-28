@@ -393,7 +393,7 @@ html.sheet-up { background: #000; }
 html.sheet-up body { background: transparent; }
 #app { transform-origin: 50% 0; }
 .sheet-layer { position: fixed; inset: 0; z-index: 50; }
-.scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; }
+.scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; touch-action: none; }
 .sheet {
   position: absolute; left: 0; right: 0; bottom: 0; margin: 0 auto; max-width: 40rem;
   max-height: calc(100dvh - env(safe-area-inset-top) - 1.5rem);

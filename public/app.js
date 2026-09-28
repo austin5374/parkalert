@@ -501,6 +501,9 @@ const sheet = (() => {
   body.addEventListener('touchcancel', touchEnd);
 
   scrim.addEventListener('click', () => close());
+  // A drag on the dimmed page is not a scroll of the page under it (iOS
+  // would chain it through the fixed layer); the page stays put.
+  scrim.addEventListener('touchmove', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
   // A finger on the sheet (dragging it, scrubbing a chart) or a scroll still
