@@ -184,7 +184,10 @@ a, a:visited { color: var(--accent); }
 .nav-meta { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
 #park-meta.warn { color: var(--orange); }
 
+/* The pill is drawn 33px tall but answers to a 44px finger. */
+.pill::before { content: ''; position: absolute; inset: -0.4rem -0.15rem; }
 .pill {
+  position: relative;
   display: inline-flex; align-items: center; gap: 0.35rem; flex: none;
   padding: 0.42rem 0.8rem 0.42rem 0.65rem; margin-bottom: 0.3rem;
   border-radius: 999px; background: var(--fill); font-size: 0.875rem; font-weight: 600;
@@ -302,7 +305,9 @@ main {
 .meta-chevron { width: 0.7rem; height: 0.7rem; stroke-width: 2.6; color: var(--label-3); margin-left: 0.1rem; }
 .no-results { padding: 1.4rem var(--gutter); color: var(--label-2); text-align: center; }
 
-/* Switch: the familiar on/off control, one per ride. */
+/* Switch: the familiar on/off control, one per ride. As in Settings, the
+   whole trailing end of the row toggles it, not just the drawn switch. */
+.switch::before { content: ''; position: absolute; top: -0.9rem; bottom: -0.9rem; left: -0.75rem; right: -1rem; }
 .switch {
   position: relative; width: 3.1rem; height: 1.9rem; flex: none; border-radius: 999px;
   background: var(--fill-strong); transition: background-color 200ms ease;
