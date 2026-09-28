@@ -101,6 +101,10 @@
           <svg><use href="#i-search"/></svg>
           <input id="ride-search" type="search" placeholder="Search rides" autocomplete="off" enterkeyhint="search">
         </label>
+        <div class="segmented" role="group" aria-label="Sort rides">
+          <button type="button" data-sort="name" aria-pressed="true">A–Z</button>
+          <button type="button" data-sort="wait" aria-pressed="false">Shortest wait</button>
+        </div>
         <div class="list-header">
           <span id="follow-summary"></span>
           <button id="btn-follow-all" class="text-btn" type="button"></button>

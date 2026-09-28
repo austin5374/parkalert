@@ -615,13 +615,32 @@ function rideMeta(r) {
   return 'Closed';
 }
 
+// A–Z, or shortest wait first: what's quickest to ride right now. Running
+// rides by posted wait, then down ones, then closed. Remembered per phone.
+let rideSort = (() => { try { return localStorage.getItem('parkalert.rideSort') || 'name'; } catch { return 'name'; } })();
+const byName = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name));
+function rideOrder(a, b) {
+  if (rideSort !== 'wait') return byName(a, b);
+  const rank = (r) => (r.status === 'OPERATING' ? 0 : r.status === 'DOWN' ? 1 : 2);
+  return rank(a) - rank(b) || (a.waitTime ?? Infinity) - (b.waitTime ?? Infinity) || byName(a, b);
+}
+
+function setRideSort(sort) {
+  rideSort = sort;
+  try { localStorage.setItem('parkalert.rideSort', sort); } catch {}
+  document.querySelectorAll('[data-sort]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sort === sort)));
+  if (dash) renderRides();
+}
+document.querySelectorAll('[data-sort]').forEach((b) => { b.onclick = () => setRideSort(b.dataset.sort); });
+setRideSort(rideSort);
+
 function renderRides() {
   keepFocus($('#rides-list'), drawRides);
 }
 
 function drawRides() {
   const q = $('#ride-search').value.trim().toLowerCase();
-  const all = [...dash.rides].sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)));
+  const all = [...dash.rides].sort(rideOrder);
   const shown = q ? all.filter((r) => r.name.toLowerCase().includes(q)) : all;
   const following = all.filter((r) => isFollowing(r.id)).length;
 

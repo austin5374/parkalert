@@ -265,6 +265,17 @@ main {
 }
 .search input::placeholder { color: var(--label-2); }
 .search input::-webkit-search-cancel-button { filter: grayscale(1); }
+.segmented {
+  display: flex; gap: 2px; margin: 0.6rem var(--gutter) 0; padding: 2px;
+  background: var(--fill); border-radius: 0.6rem;
+}
+.segmented button {
+  flex: 1; min-height: 2.25rem; border-radius: 0.5rem; text-align: center;
+  font-size: 0.875rem; font-weight: 500; letter-spacing: 0;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+.segmented button[aria-pressed='true'] { background: var(--surface); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+@media (prefers-color-scheme: dark) { .segmented button[aria-pressed='true'] { background: #636366; } }
 .list-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 1rem var(--gutter) 0.45rem; font-size: 0.8125rem; color: var(--label-2);
