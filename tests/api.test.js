@@ -233,3 +233,12 @@ test('every park names the resort it is listed under', async () => {
   const { parks } = (await call('GET', '/api/parks')).body;
   assert.ok(parks.every((p) => typeof p.resort === 'string' && p.resort && p.timezone));
 });
+
+test("a California park runs on Pacific time even when its schedule doesn't say", async () => {
+  const DCA = '832fcd51-ea19-4e77-85c7-75d5843b127c';
+  fakes.upstream.schedule[DCA] = { schedule: [] }; // no timezone in the response
+  fakes.upstream.live[DCA] = [{ id: 'dca-1', name: 'Ride', status: 'OPERATING', waitTime: 5 }];
+  const trip = await newTrip(DCA);
+  const { body } = await call('GET', `/api/trips/${trip.code}/dashboard`);
+  assert.equal(body.park.timezone, 'America/Los_Angeles');
+});

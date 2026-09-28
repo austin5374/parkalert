@@ -327,7 +327,9 @@ export const MAX_GAP_MS = 15 * 60_000;
 export const isBaseline = (lastPoll, now = Date.now()) => !lastPoll || now - lastPoll > MAX_GAP_MS;
 
 async function doPollPark(parkId) {
-  parkState[parkId] ??= { rides: {}, timezone: 'America/New_York', schedule: null };
+  // The zone comes with the schedule, but the park list knows it already, so
+  // a California park never runs on New York time while that loads.
+  parkState[parkId] ??= { rides: {}, timezone: getPark(parkId)?.timezone || 'America/New_York', schedule: null };
   const state = parkState[parkId];
   try {
     await refreshSchedule(parkId);

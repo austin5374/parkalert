@@ -88,6 +88,9 @@ function readBody(req) {
   });
 }
 
+// A park's time zone: from its schedule once fetched, else from the park list.
+const zoneOf = (parkId) => parkState[parkId]?.timezone || getPark(parkId)?.timezone || 'America/New_York';
+
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
   return { code, topic, parkId, watched, mute, rideMutes };
@@ -105,7 +108,7 @@ async function dashboard(trip) {
     park: {
       id: trip.parkId,
       name: park?.name || 'Unknown park',
-      timezone: state.timezone || null,
+      timezone: zoneOf(trip.parkId),
       openingTime: schedule?.openingTime || null,
       closingTime: schedule?.closingTime || null,
       lateEvent: schedule?.lateEvent || null,
@@ -171,7 +174,7 @@ async function handleApi(req, res, url) {
     const ride = state.rides && Object.hasOwn(state.rides, parts[4]) ? state.rides[parts[4]] : null;
     if (!ride) return json(res, 404, { error: 'ride not found' });
     const now = Date.now();
-    const dayStart = parkDayStart(state.timezone || 'America/New_York', now);
+    const dayStart = parkDayStart(zoneOf(trip.parkId), now);
     return json(res, 200, {
       ride: { id: parts[4], ...ride },
       outlook: ride.status === 'DOWN' && ride.downSince
@@ -187,7 +190,7 @@ async function handleApi(req, res, url) {
   if (trip && req.method === 'GET' && parts[3] === 'park') {
     const state = parkState[trip.parkId] || {};
     const names = Object.fromEntries(Object.entries(state.rides || {}).map(([id, r]) => [id, r.name]));
-    const dayStart = parkDayStart(state.timezone || 'America/New_York');
+    const dayStart = parkDayStart(zoneOf(trip.parkId));
     const today = (state.recent || []).filter((e) => e.at >= dayStart);
     return json(res, 200, {
       today: {
