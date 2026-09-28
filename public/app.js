@@ -893,6 +893,44 @@ function drawRides() {
   }).join('');
 }
 
+// Switches slide as well as tap, as in Settings: the knob follows a
+// sideways drag and the switch ends up whichever way the finger finished.
+// The tap that ends a drag is swallowed and the change made once, here.
+let slide = null;
+let swallowClick = false;
+document.addEventListener('pointerdown', (e) => {
+  const sw = e.target.closest('.switch');
+  if (!sw || e.button > 0) return;
+  slide = { sw, x: e.clientX, id: e.pointerId, on: sw.getAttribute('aria-checked') === 'true', want: null };
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (!slide || e.pointerId !== slide.id) return;
+  const dx = e.clientX - slide.x;
+  if (Math.abs(dx) < 8 && slide.want === null) return;
+  slide.want = dx > 0;
+  slide.sw.classList.toggle('slide-on', slide.want);
+  slide.sw.classList.toggle('slide-off', !slide.want);
+}, true);
+const endSlide = (e) => {
+  if (!slide || e.pointerId !== slide.id) return;
+  const { sw, on, want } = slide;
+  slide = null;
+  sw.classList.remove('slide-on', 'slide-off');
+  if (want === null || e.type === 'pointercancel') return;
+  swallowClick = true;
+  setTimeout(() => { swallowClick = false; }, 400);
+  if (want !== on) sw.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+};
+document.addEventListener('pointerup', endSlide, true);
+document.addEventListener('pointercancel', endSlide, true);
+document.addEventListener('click', (e) => {
+  if (swallowClick && e.isTrusted && e.target.closest('.switch')) {
+    swallowClick = false;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+}, true);
+
 $('#rides-list').addEventListener('click', (e) => {
   const sw = e.target.closest('.switch');
   if (sw) toggleFollow(sw.dataset.id);
