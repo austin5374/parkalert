@@ -1852,6 +1852,10 @@ function waitChart(box, { waits, now }) {
     if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) { cursor = fromEvent(e); show(cursor, true); }
   });
   svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') show(t1, false); });
+  // Lifting the finger goes back to "Now", as Stocks and Weather do.
+  for (const type of ['pointerup', 'pointercancel']) {
+    svg.addEventListener(type, (e) => { if (e.pointerType !== 'mouse') { cursor = t1; show(t1, false); } });
+  }
   svg.addEventListener('keydown', (e) => {
     const step = (t1 - t0) / 40;
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
