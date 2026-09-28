@@ -1852,8 +1852,10 @@ function noticeVersion(version) {
   toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden && updateReady) location.reload(); });
+// On a first visit the worker takes control too; that isn't an update.
+const hadController = !!navigator.serviceWorker?.controller;
 navigator.serviceWorker?.addEventListener('controllerchange', () => {
-  if (PAGE_VERSION && !updateReady) {
+  if (hadController && !updateReady) {
     updateReady = true;
     toast('ParkAlert has been updated', { label: 'Reload', run: () => location.reload(), sticky: true });
   }
