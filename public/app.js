@@ -1234,23 +1234,38 @@ async function openPark() {
     return;
   }
   const content = el(`<div>${sheetHead('Park', 'Changes the park for everyone on this trip. Each park keeps its own follow list.')}</div>`);
-  content.appendChild(parkGroups(dash.park.id, async (p) => {
+  content.appendChild(parkGroups(dash.park.id, (p) => {
     sheet.close();
-    if (p.id === dash.park.id) return;
-    const from = dash.park.id;
-    try {
-      await patchTrip({ parkId: p.id });
-      await refresh();
-      toast(`Switched to ${parkLabel(p.name)}`, {
-        label: 'Undo',
-        run: async () => { await patchTrip({ parkId: from }); refresh(); },
-      });
-    } catch {
-      toast("Couldn't switch parks. Check your connection.");
-    }
+    if (p.id !== dash.park.id) switchPark(p, dash.park);
   }));
   content.appendChild(el('<div style="height:0.5rem"></div>'));
   sheet.open(content);
+}
+
+// The new park shows at once, loading, instead of the old park's rides
+// sitting there until the server answers. A failure (of the switch or its
+// Undo) goes back to what the server has and says so.
+async function switchPark(to, from, { undo = true } = {}) {
+  const before = dash;
+  dash = null;
+  renderNoData();
+  $('#park-name').textContent = parkLabel(to.name);
+  $('#park-meta').textContent = 'Loading rides…';
+  try {
+    await patchTrip({ parkId: to.id });
+    await refresh();
+    if (undo) {
+      toast(`Switched to ${parkLabel(to.name)}`, {
+        label: 'Undo',
+        run: () => switchPark(from, to, { undo: false }),
+      });
+    }
+  } catch {
+    dash = before;
+    renderAll();
+    refresh();
+    toast(`Couldn't switch to ${parkLabel(to.name)}. Check your connection.`);
+  }
 }
 
 function openLeave() {
