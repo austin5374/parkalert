@@ -886,7 +886,7 @@ function downCard(r) {
   const since = o.kind === 'opening' ? `Delayed opening since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
   const foot = [
     basisLine(o),
-    following ? '' : 'Not following',
+    following ? '' : 'Alerts off',
   ].filter(Boolean).join(' · ');
   return `
     <article class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="button" tabindex="0"
@@ -940,9 +940,9 @@ function drawDown() {
     const stale = offline || Date.now() - dash.lastPoll > STALE_MS;
     const [glyph, cls, title, text] =
       alertState().kind === 'closed' ? ['moon', 'closed', 'Park closed', 'Closed for the day. Alerts start again when it opens.']
-        : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride you follow is late to open.`]
+        : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride with alerts on is late to open.`]
           : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, 'This catches up as soon as ParkAlert can be reached again.']
-            : ['check-circle', '', "Everything's running", "You'll get an alert when a ride you follow goes down."];
+            : ['check-circle', '', "Everything's running", "You'll get an alert when a ride with alerts on goes down."];
     list.appendChild(el(`
       <div class="empty ${cls}">
         ${icon(glyph)}
@@ -1102,9 +1102,9 @@ function drawRides() {
   const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
   const following = all.filter((r) => isFollowing(r.id)).length;
 
-  $('#follow-summary').textContent = following === all.length ? `Following all ${all.length}` : `Following ${following} of ${all.length}`;
+  $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length}` : `Alerts on for ${following} of ${all.length}`;
   const btn = $('#btn-follow-all');
-  btn.textContent = following === all.length ? 'Unfollow all' : 'Follow all';
+  btn.textContent = following === all.length ? 'Turn all off' : 'Turn all on';
   btn.onclick = following === all.length ? unfollowAll : followAll;
   // While searching it would be unclear whether this acts on the matches or on everything.
   btn.classList.toggle('hidden', !!q);
@@ -1199,7 +1199,7 @@ function followAll() {
 
 function unfollowAll() {
   save((t) => { t.watched = []; }, { watched: [] }, (before) => {
-    toast('Unfollowed every ride', {
+    toast('Alerts off for every ride', {
       label: 'Undo',
       run: () => save((t) => { t.watched = before.watched; }, { watched: before.watched }),
     });
@@ -1318,7 +1318,7 @@ async function openPark() {
     toast("Can't load the park list. Check your connection.");
     return;
   }
-  const content = el(`<div>${sheetHead('Park', 'Changes the park for everyone on this trip. Each park keeps its own follow list.')}</div>`);
+  const content = el(`<div>${sheetHead('Park', 'Changes the park for everyone on this trip. Each park remembers which rides have alerts on.')}</div>`);
   content.appendChild(parkGroups(dash.park.id, (p) => {
     sheet.close();
     if (p.id !== dash.park.id) switchPark(p, dash.park);

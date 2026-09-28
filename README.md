@@ -10,7 +10,7 @@ ThemeParks.wiki API ──(poll every 60s)──▶ Node server ──(on status
         └──(history, once a day)─────────────┤
 Airport weather reports ──(every 5 min)─────▶│
 Weather report archive ──(hourly backfill)──▶┤
-                                             └──▶ serves the PWA dashboard (down rides, watch list, mutes)
+                                             └──▶ serves the PWA dashboard (down rides, ride alerts, pause)
 ```
 
 - **No runtime dependencies.** Plain Node 22+. Deploys to Railway in minutes; runs anywhere Node runs. ESLint is the only dev dependency, for `npm run lint`.
@@ -159,7 +159,7 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
 - Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
 - After a gap in polling (the trip hopped to another park and back, or the server or the API was down for more than 15 minutes), the next poll starts afresh with no alerts, because nobody knows when things changed in between. The dashboard shows the current state straight away.
-- Follow list: every ride by default. It is shared across the trip, and each park keeps its own, so hopping parks and back restores it.
+- Ride alerts: on for every ride by default. They are shared across the trip, and each park keeps its own, so hopping parks and back restores them.
 
 ## Reopen estimates
 
@@ -221,7 +221,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 ## Troubleshooting
 
 - **No alerts on one phone**: Trip tab → Alerts on this phone. Send a test; if it doesn't arrive, check that notifications are allowed for ntfy and that the topic you subscribed to matches exactly.
-- **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride isn't followed (Rides tab switch). Check `/api/health?token=…` to see whether the park is being polled at all.
+- **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride's alerts are off (its switch on the Rides tab). Check `/api/health?token=…` to see whether the park is being polled at all.
 - **Header says "reconnecting"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. Alerts resume on their own when it answers again.
 - **Estimates say nothing**: fewer than 5 comparable past outages yet. Set `THEMEPARKS_API_KEY` to backfill 30 days instead of 7.
 - **A storm outage gets an ordinary estimate**: the weather reports are more than 75 minutes old (the feed is down; the server log says so), or the archive hasn't yet shown that ride closing for storms on two days.
