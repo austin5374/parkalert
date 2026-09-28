@@ -1073,11 +1073,15 @@ function parkSheet(info) {
   </div></div>`));
   if (info?.week.leastReliable.length) {
     wrap.appendChild(el(`<h2 class="section-label">Most outages, last ${info.week.days} days</h2>`));
-    wrap.appendChild(el(`<div class="group plain">${info.week.leastReliable.map((r) => `
-      <button class="row pressable" type="button" data-ride="${esc(r.id)}">
-        <span class="row-label">${esc(r.name)}<small>${r.outages} outage${r.outages === 1 ? '' : 's'}, ${fmtDuration(r.minutes * 60000)} down in total</small></span>
-        ${icon('chevron', 'chevron')}
-      </button>`).join('')}</div>`));
+    // Only rides in today's live data have a sheet to open; one that has been
+    // renamed or closed for the season is listed, not offered as a button.
+    const live = new Set(dash.rides.map((r) => r.id));
+    wrap.appendChild(el(`<div class="group plain">${info.week.leastReliable.map((r) => {
+      const label = `<span class="row-label">${esc(r.name)}<small>${r.outages} outage${r.outages === 1 ? '' : 's'}, ${fmtDuration(r.minutes * 60000)} down in total</small></span>`;
+      return live.has(r.id)
+        ? `<button class="row pressable" type="button" data-ride="${esc(r.id)}">${label}${icon('chevron', 'chevron')}</button>`
+        : `<div class="row">${label}</div>`;
+    }).join('')}</div>`));
     if (info.week.holdDays) {
       wrap.appendChild(el(`<p class="footnote">Park-wide holds happened on ${info.week.holdDays} of those ${info.week.days} days.</p>`));
     }
