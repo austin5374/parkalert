@@ -2,10 +2,11 @@
   <!-- The app icon pared down for tab-sized favicons: track and badge only. -->
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#120d38"/>
-      <stop offset="0.5" stop-color="#43208a"/>
-      <stop offset="0.82" stop-color="#b8327f"/>
-      <stop offset="1" stop-color="#ff6a6a"/>
+      <stop offset="0" stop-color="#0a1a33"/>
+      <stop offset="0.52" stop-color="#17406b"/>
+      <stop offset="0.66" stop-color="#2f6a8f"/>
+      <stop offset="0.7" stop-color="#e98a4a"/>
+      <stop offset="1" stop-color="#ff9f55"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="96" fill="url(#sky)"/>
