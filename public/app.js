@@ -697,12 +697,31 @@ function setTrip(code, { firstRun = false } = {}) {
   showApp({ firstRun });
 }
 
-function leaveTrip() {
-  localStorage.removeItem('parkalert.trip');
+// Leaving takes the trip's cached rides and its "alerts work here" flag off
+// the phone too, so a shared phone keeps no trace of the topic, and
+// rejoining starts clean. A toast offers the way back.
+function leaveTrip({ undoable = false } = {}) {
+  const code = tripCode;
+  try {
+    localStorage.removeItem('parkalert.trip');
+    localStorage.removeItem(dashKey(code));
+    if (!undoable) localStorage.removeItem(`parkalert.alertsReady.${code}`);
+  } catch {}
   tripCode = null;
   dash = null;
   clearInterval(refreshTimer);
   showSetup();
+  if (undoable && code) {
+    const ready = localStorage.getItem(`parkalert.alertsReady.${code}`);
+    try { localStorage.removeItem(`parkalert.alertsReady.${code}`); } catch {}
+    toast(`Left trip ${code}`, {
+      label: 'Undo',
+      run: () => {
+        if (ready) try { localStorage.setItem(`parkalert.alertsReady.${code}`, ready); } catch {}
+        setTrip(code);
+      },
+    });
+  }
 }
 
 /* ---------- Header ---------- */
@@ -1284,7 +1303,7 @@ function openLeave() {
       <button class="btn-secondary pressable" type="button" data-act="cancel">Cancel</button>
     </div>
   </div>`);
-  content.querySelector('[data-act=leave]').onclick = () => { sheet.close(); leaveTrip(); };
+  content.querySelector('[data-act=leave]').onclick = () => { sheet.close(); leaveTrip({ undoable: true }); };
   content.querySelector('[data-act=cancel]').onclick = () => sheet.close();
   sheet.open(content);
 }
