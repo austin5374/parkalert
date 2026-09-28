@@ -9,7 +9,7 @@ import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
 import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
-import { PORT, NTFY_BASE, APP_URL } from './config.js';
+import { PORT, NTFY_BASE, APP_URL, HEALTH_TOKEN } from './config.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
 import { publish } from './notify.js';
@@ -151,7 +151,9 @@ async function handleApi(req, res, url) {
   // For an uptime monitor: is every park someone is watching being polled?
   // 503 once any has gone 5 minutes without a good poll, which is what
   // "alerts silently stopped" looks like from outside. (Railway's deploy
-  // check uses /api/parks, so an API outage never blocks a deploy.)
+  // check uses /api/parks, so an API outage never blocks a deploy.) Which
+  // parks have trips on them, and upstream errors, only with HEALTH_TOKEN:
+  // otherwise it would show anyone when a family is at a park.
   if (req.method === 'GET' && url.pathname === '/api/health') {
     const now = Date.now();
     const parks = activeParkIds(now).map((id) => {
@@ -165,7 +167,10 @@ async function handleApi(req, res, url) {
       };
     });
     const ok = parks.every((p) => p.lastPoll && now - p.lastPoll < HEALTH_STALE_MS);
-    return json(res, ok ? 200 : 503, { ok, uptimeSeconds: Math.round(process.uptime()), parks });
+    const detail = HEALTH_TOKEN && url.searchParams.get('token') === HEALTH_TOKEN;
+    return json(res, ok ? 200 : 503, detail
+      ? { ok, uptimeSeconds: Math.round(process.uptime()), parks }
+      : { ok, uptimeSeconds: Math.round(process.uptime()) });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/trips') {

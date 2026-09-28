@@ -278,6 +278,8 @@ test('health reports each watched park, and fails once one stops being polled', 
   await call('GET', `/api/trips/${trip.code}/dashboard`);
   let r = await call('GET', '/api/health');
   assert.equal(r.status, 200);
+  assert.equal(r.body.parks, undefined, 'which parks are watched is not public');
+  r = await call('GET', '/api/health?token=health-secret');
   assert.ok(r.body.parks.some((p) => p.name === 'Magic Kingdom' && p.ageSeconds < 60));
   assert.ok(!JSON.stringify(r.body).includes(trip.code), 'no trip codes');
   const saved = parkState[MK].lastPoll;

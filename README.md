@@ -96,7 +96,7 @@ Railway gives you an always-on host with automatic HTTPS: no certs, DNS, or reve
 3. **Attach a volume** (required, because the container filesystem is wiped on every redeploy): in the Railway dashboard, right-click the service → **Attach volume**, mount path `/data`. The app picks it up automatically via `RAILWAY_VOLUME_MOUNT_PATH`; trips and outage history survive redeploys.
 4. **Generate the public URL**: service → Settings → Networking → **Generate Domain**. You get `https://<name>.up.railway.app`, which is what phones load. HTTPS is automatic.
 5. Make sure **Serverless / App Sleep is OFF** for the service (Settings → Deploy). The 60-second poller must stay awake or transitions get missed.
-6. Optional: point an uptime monitor at `https://<name>.up.railway.app/api/health`. It returns 503 if any park a trip is watching has gone 5 minutes without a successful poll, i.e. alerts have quietly stopped.
+6. Optional: point an uptime monitor at `https://<name>.up.railway.app/api/health`. It returns 503 if any park a trip is watching has gone 5 minutes without a successful poll, i.e. alerts have quietly stopped. It says only whether all is well; set `HEALTH_TOKEN` and add `?token=<it>` to see each park and its last error.
 
 ### Settings
 
@@ -112,6 +112,7 @@ No environment variables are required.
 | `THEMEPARKS_BASE` | `https://api.themeparks.wiki/v1` | A stand-in or mirror for the ThemeParks.wiki API. |
 | `WEATHER_BASE` | `https://aviationweather.gov/api/data` | Live airport weather reports (NOAA's Aviation Weather Center). |
 | `WEATHER_ARCHIVE` | `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py` | Past airport weather reports (Iowa State's ASOS archive). |
+| `HEALTH_TOKEN` | none | Unlocks the per-park detail in `/api/health`. |
 | `PORT` | `3000` | Set by Railway. |
 
 **Cost**: the server uses about 90 MB of RAM (measured on Node 22), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
@@ -198,7 +199,7 @@ Everything the app uses, all JSON. A trip code is the only credential.
 | Route | |
 |---|---|
 | `GET /api/parks` | The parks the app knows. Railway's deploy healthcheck. |
-| `GET /api/health` | Last successful poll per watched park; 503 once one is 5 minutes stale. |
+| `GET /api/health` | `ok`, and 503 once a watched park is 5 minutes stale. With `?token=` (`HEALTH_TOKEN`), each park's last poll and error. |
 | `POST /api/trips` `{parkId}` | Create a trip. Returns its code and ntfy topic. |
 | `GET /api/trips/:code` | The trip. |
 | `PATCH /api/trips/:code` | Any of `parkId`, `watched` (null or ride ids), `mute` (null or `{until}`), `rideMutes`. Validated as a whole: one bad field rejects the request. |
@@ -220,8 +221,8 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 ## Troubleshooting
 
 - **No alerts on one phone**: Trip tab → Alerts on this phone. Send a test; if it doesn't arrive, check that notifications are allowed for ntfy and that the topic you subscribed to matches exactly.
-- **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride isn't followed (Rides tab switch). Check `/api/health` to see whether the park is being polled at all.
-- **Header says "reconnecting"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health` shows the last error. Alerts resume on their own when it answers again.
+- **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride isn't followed (Rides tab switch). Check `/api/health?token=…` to see whether the park is being polled at all.
+- **Header says "reconnecting"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. Alerts resume on their own when it answers again.
 - **Estimates say nothing**: fewer than 5 comparable past outages yet. Set `THEMEPARKS_API_KEY` to backfill 30 days instead of 7.
 - **A storm outage gets an ordinary estimate**: the weather reports are more than 75 minutes old (the feed is down; the server log says so), or the archive hasn't yet shown that ride closing for storms on two days.
 
