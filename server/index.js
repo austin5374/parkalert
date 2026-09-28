@@ -37,14 +37,26 @@ function tooMany(res, waitMs) {
   res.end(JSON.stringify({ error: 'too many requests, try again shortly' }));
 }
 
+const MAX_BODY = 100_000;
+
+// Bytes are joined before decoding, so a character split across chunks
+// survives. Past the limit nothing more is kept, and the connection closes
+// after the 413 rather than reading on.
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = '';
+    const chunks = [];
+    let size = 0;
     req.on('data', (c) => {
-      data += c;
-      if (data.length > 100_000) reject(new HttpError(413, 'body too large'));
+      if (size > MAX_BODY) return;
+      size += c.length;
+      if (size > MAX_BODY) {
+        chunks.length = 0;
+        reject(new HttpError(413, 'body too large'));
+      } else chunks.push(c);
     });
     req.on('end', () => {
+      if (size > MAX_BODY) return;
+      const data = Buffer.concat(chunks).toString('utf8');
       try {
         resolve(data ? JSON.parse(data) : {});
       } catch {
@@ -248,6 +260,7 @@ export const server = http.createServer(async (req, res) => {
     // A request the client got wrong says why; anything else is ours, and
     // its details stay in the log.
     if (err instanceof HttpError) {
+      if (err.status === 413) res.setHeader('Connection', 'close');
       if (!res.headersSent) json(res, err.status, { error: err.message });
       return;
     }

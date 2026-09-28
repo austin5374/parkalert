@@ -208,3 +208,14 @@ test('nothing outside public/ is ever served', async () => {
     assert.ok(!/THEMEPARKS_BASE|"devDependencies"/.test(res), `${target} leaked a file outside public/`);
   }
 });
+
+test('an oversized body is refused with a 413, and non-ASCII JSON reads correctly', async () => {
+  const trip = await newTrip();
+  const big = await call('PATCH', `/api/trips/${trip.code}`, JSON.stringify({ watched: ['x'.repeat(300_000)] }));
+  assert.equal(big.status, 413);
+  // A name that would straddle chunk boundaries if split mid-character.
+  const ids = Array.from({ length: 300 }, (_, i) => `rïdé-${i}-🎢`);
+  const r = await call('PATCH', `/api/trips/${trip.code}`, { watched: ids });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.trip.watched, ids);
+});
