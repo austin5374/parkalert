@@ -46,6 +46,7 @@ No environment variables are required. Optional ones:
 - `HISTORY_DAYS`: how far back to backfill, if you want less than the key allows.
 - `DATA_DIR`: override the data location; not needed when a volume is attached.
 - `NTFY_BASE`: a self-hosted ntfy server instead of ntfy.sh.
+- `PUBLIC_URL`: the app's address, for the tap-to-open link on alerts. Not needed on Railway.
 
 **Cost**: this app uses ~64 MB RAM and near-zero CPU, about **$0.50 to $0.80/month** of Railway credit. The history backfill is a handful of requests a night and a few KB of storage a day, so it does not change that. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which *probably* covers it but is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
 
@@ -62,18 +63,23 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 
 ## Using it
 
-1. Open the app → it asks for location once and auto-picks your park (or pick manually; it falls back to the picker if GPS is denied).
-2. Install the **ntfy** app ([iOS](https://apps.apple.com/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)), subscribe to your trip's topic (Settings tab → copy topic → "Send test notification" to verify).
-3. Add to home screen for the full-screen PWA experience.
-4. **Second phone**: Settings → "Share trip link" (or read them the 6-letter code → "join a trip" on the setup screen). Both phones now share the same watch list and both get pinged.
+1. Open the app and pick your park, or tap **Use my location**. Location is only asked for when you tap it.
+2. A short setup sheet opens: install the free **ntfy** app, subscribe to your trip (one tap on Android; copy and paste on iPhone), then send a test and confirm it arrived. Until you do, the header says **Set up alerts** instead of **Alerts on**, so a phone that will never be pinged is obvious.
+3. Add to home screen for the full-screen experience.
+4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip switches trips with an Undo.
+
+The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with a "Back up recently" list below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search. **Trip** holds the code, alert setup, pause, park and leave.
 
 ### Notifications
 
 - 🔴 `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
-- 🟢 `Space Mountain is back up. Was down 47 min` on DOWN → OPERATING
-- Muting: global toggle (bell in the header), "mute 1 hour", per-ride mute (bell on each ride row). Everything auto-mutes after the park's published closing time.
+- 🟢 `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
+- Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven.
+- Tapping an alert opens the app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else.
+- Pausing (1 hour, 3 hours, until tomorrow morning) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
+- Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight.
 - Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is suppressed (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones; the dashboard always shows live truth.
-- Watch list: all rides by default; unstar rides you don't care about (shared across the trip).
+- Follow list: every ride by default. It is shared across the trip, and each park keeps its own, so hopping parks and back restores it.
 
 ## Reopen estimates
 
@@ -98,6 +104,8 @@ The dashboard shows how many past outages each range rests on. Six and a hundred
 - **ntfy topics are the security model**: anyone with the topic name can read/write it. The random suffix makes it unguessable; treat trip links like a shared secret.
 - **Adding parks**: append to `server/parks.js` with the park's timezone (entity IDs from `https://api.themeparks.wiki/v1/destinations`).
 - Statuses other than OPERATING/DOWN (CLOSED, REFURBISHMENT) never trigger notifications; only the two transitions above do.
+- Trips nobody has opened in three weeks stop being polled, which is most of what hosting costs. Opening the app again resumes them.
+- Times are shown in the park's own time zone, so planning from home still reads like the park clock.
 - Estimates are only as good as the history behind them. The first week after a fresh deploy runs on 7 days (30 with a key), and the archive grows by a day each night from there.
 
 Built by Austin Vodrazka with Claude.

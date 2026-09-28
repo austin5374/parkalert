@@ -4,100 +4,182 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ParkAlert</title>
-  <meta name="theme-color" content="#101828">
+  <meta name="description" content="Know the moment a Disney ride goes down, and when it is likely back.">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <!-- Setup screen: GPS detect / manual pick / join by code -->
+  <!-- Icons: one stroke family, drawn on a 24px grid, currentColor. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
+      <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M8.6 5.6A6 6 0 0 1 18 11v4.2M18 18H4.5L6 16v-5c0-.9.2-1.8.6-2.6"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/><path d="M4 4l16 16"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/><circle cx="12" cy="16.3" r=".6" fill="currentColor"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r=".9" fill="currentColor"/><circle cx="4.8" cy="12" r=".9" fill="currentColor"/><circle cx="4.8" cy="17.5" r=".9" fill="currentColor"/></symbol>
+      <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M4 6.5h16v3.5a2 2 0 0 0 0 4v3.5H4V14a2 2 0 0 0 0-4V6.5Z"/><path d="M14.5 7.5v2M14.5 11v2M14.5 14.5v2"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9.5 5.5 16 12l-6.5 6.5"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.5 4.5"/></symbol>
+      <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16.2 9.5"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5.5 13.5H11L10 21l7.5-10.5H12L13 3Z"/></symbol>
+      <symbol id="i-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16.5v-9M8 11.5l4-4 4 4"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3.5V15M8 7.3l4-3.8 4 3.8"/><path d="M8 10.5H6.5v10h11v-10H16"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4 17-6.5Z"/></symbol>
+      <symbol id="i-map" viewBox="0 0 24 24"><path d="m3.5 6.5 5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2v-13ZM9 4.5v13M15 6.5v13"/></symbol>
+      <symbol id="i-leave" viewBox="0 0 24 24"><path d="M14 4.5H6.5v15H14M10 12h10M17 8.5l3.5 3.5-3.5 3.5"/></symbol>
+      <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M4 4l16 16M8.5 16a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4-2.3M19 12.5a10 10 0 0 0-3-2M2 9a14 14 0 0 1 4-2.5M22 9A14 14 0 0 0 12 5c-.8 0-1.6.1-2.3.2"/><circle cx="12" cy="19.3" r=".6" fill="currentColor"/></symbol>
+    </defs>
+  </svg>
+
+  <!-- First run: pick a park or join a trip. Nothing is asked for until tapped. -->
   <div id="setup" class="screen hidden">
-    <div class="setup-inner">
-      <div class="logo">🎢</div>
-      <h1>ParkAlert</h1>
-      <p class="tagline">Get pinged the moment a ride goes down — or comes back up.</p>
-      <div id="setup-status" class="setup-status"></div>
-      <button id="btn-locate" class="btn primary">📍 Find my park</button>
-      <div id="park-list" class="park-list"></div>
-      <div class="divider"><span>or join a trip</span></div>
-      <form id="join-form" class="join-form">
-        <input id="join-code" inputmode="text" autocapitalize="characters" autocomplete="off"
-               maxlength="6" placeholder="TRIP CODE" aria-label="Trip code">
-        <button class="btn" type="submit">Join</button>
+    <div class="setup">
+      <img class="app-icon" src="/icons/icon-192.png" alt="" width="72" height="72">
+      <h1 class="large-title">ParkAlert</h1>
+      <p class="lede">Know the moment a ride goes down, and when it is likely back.</p>
+
+      <p id="setup-status" class="status-line" role="status" aria-live="polite"></p>
+
+      <div class="group">
+        <button id="btn-locate" class="row pressable" type="button">
+          <svg class="row-icon tint-accent"><use href="#i-pin"/></svg>
+          <span class="row-label">Use my location</span>
+          <svg class="chevron"><use href="#i-chevron"/></svg>
+        </button>
+      </div>
+
+      <div id="setup-parks"></div>
+
+      <h2 class="section-label">Joining someone's trip?</h2>
+      <form id="join-form" class="group join" autocomplete="off">
+        <input id="join-code" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false"
+               maxlength="6" placeholder="Trip code" aria-label="Trip code">
+        <button class="btn-inline" type="submit">Join</button>
       </form>
+      <p class="footnote" id="join-note" aria-live="polite">Ask them for the 6-letter code on their Trip tab. Joining shares their rides and alerts.</p>
     </div>
   </div>
 
   <!-- Main app -->
   <div id="app" class="screen hidden">
-    <header>
-      <div class="header-park">
-        <h1 id="park-name">…</h1>
-        <div id="park-meta" class="park-meta"></div>
+    <header class="nav" id="nav">
+      <div class="nav-inner">
+        <div class="nav-titles">
+          <h1 id="park-name" class="large-title">ParkAlert</h1>
+          <p id="park-meta" class="nav-meta" aria-live="polite"></p>
+        </div>
+        <button id="btn-alerts" class="pill pressable" type="button" aria-haspopup="dialog">
+          <svg><use href="#i-bell"/></svg><span>Alerts on</span>
+        </button>
       </div>
-      <button id="btn-mute" class="mute-btn" aria-label="Toggle mute">🔔</button>
     </header>
 
     <main>
-      <section id="view-down" class="view">
+      <section id="view-down" class="view" aria-label="Down now">
         <div id="down-list"></div>
+        <div id="recent-block"></div>
       </section>
 
-      <section id="view-rides" class="view hidden">
-        <div class="rides-toolbar">
-          <span id="watch-summary"></span>
-          <button id="btn-watch-all" class="btn small">Watch all</button>
+      <section id="view-rides" class="view hidden" aria-label="Rides">
+        <label class="search">
+          <svg><use href="#i-search"/></svg>
+          <input id="ride-search" type="search" placeholder="Search rides" autocomplete="off" enterkeyhint="search">
+        </label>
+        <div class="list-header">
+          <span id="follow-summary"></span>
+          <button id="btn-follow-all" class="text-btn" type="button"></button>
         </div>
-        <div id="rides-list"></div>
+        <div class="group" id="rides-list"></div>
+        <p class="footnote" id="rides-foot">Alerts go out when a ride you follow goes down or comes back up.</p>
       </section>
 
-      <section id="view-settings" class="view hidden">
-        <div class="card">
-          <h2>Trip</h2>
-          <p>Share this code so another phone gets the same alerts:</p>
-          <div class="trip-code" id="trip-code">——</div>
-          <button id="btn-share" class="btn primary full">Share trip link</button>
+      <section id="view-trip" class="view hidden" aria-label="Trip">
+        <div class="group code-card">
+          <p class="caption-label">Trip code</p>
+          <p class="trip-code" id="trip-code"></p>
+          <button id="btn-share" class="btn-primary pressable" type="button">
+            <svg><use href="#i-share"/></svg><span>Invite someone</span>
+          </button>
         </div>
-        <div class="card">
-          <h2>Push notifications</h2>
-          <p>Alerts are delivered via <strong>ntfy</strong>. Install the ntfy app
-             (<a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">iOS</a> /
-             <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a>)
-             and subscribe to your trip's topic:</p>
-          <div class="topic-row"><code id="ntfy-topic">…</code></div>
-          <div class="btn-row">
-            <button id="btn-copy-topic" class="btn">Copy topic</button>
-            <a id="link-ntfy-web" class="btn" target="_blank" rel="noopener">Open in browser</a>
-          </div>
-          <button id="btn-test-notif" class="btn full">Send test notification</button>
+        <p class="footnote">Everyone on this trip sees the same rides and gets the same alerts.</p>
+
+        <h2 class="section-label">Alerts</h2>
+        <div class="group">
+          <button id="row-setup" class="row pressable" type="button">
+            <svg class="row-icon tint-accent"><use href="#i-bell"/></svg>
+            <span class="row-label">Alerts on this phone</span>
+            <span class="row-detail" id="setup-detail"></span>
+            <svg class="chevron"><use href="#i-chevron"/></svg>
+          </button>
+          <button id="row-test" class="row pressable" type="button">
+            <svg class="row-icon tint-accent"><use href="#i-send"/></svg>
+            <span class="row-label">Send a test alert</span>
+            <span class="row-detail" id="test-detail"></span>
+          </button>
+          <button id="row-pause" class="row pressable" type="button">
+            <svg class="row-icon tint-orange"><use href="#i-pause"/></svg>
+            <span class="row-label">Pause alerts</span>
+            <span class="row-detail" id="pause-detail"></span>
+            <svg class="chevron"><use href="#i-chevron"/></svg>
+          </button>
         </div>
-        <div class="card">
-          <h2>Mute</h2>
-          <div class="btn-row">
-            <button id="btn-mute-1h" class="btn">Mute 1 hour</button>
-            <button id="btn-mute-toggle" class="btn">Mute</button>
-          </div>
-          <p id="mute-status" class="muted-note"></p>
-          <p class="muted-note">Alerts auto-mute after the park's published closing time.</p>
+        <p class="footnote">Pausing applies to everyone on this trip. To quiet only this phone, mute the subscription in the ntfy app. Alerts stop on their own once the park closes.</p>
+
+        <h2 class="section-label">Park</h2>
+        <div class="group">
+          <button id="row-park" class="row pressable" type="button">
+            <svg class="row-icon tint-accent"><use href="#i-map"/></svg>
+            <span class="row-label">Park</span>
+            <span class="row-detail" id="park-detail"></span>
+            <svg class="chevron"><use href="#i-chevron"/></svg>
+          </button>
         </div>
-        <div class="card">
-          <h2>Park</h2>
-          <div id="settings-park-list" class="park-list compact"></div>
-        </div>
-        <div class="card danger">
-          <button id="btn-leave" class="btn full">Leave trip</button>
+
+        <div class="group spaced">
+          <button id="row-leave" class="row pressable danger" type="button">
+            <svg class="row-icon"><use href="#i-leave"/></svg>
+            <span class="row-label">Leave this trip</span>
+          </button>
         </div>
       </section>
     </main>
 
-    <nav class="tabbar">
-      <button data-view="down" class="tab active"><span>🔴</span>Down now</button>
-      <button data-view="rides" class="tab"><span>⭐</span>Rides</button>
-      <button data-view="settings" class="tab"><span>⚙️</span>Settings</button>
+    <nav class="tabbar" aria-label="Sections">
+      <button data-view="down" class="tab active pressable" type="button" aria-current="page">
+        <span class="tab-icon"><svg><use href="#i-down"/></svg><span class="badge hidden" id="down-badge"></span></span>
+        <span>Down now</span>
+      </button>
+      <button data-view="rides" class="tab pressable" type="button">
+        <span class="tab-icon"><svg><use href="#i-list"/></svg></span>
+        <span>Rides</span>
+      </button>
+      <button data-view="trip" class="tab pressable" type="button">
+        <span class="tab-icon"><svg><use href="#i-ticket"/></svg></span>
+        <span>Trip</span>
+      </button>
     </nav>
   </div>
+
+  <!-- Bottom sheet: one at a time, dragged down or tapped outside to dismiss. -->
+  <div id="sheet-layer" class="sheet-layer hidden">
+    <div class="scrim" id="scrim"></div>
+    <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
+      <div class="grabber-zone" id="grabber"><span class="grabber"></span></div>
+      <div class="sheet-body" id="sheet-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="/app.js"></script>
 </body>

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip } from './store.js';
-import { startPolling, pollPark, simulateTransition, downOutlook } from './poller.js';
+import { startPolling, pollPark, simulateTransition, downOutlook, APP_URL } from './poller.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
 
@@ -147,8 +147,9 @@ async function handleApi(req, res, url) {
   if (trip && req.method === 'POST' && parts[3] === 'test') {
     const ok = await publish(trip.topic, {
       title: 'ParkAlert test',
-      message: 'Push notifications are working for this trip.',
+      message: 'Alerts are working on this phone. Tap to open ParkAlert.',
       tags: 'white_check_mark',
+      click: APP_URL,
     });
     return json(res, ok ? 200 : 502, { ok });
   }
@@ -166,9 +167,19 @@ function serveStatic(req, res, url) {
     filePath = path.join(PUBLIC_DIR, 'index.html');
   }
   const ext = path.extname(filePath);
+  // Every file revalidates. With a max-age on scripts, a phone could pair a
+  // freshly deployed index.html with the previous app.js for five minutes and
+  // break; an unchanged file costs a 304 and no body.
+  const stat = fs.statSync(filePath);
+  const etag = `"${stat.size.toString(36)}-${Math.floor(stat.mtimeMs).toString(36)}"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+    return res.end();
+  }
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': ext === '.html' ? 'no-cache' : 'max-age=300',
+    'Cache-Control': 'no-cache',
+    ETag: etag,
   });
   fs.createReadStream(filePath).pipe(res);
 }

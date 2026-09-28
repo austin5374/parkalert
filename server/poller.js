@@ -95,7 +95,7 @@ export function downOutlook(parkId, rideId, elapsedMin) {
 
 // Tapping an alert opens the app instead of the ntfy inbox. Railway sets
 // RAILWAY_PUBLIC_DOMAIN; PUBLIC_URL overrides it anywhere else.
-const APP_URL =
+export const APP_URL =
   process.env.PUBLIC_URL ||
   (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null);
 
@@ -143,7 +143,7 @@ export function groupMessage(type, names, parkName, outlook) {
   };
 }
 
-async function notifyTrips(parkId, events, { simulated = false } = {}) {
+export async function notifyTrips(parkId, events, { simulated = false } = {}) {
   const state = parkState[parkId];
   const parkName = getPark(parkId)?.name || 'the park';
   const fresh = simulated
