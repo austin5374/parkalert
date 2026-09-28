@@ -10,6 +10,7 @@ import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } fr
 import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
 import { PORT, NTFY_BASE, APP_URL } from './config.js';
 import { startHistorySync } from './history.js';
+import { startWeatherSync } from './weather.js';
 import { publish } from './notify.js';
 import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert } from './validate.js';
 import { LIMITS, createLimiter, clientKey } from './ratelimit.js';
@@ -359,6 +360,7 @@ if (isMain) {
     console.log(`[server] ${Object.keys(trips).length} trip(s) loaded`);
     startPolling();
     startHistorySync();
+    startWeatherSync();
   });
   // Railway stops the old container with SIGTERM on every deploy.
   for (const signal of ['SIGTERM', 'SIGINT']) {

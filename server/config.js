@@ -25,6 +25,11 @@ export const APP_URL =
 export const THEMEPARKS_BASE = env.THEMEPARKS_BASE || 'https://api.themeparks.wiki/v1';
 export const THEMEPARKS_API_KEY = env.THEMEPARKS_API_KEY || null;
 
+// Live airport weather reports (NOAA's Aviation Weather Center) and their
+// archive (Iowa State's ASOS archive), both free with no key.
+export const WEATHER_BASE = env.WEATHER_BASE || 'https://aviationweather.gov/api/data';
+export const WEATHER_ARCHIVE = env.WEATHER_ARCHIVE || 'https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py';
+
 // How far back to backfill history. The archive refuses anything older than
 // the key allows (7 days anonymous, 30 with a free key), so this is a ceiling.
 export const HISTORY_DAYS = Number(env.HISTORY_DAYS) || (THEMEPARKS_API_KEY ? 30 : 7);

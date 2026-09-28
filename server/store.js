@@ -6,6 +6,7 @@ import { DATA_DIR } from './config.js';
 const TRIPS_FILE = path.join(DATA_DIR, 'trips.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const WEATHER_FILE = path.join(DATA_DIR, 'weather.json');
 
 function load(file, fallback) {
   try {
@@ -41,6 +42,15 @@ export const parkState = load(STATE_FILE, {});
 //   fetched: park-local days already pulled from the archive, so each is fetched once
 //   episodes: see server/episodes.js
 export const history = load(HISTORY_FILE, { fetched: {}, episodes: {} });
+
+// weather: { obs: { [station]: observation[] }, fetched: { [station]: [UTC YYYY-MM-DD, ...] } }
+//   obs: parsed airport reports, oldest first (see server/metar.js)
+//   fetched: UTC days already pulled from the report archive
+export const weather = load(WEATHER_FILE, { obs: {}, fetched: {} });
+
+export function saveWeather() {
+  saveAtomic(WEATHER_FILE, weather);
+}
 
 // State and history are large and only ever read by the app, so they are
 // written compactly; trips.json stays readable for a person poking at it.

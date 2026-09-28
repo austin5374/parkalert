@@ -13,6 +13,11 @@ export async function startFakes() {
     // (parkId, date) -> { status, body, remaining } for the history archive
     history: () => ({ status: 200, body: { entities: [] } }),
     historyCalls: [],
+    // Airport weather: live reports [{ icaoId, obsTime (s), rawOb }], and the
+    // archive's CSV body per 'STATION:YYYY-MM-DD' (the day requested).
+    metars: [],
+    archive: {},
+    archiveCalls: [],
     fail: false,
   };
   const pushes = [];
@@ -28,6 +33,18 @@ export async function startFakes() {
       if (req.url === '/ntfy') {
         pushes.push(JSON.parse(body));
         return send(200, {});
+      }
+      if (req.url.startsWith('/weather/metar')) {
+        const ids = new URL(req.url, base).searchParams.get('ids').split(',');
+        return send(200, upstream.metars.filter((m) => ids.includes(m.icaoId)));
+      }
+      if (req.url.startsWith('/archive')) {
+        const q = new URL(req.url, base).searchParams;
+        const day = `${q.get('year1')}-${q.get('month1').padStart(2, '0')}-${q.get('day1').padStart(2, '0')}`;
+        const key = `${q.get('station')}:${day}`;
+        upstream.archiveCalls.push(key);
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        return res.end(`station,valid,metar\n${upstream.archive[key] || ''}`);
       }
       const m = req.url.match(/^\/v1\/entity\/([^/?]+)\/(live|schedule|history)/);
       if (!m || upstream.fail) return send(upstream.fail ? 503 : 404, {});
@@ -55,6 +72,8 @@ export async function startFakes() {
   const base = `http://127.0.0.1:${server.address().port}`;
   process.env.THEMEPARKS_BASE = `${base}/v1`;
   process.env.NTFY_BASE = `${base}/ntfy`;
+  process.env.WEATHER_BASE = `${base}/weather`;
+  process.env.WEATHER_ARCHIVE = `${base}/archive`;
   process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'parkalert-test-'));
   return { upstream, pushes, close: () => server.close() };
 }
