@@ -166,3 +166,17 @@ test('right after a park switch the dashboard shows that park now, not an old sn
   assert.ok(body.lastPoll > yesterday);
   assert.equal(body.rides.find((r) => r.id === `${EPCOT}-1`).status, 'OPERATING');
 });
+
+test('a simulated alert goes through the real pipeline and says it is a test', async () => {
+  const trip = await newTrip();
+  await call('GET', `/api/trips/${trip.code}/dashboard`);
+  fakes.pushes.length = 0;
+  const r = await call('POST', `/api/trips/${trip.code}/simulate`, { type: 'down' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.sent, 1);
+  assert.match(fakes.pushes[0].message, /SIMULATED TEST/);
+  assert.match(fakes.pushes[0].title, / is down$/);
+  // A paused trip is muted for simulations too.
+  await call('PATCH', `/api/trips/${trip.code}`, { mute: { until: null } });
+  assert.equal((await call('POST', `/api/trips/${trip.code}/simulate`, { type: 'up' })).body.sent, 0);
+});

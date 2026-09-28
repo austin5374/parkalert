@@ -209,14 +209,15 @@ export function groupMessage(type, names, parkName, outlook) {
   };
 }
 
-// Push events to every trip at the park, honouring each trip's mutes. The
-// anti-flicker gate (gateEvents) runs before this, in the poller.
-export async function notifyTrips(parkId, events, { simulated = false } = {}) {
+// Push events to every trip at the park (or just `only`), honouring each
+// trip's mutes. The anti-flicker gate (gateEvents) runs before this, in the poller.
+export async function notifyTrips(parkId, events, { simulated = false, only = null } = {}) {
   const state = parkState[parkId];
   const parkName = getPark(parkId)?.name || 'the park';
   let sent = 0;
   let skipped = 0;
-  for (const trip of Object.values(trips).filter((t) => t.parkId === parkId)) {
+  const targets = only ? [only] : Object.values(trips).filter((t) => t.parkId === parkId);
+  for (const trip of targets) {
     const mine = events.filter((ev) => !isTripMuted(trip, ev.ride.id, state));
     skipped += events.length - mine.length;
     for (const type of ['DOWN', 'UP']) {
@@ -253,7 +254,8 @@ export async function simulateTransition(trip, type) {
     type === 'down'
       ? { type: 'DOWN', ride: { id, ...r } }
       : { type: 'UP', ride: { id, ...r }, downtimeMs: 47 * 60_000 };
-  const stats = await notifyTrips(trip.parkId, [ev], { simulated: true });
+  // Only this trip: a test on one trip must never buzz strangers' phones.
+  const stats = await notifyTrips(trip.parkId, [ev], { simulated: true, only: trip });
   console.log(`[poller] SIMULATED ${ev.type} ${r.name}: sent ${stats.sent}, skipped ${stats.skipped}`);
   return { simulated: true, type: ev.type, ride: r.name, ...stats };
 }
