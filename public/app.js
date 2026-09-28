@@ -149,7 +149,8 @@ function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate
 }
 
 // Where a flick would come to rest, the way scroll deceleration projects it.
-const project = (v, rate = 0.99) => ((v / 1000) * rate) / (1 - rate);
+// 0.998 is UIScrollView's normal rate: a short, fast flick carries far.
+const project = (v, rate = 0.998) => ((v / 1000) * rate) / (1 - rate);
 
 function rubberband(overshoot, dimension, constant = 0.55) {
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
@@ -160,6 +161,9 @@ const sheet = (() => {
   const layer = $('#sheet-layer'), panel = $('#sheet'), scrim = $('#scrim'), body = $('#sheet-body');
   let y = 0, h = 1, anim = null, isOpen = false, returnFocus = null, onClosed = null;
 
+  // The sheet's height changes after it opens (a ride's history loads in),
+  // so it is read again whenever a close or a drag needs it.
+  const measure = () => { h = panel.getBoundingClientRect().height || h; return h; };
   const paint = (v) => {
     y = v;
     panel.style.transform = `translateY(${v}px)`;
@@ -209,7 +213,7 @@ const sheet = (() => {
   function close(velocity = 0) {
     if (!isOpen) return;
     isOpen = false;
-    animateTo(h, velocity, 1, finishClose);
+    animateTo(measure(), velocity, 1, finishClose);
   }
 
   // Drag: 1:1 with the finger from where it grabbed, rubber-banded above the
@@ -219,6 +223,7 @@ const sheet = (() => {
     if (e.button > 0 || !isOpen) return;
     if (e.target.closest('button, a, input')) return;
     anim?.stop();
+    measure();
     drag = { startY: e.clientY, from: y, samples: [{ t: e.timeStamp, y }], id: e.pointerId };
     e.currentTarget.setPointerCapture(e.pointerId);
   }
@@ -232,8 +237,11 @@ const sheet = (() => {
   }
   function up(e) {
     if (!drag || e.pointerId !== drag.id) return;
-    const s = drag.samples, a = s[0], b = s[s.length - 1];
-    const v = b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
+    // Only the last 80 ms count: a finger that stopped before lifting has no
+    // velocity, however fast it was moving earlier.
+    const s = drag.samples.filter((p) => e.timeStamp - p.t <= 80);
+    const a = s[0], b = s[s.length - 1];
+    const v = s.length > 1 && b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
     drag = null;
     if (y + project(v) > h * 0.45) close(v);
     // Settling back after a flick carries its momentum, so a little give reads right.
