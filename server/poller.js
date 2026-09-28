@@ -281,8 +281,9 @@ function downMessage(parkId, ev, parkName, timezone) {
   const lines = [`Went down at ${localTime(since, timezone)} · ${parkName}`];
   if (outlook.kind === 'hold') lines.push(`Park-wide hold: ${outlook.rides} rides closed at once`);
   if (outlook.text) lines.push(outlook.text);
-  // Emoji comes from the ntfy tag (red_circle/green_circle), which apps render as a title prefix.
-  return { title: `${ev.ride.name} is down`, message: lines.join('\n'), tags: 'red_circle', priority: 3 };
+  // No ntfy tags: apps draw them as emoji in front of the title, and the
+  // title already says down, back up or closed.
+  return { title: `${ev.ride.name} is down`, message: lines.join('\n'), priority: 3 };
 }
 
 function upMessage(ev, parkName) {
@@ -290,14 +291,12 @@ function upMessage(ev, parkName) {
     return {
       title: `${ev.ride.name} is now open`,
       message: `Opened ${ev.downtimeMs ? `${formatDuration(ev.downtimeMs)} late` : 'late'} · ${parkName}`,
-      tags: 'green_circle',
       priority: 4,
     };
   }
   return {
     title: `${ev.ride.name} is back up`,
     message: `Was down ${ev.downtimeMs ? formatDuration(ev.downtimeMs) : 'a while'} · ${parkName}`,
-    tags: 'green_circle',
     priority: 4,
   };
 }
@@ -307,7 +306,6 @@ function closedMessage(ev, parkName, timezone) {
   return {
     title: `${ev.ride.name} has closed`,
     message: `${since}. It may not reopen today · ${parkName}`,
-    tags: 'no_entry',
     priority: 3,
   };
 }
@@ -343,7 +341,6 @@ export function groupMessage(type, names, parkName, outlook, { late = false, dow
     return {
       title: `${names.length} rides have closed`,
       message: `${listNames(names)}\nThey may not reopen today · ${parkName}`,
-      tags: 'no_entry',
       priority: 3,
     };
   }
@@ -352,13 +349,12 @@ export function groupMessage(type, names, parkName, outlook, { late = false, dow
     if (outlook?.kind === 'hold') lines.push(`Park-wide hold at ${parkName}`);
     else lines.push(parkName);
     if (outlook?.text) lines.push(outlook.text);
-    return { title: `${names.length} rides just went down`, message: lines.join('\n'), tags: 'red_circle', priority: 3 };
+    return { title: `${names.length} rides just went down`, message: lines.join('\n'), priority: 3 };
   }
   const took = groupDowntime(downtimes, late);
   return {
     title: `${names.length} rides ${late ? 'are now open' : 'are back up'}`,
     message: `${listNames(names)}\n${took ? `${took} · ` : ''}${parkName}`,
-    tags: 'green_circle',
     priority: 4,
   };
 }
@@ -507,7 +503,7 @@ export function recordRecent(recent = [], events, now = Date.now()) {
 // Coalesce concurrent polls of the same park (interval tick vs. trip create /
 // park switch / dashboard warm-up). Two racing fetches can resolve out of
 // order and replay a stale snapshot over fresh state, manufacturing a phantom
-// "back up" + duplicate "down" for a single real outage — so callers of an
+// "back up" + duplicate "down" for a single real outage, so callers of an
 // already-in-flight poll just await that one.
 const inFlight = new Map(); // parkId -> Promise
 

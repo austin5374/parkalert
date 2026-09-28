@@ -44,7 +44,6 @@ export function waitAlertMessage(ride, alert, parkName) {
   return {
     title: `${ride.name}: ${ride.waitTime} min wait`,
     message: `You asked for ${alert.max} min or less · ${parkName}`,
-    tags: 'stopwatch',
     priority: 4,
   };
 }

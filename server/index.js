@@ -287,7 +287,7 @@ async function handleApi(req, res, url) {
   }
 
   // Fire a fake DOWN or back-up transition through the real notification
-  // pipeline — for testing pushes without waiting for a real ride outage.
+  // pipeline, for testing pushes without waiting for a real ride outage.
   // curl -X POST .../api/trips/CODE/simulate -d '{"type":"up"}'   (or "down")
   if (trip && req.method === 'POST' && parts[3] === 'simulate') {
     const body = requireObject(await readBody(req));
@@ -296,10 +296,11 @@ async function handleApi(req, res, url) {
   }
 
   if (trip && req.method === 'POST' && parts[3] === 'test') {
+    // It goes to every phone on the trip, not just the one that asked, so it
+    // says what it is rather than "this phone".
     const ok = await publish(trip.topic, {
-      title: 'ParkAlert test',
-      message: 'Alerts are working on this phone. Tap to open ParkAlert.',
-      tags: 'white_check_mark',
+      title: `ParkAlert test for trip ${trip.code}`,
+      message: 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
       click: appLink(trip),
     });
     return json(res, ok ? 200 : 502, { ok });
