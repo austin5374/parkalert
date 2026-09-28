@@ -21,13 +21,18 @@ export function remaining(episodes, elapsedMin) {
   const atRisk = episodes.filter((ep) => ep.minutes > elapsedMin);
   if (atRisk.length < MIN_SAMPLES) return null;
 
-  const eventTimes = [...new Set(atRisk.filter(isResolved).map((ep) => ep.minutes))].sort((a, b) => a - b);
+  // One sorted sweep: a year of park-wide history is thousands of outages and
+  // this runs on every dashboard refresh.
+  const sorted = [...atRisk].sort((a, b) => a.minutes - b.minutes);
   const quantiles = { p25: null, p50: null, p75: null };
   const targets = [['p25', 0.25], ['p50', 0.5], ['p75', 0.75]];
   let survival = 1;
-  for (const t of eventTimes) {
-    const n = atRisk.filter((ep) => ep.minutes >= t).length;
-    const d = atRisk.filter((ep) => isResolved(ep) && ep.minutes === t).length;
+  for (let i = 0; i < sorted.length; ) {
+    const t = sorted[i].minutes;
+    const n = sorted.length - i; // still down at t
+    let d = 0;
+    for (; i < sorted.length && sorted[i].minutes === t; i++) if (isResolved(sorted[i])) d++;
+    if (!d) continue;
     survival *= 1 - d / n;
     for (const [key, q] of targets) {
       if (quantiles[key] === null && 1 - survival >= q) quantiles[key] = t - elapsedMin;
