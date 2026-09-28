@@ -163,6 +163,24 @@ test('guessing trip codes runs out quickly, and then even a right guess waits', 
   assert.equal((await fetch(`${base}/api/trips/${trip.code}`)).status, 200);
 });
 
+test('a phone already on a trip keeps it when someone behind its address spends the guesses', async () => {
+  const trip = await newTrip();
+  const get = (code) => fetch(`${base}/api/trips/${code}`, { headers: { 'X-Forwarded-For': '203.0.113.9' } });
+  assert.equal((await get(trip.code)).status, 200); // opened once
+  while ((await get('ZZZZZ3')).status === 404);
+  assert.equal((await get('ZZZZZ4')).status, 429);
+  assert.equal((await get(trip.code)).status, 200);
+});
+
+test('IPv6 clients are limited per /64, not per address', async () => {
+  const { networkKey } = await import('../server/ratelimit.js');
+  assert.equal(networkKey('2001:db8:abcd:12:1::5'), '2001:db8:abcd:12::/64');
+  assert.equal(networkKey('2001:db8:abcd:12:ffff:1:2:3'), '2001:db8:abcd:12::/64');
+  assert.equal(networkKey('2001:db8::1'), '2001:db8:0:0::/64');
+  assert.equal(networkKey('::ffff:198.51.100.4'), '198.51.100.4');
+  assert.equal(networkKey('198.51.100.4'), '198.51.100.4');
+});
+
 test('right after a park switch the dashboard shows that park now, not an old snapshot', async () => {
   const { parkState } = await import('../server/store.js');
   const yesterday = Date.now() - 20 * 3600_000;

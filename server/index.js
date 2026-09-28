@@ -14,7 +14,7 @@ import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
 import { publish } from './notify.js';
 import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert } from './validate.js';
-import { LIMITS, createLimiter, clientKey } from './ratelimit.js';
+import { LIMITS, createLimiter, clientKey, createKnownCodes } from './ratelimit.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -56,6 +56,7 @@ function json(res, status, body) {
 }
 
 const limit = Object.fromEntries(Object.entries(LIMITS).map(([name, cfg]) => [name, createLimiter(cfg)]));
+const knownCodes = createKnownCodes();
 
 function tooMany(res, waitMs) {
   res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
@@ -172,18 +173,23 @@ async function handleApi(req, res, url) {
     const body = requireObject(await readBody(req));
     if (typeof body.parkId !== 'string' || !getPark(body.parkId)) return json(res, 400, { error: 'unknown parkId' });
     const trip = createTrip(body.parkId);
+    knownCodes.add(who, trip.code);
     pollPark(trip.parkId); // warm up state so the first dashboard load is instant
     return json(res, 201, { trip: tripView(trip) });
   }
 
   // Guessing codes costs a token per miss; once they run out, even a right
-  // guess waits, so enumeration gains nothing by pressing on.
-  if (parts[1] === 'trips' && parts[2] && (wait = limit.miss.wait(who))) return tooMany(res, wait);
-  const trip = parts[1] === 'trips' && parts[2] ? getTrip(parts[2]) : null;
-  if (parts[1] === 'trips' && parts[2] && !trip) {
+  // guess waits, so enumeration gains nothing by pressing on. A code this
+  // client has already opened is exempt, so a phone on a trip is never
+  // locked out by misses from someone sharing its address.
+  const code = parts[1] === 'trips' && parts[2] ? String(parts[2]).toUpperCase() : null;
+  if (code && !knownCodes.has(who, code) && (wait = limit.miss.wait(who))) return tooMany(res, wait);
+  const trip = code ? getTrip(code) : null;
+  if (code && !trip) {
     limit.miss.take(who);
     return json(res, 404, { error: 'trip not found' });
   }
+  if (trip) knownCodes.add(who, trip.code);
 
   // Test and simulated alerts are metered per client and per trip, so
   // neither one caller nor many can flood a trip's phones.

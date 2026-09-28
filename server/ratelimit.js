@@ -44,12 +44,37 @@ export function createLimiter({ burst, perHour }) {
 
 // Who is asking. Railway's edge proxy connects on the client's behalf and
 // appends the client's address to X-Forwarded-For, so the last entry is the
-// one a client cannot forge; without a proxy, it is the socket's peer.
+// one a client cannot forge; without a proxy, it is the socket's peer. An
+// IPv6 client is keyed by its /64: one subscriber gets a whole /64 and could
+// otherwise step through addresses to dodge every limit.
 export function clientKey(req) {
   const xff = req.headers['x-forwarded-for'];
-  if (xff) {
-    const last = String(xff).split(',').pop().trim();
-    if (last) return last;
-  }
-  return req.socket.remoteAddress || 'unknown';
+  const last = xff ? String(xff).split(',').pop().trim() : '';
+  return networkKey(last || req.socket.remoteAddress || 'unknown');
+}
+
+export function networkKey(addr) {
+  const a = addr.replace(/^::ffff:(?=\d+\.)/, ''); // IPv4-mapped
+  if (!a.includes(':')) return a;
+  const [head, tail = ''] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = a.includes('::') ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h;
+  return `${groups.slice(0, 4).map((g) => g.toLowerCase().replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
+// Trip codes each client has opened successfully. A phone already on a trip
+// is never locked out of it by the code-guessing limit, which may have been
+// spent by someone else behind the same address (carrier NAT, park Wi-Fi).
+export function createKnownCodes(max = 20_000) {
+  const known = new Map();
+  return {
+    has: (who, code) => known.has(`${who}|${code}`),
+    add(who, code) {
+      const k = `${who}|${code}`;
+      known.delete(k);
+      known.set(k, true);
+      if (known.size > max) known.delete(known.keys().next().value);
+    },
+  };
 }
