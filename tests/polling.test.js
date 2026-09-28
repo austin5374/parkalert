@@ -59,3 +59,12 @@ test('an empty live response is a failed poll, not every ride vanishing', async 
   assert.equal(parkState[PARK].lastError, 'live data came back empty');
   assert.equal(parkState[PARK].rides.p4.downSince, now - 30 * 60_000);
 });
+
+test('a down ride that closes mid-day sends "has closed"', async () => {
+  const now = Date.now();
+  setup({ p5: ride('Ride P5', 'DOWN', now - 40 * 60_000) }, now - 60_000);
+  fakes.upstream.live[PARK] = [{ id: 'p5', name: 'Ride P5', status: 'CLOSED' }];
+  await pollPark(PARK);
+  assert.deepEqual(fakes.pushes.map((p) => p.title), ['Ride P5 has closed']);
+  assert.match(fakes.pushes[0].message, /^Down since .*, now closed\. It may not reopen today · Magic Kingdom$/);
+});

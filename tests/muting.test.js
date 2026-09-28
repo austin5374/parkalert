@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTripMuted, currentSchedule } from '../server/poller.js';
+import { isTripMuted, currentSchedule, closingIsNews } from '../server/poller.js';
 
 const NY = 'America/New_York';
 const trip = (extra = {}) => ({ watched: null, mute: null, rideMutes: {}, ...extra });
@@ -41,4 +41,15 @@ test('pause, per-ride mute and the follow list each mute', () => {
   assert.equal(isTripMuted(trip({ rideMutes: { a: true } }), 'a', state(today), now), true);
   assert.equal(isTripMuted(trip({ watched: ['b'] }), 'a', state(today), now), true);
   assert.equal(isTripMuted(trip({ watched: ['a'] }), 'a', state(today), now), false);
+});
+
+test('a down ride closing is news mid-day, not before opening or around closing', () => {
+  const day = { date: '2026-09-27', openingTime: '2026-09-27T09:00:00-04:00', closingTime: '2026-09-27T18:00:00-04:00', lastCloseTime: '2026-09-28T00:00:00-04:00' };
+  const at = (iso) => Date.parse(iso);
+  assert.equal(closingIsNews(state(day), at('2026-09-27T15:00:00-04:00')), true);
+  assert.equal(closingIsNews(state(day), at('2026-09-27T08:30:00-04:00')), false, 'before opening');
+  assert.equal(closingIsNews(state(day), at('2026-09-27T17:50:00-04:00')), false, 'regular close');
+  assert.equal(closingIsNews(state(day), at('2026-09-27T21:00:00-04:00')), true, 'during the party');
+  assert.equal(closingIsNews(state(day), at('2026-09-27T23:45:00-04:00')), false, 'party ending');
+  assert.equal(closingIsNews(state(null), at('2026-09-27T15:00:00-04:00')), true, 'unknown hours');
 });

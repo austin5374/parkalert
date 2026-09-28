@@ -82,3 +82,9 @@ test('a grouped push speaks for the kind of outage most of its rides share', () 
   assert.equal(groupOutlook([hold, breakdown, breakdown]), breakdown);
   assert.equal(groupOutlook([hold, breakdown, { kind: 'opening' }]), null);
 });
+
+test('rides closing together are one push', () => {
+  const m = groupMessage('CLOSED', ['A', 'B', 'C'], 'EPCOT', null);
+  assert.equal(m.title, '3 rides have closed');
+  assert.equal(m.message, 'A, B, C\nThey may not reopen today · EPCOT');
+});

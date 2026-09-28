@@ -570,16 +570,29 @@ function drawDown() {
   renderRecent(new Set(down.map((r) => r.id)));
 }
 
-// Rides that came back recently, so an alert opened late still makes sense.
+// Rides that came back, or gave up and closed, recently: so an alert opened
+// late still makes sense. Each ride's latest word only.
 function renderRecent(downIds) {
   const block = $('#recent-block');
+  const status = new Map(dash.rides.map((r) => [r.id, r.status]));
   const seen = new Set();
-  const ups = (dash.recent || []).filter((e) => {
-    if (e.type !== 'UP' || downIds.has(e.id) || seen.has(e.id)) return false;
+  const latest = (dash.recent || []).filter((e) => {
+    if ((e.type !== 'UP' && e.type !== 'CLOSED') || downIds.has(e.id) || seen.has(e.id)) return false;
     seen.add(e.id);
-    return true;
+    return e.type === 'UP' || status.get(e.id) === 'CLOSED';
   });
+  const ups = latest.filter((e) => e.type === 'UP');
+  const closed = latest.filter((e) => e.type === 'CLOSED');
   block.replaceChildren();
+  if (closed.length) {
+    block.appendChild(el('<h2 class="section-label">Closed after an outage</h2>'));
+    block.appendChild(el(`<div class="group">${closed.map((e) => `
+      <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
+        ${icon('moon', 'row-icon tint-orange')}
+        <span class="row-label">${esc(e.name)}<small>Closed at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)} down` : ''}</small></span>
+        ${icon('chevron', 'chevron')}
+      </button>`).join('')}</div>`));
+  }
   if (!ups.length) return;
   block.appendChild(el('<h2 class="section-label">Back up recently</h2>'));
   block.appendChild(el(`<div class="group">${ups.map((e) => `
@@ -991,8 +1004,10 @@ function rideSheet(r, detail) {
   if (today.length) {
     wrap.appendChild(el(`<div class="group">${today.map((e) => `
       <div class="row">
-        ${icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
-        <span class="row-label">${e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${e.type === 'UP' && e.downtimeMs ? `<small>${e.late ? `${fmtDuration(e.downtimeMs)} late` : `after ${fmtDuration(e.downtimeMs)}`}</small>` : ''}</span>
+        ${e.type === 'CLOSED' ? icon('moon', 'row-icon tint-orange') : icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
+        <span class="row-label">${e.type === 'CLOSED' ? 'Closed' : e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${
+          e.type === 'UP' && e.downtimeMs ? `<small>${e.late ? `${fmtDuration(e.downtimeMs)} late` : `after ${fmtDuration(e.downtimeMs)}`}</small>`
+          : e.type === 'CLOSED' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)} down</small>` : ''}</span>
         <span class="row-detail">${fmtTime(e.at)}</span>
       </div>`).join('')}</div>`));
   } else {

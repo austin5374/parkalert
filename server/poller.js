@@ -12,6 +12,10 @@ const POLL_INTERVAL_MS = 60_000;
 // A ride missing from a response keeps its last state this many polls before
 // it is dropped, so one patchy response can't restart its outage clock.
 export const MISSING_POLLS = 5;
+// A ride that closes while down is still on the same outage if it reopens
+// within this long: "back up" then says how long it was really out. Past
+// it (reopening next morning, say) it had simply closed for the day.
+export const CLOSED_OUTAGE_MS = 8 * 3600_000;
 
 // Pure transition detection so it can be tested without the network.
 // Returns { rides, events } where events = [{ type: 'DOWN'|'UP', ride, downtimeMs }].
@@ -28,21 +32,35 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
       downSince: null,
       downFrom: null, // status it went DOWN from; CLOSED means it never opened
     };
+    // Still on an outage that began earlier: down, or closed while down.
+    const outage = prev && (prev.status === 'DOWN' || (prev.closedWhileDown && now - prev.downSince < CLOSED_OUTAGE_MS))
+      ? prev
+      : null;
     if (att.status === 'DOWN') {
-      const already = prev?.status === 'DOWN';
-      ride.downSince = already ? prev.downSince : now;
-      ride.downFrom = already ? prev.downFrom ?? null : prev?.status ?? null;
+      ride.downSince = outage ? outage.downSince : now;
+      ride.downFrom = outage ? outage.downFrom ?? null : prev?.status ?? null;
+    }
+    if (att.status === 'CLOSED' && outage) {
+      ride.downSince = outage.downSince;
+      ride.downFrom = outage.downFrom ?? null;
+      ride.closedWhileDown = true;
     }
     if (prev && prev.status !== att.status) {
       if (prev.status === 'OPERATING' && att.status === 'DOWN') {
         events.push({ type: 'DOWN', ride: { id: att.id, ...ride } });
-      } else if (prev.status === 'DOWN' && att.status === 'OPERATING') {
+      } else if (outage && att.status === 'OPERATING') {
         events.push({
           type: 'UP',
           ride: { id: att.id, ...ride },
-          downtimeMs: prev.downSince ? now - prev.downSince : null,
+          downtimeMs: outage.downSince ? now - outage.downSince : null,
           // It never opened on time, so it is opening late, not coming back.
-          late: isLateOpening({ from: prev.downFrom }),
+          late: isLateOpening({ from: outage.downFrom }),
+        });
+      } else if (prev.status === 'DOWN' && att.status === 'CLOSED') {
+        events.push({
+          type: 'CLOSED',
+          ride: { id: att.id, ...ride },
+          downtimeMs: prev.downSince ? now - prev.downSince : null,
         });
       }
     }
@@ -71,6 +89,23 @@ export function currentSchedule(state, now = Date.now()) {
   const s = state?.schedule;
   if (!s?.date) return null;
   return s.date === localDate(now, state.timezone || s.timezone || 'America/New_York') ? s : null;
+}
+
+// A down ride switching to CLOSED is news in the middle of the day: it has
+// probably given up for the day. Before the park opens, or around closing
+// time, it is just the park's hours, and says nothing. Unknown hours count
+// as the middle of the day, as with muting.
+const CLOSING_WINDOW_MS = 30 * 60_000;
+export function closingIsNews(state, now = Date.now()) {
+  const s = currentSchedule(state, now);
+  const at = (iso) => (iso ? Date.parse(iso) : null);
+  const open = at(s?.openingTime);
+  const close = at(s?.closingTime);
+  const last = at(s?.lastCloseTime);
+  if (open && now < open) return false;
+  if (close && Math.abs(now - close) <= CLOSING_WINDOW_MS) return false;
+  if (last && now >= last - CLOSING_WINDOW_MS) return false;
+  return true;
 }
 
 function isPastClosing(state, now = Date.now()) {
@@ -109,7 +144,7 @@ function cooldownOk(key, now) {
 }
 
 // The status a ride must still have for a held alert to still be true.
-const STILL = { DOWN: 'DOWN', UP: 'OPERATING' };
+const STILL = { DOWN: 'DOWN', UP: 'OPERATING', CLOSED: 'CLOSED' };
 
 // Decide which of this poll's transitions to alert on now, and release any
 // held-back alert whose cooldown has passed. rides: the park's current state.
@@ -198,6 +233,16 @@ function upMessage(ev, parkName) {
   };
 }
 
+function closedMessage(ev, parkName, timezone) {
+  const since = ev.ride.downSince ? `Down since ${localTime(ev.ride.downSince, timezone)}, now closed` : 'Now closed';
+  return {
+    title: `${ev.ride.name} has closed`,
+    message: `${since}. It may not reopen today · ${parkName}`,
+    tags: 'no_entry',
+    priority: 3,
+  };
+}
+
 // One push for many rides at once. Pure apart from the outlook lookup.
 // The outlook a grouped push can speak for: the one shared by at least half
 // the group, else none. Six rides in a storm hold plus one unrelated
@@ -212,6 +257,14 @@ export function groupOutlook(outlooks) {
 
 // late: every ride in the group is a delayed opening, now open.
 export function groupMessage(type, names, parkName, outlook, { late = false } = {}) {
+  if (type === 'CLOSED') {
+    return {
+      title: `${names.length} rides have closed`,
+      message: `${listNames(names)}\nThey may not reopen today · ${parkName}`,
+      tags: 'no_entry',
+      priority: 3,
+    };
+  }
   if (type === 'DOWN') {
     const lines = [listNames(names)];
     if (outlook?.kind === 'hold') lines.push(`Park-wide hold at ${parkName}`);
@@ -243,7 +296,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
   await Promise.all(targets.map(async (trip) => {
     const mine = events.filter((ev) => !isTripMuted(trip, ev.ride.id, state));
     skipped += events.length - mine.length;
-    for (const type of ['DOWN', 'UP']) {
+    for (const type of ['DOWN', 'UP', 'CLOSED']) {
       const evs = mine.filter((ev) => ev.type === type);
       if (!evs.length) continue;
       const pushes =
@@ -251,7 +304,9 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
           ? [groupMessage(type, evs.map((ev) => ev.ride.name), parkName,
               type === 'DOWN' ? groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, 0))) : null,
               { late: evs.every((ev) => ev.late) })]
-          : evs.map((ev) => (type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone) : upMessage(ev, parkName)));
+          : evs.map((ev) => (type === 'DOWN' ? downMessage(parkId, ev, parkName, state.timezone)
+            : type === 'CLOSED' ? closedMessage(ev, parkName, state.timezone)
+              : upMessage(ev, parkName)));
       for (const push of pushes) {
         if (simulated) push.message += ' · SIMULATED TEST';
         if (await publish(trip.topic, { ...push, click: APP_URL })) sent++;
@@ -382,7 +437,8 @@ async function doPollPark(parkId) {
       );
     }
     // Every poll, so an alert held by the cooldown goes out once it passes.
-    const toSend = gateEvents(parkId, events, rides, now);
+    const news = events.filter((ev) => ev.type !== 'CLOSED' || closingIsNews(state, now));
+    const toSend = gateEvents(parkId, news, rides, now);
     if (toSend.length) await notifyTrips(parkId, toSend);
   } catch (err) {
     state.lastError = err.message;
