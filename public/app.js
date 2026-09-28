@@ -42,9 +42,12 @@ function el(html) {
 }
 
 // Times are shown in the park's own zone: planning from home should still say 3:30 PM for 3:30 PM at the park.
+// And in the same format as the pushes (server/poller.js), so an alert and
+// the card it opens never read "2:10 PM" and "14:10" for one moment.
+const LOCALE = 'en-US';
 function fmtTime(ts) {
   if (ts == null) return '';
-  return new Intl.DateTimeFormat([], {
+  return new Intl.DateTimeFormat(LOCALE, {
     hour: 'numeric', minute: '2-digit', timeZone: dash?.park.timezone || undefined,
   }).format(new Date(ts));
 }
@@ -59,7 +62,7 @@ function fmtUntil(ts) {
   if (day === today) return fmtTime(ts);
   if (day === localDay(Date.now() + 24 * 3600_000, tz)) return `tomorrow at ${fmtTime(ts)}`;
   if (day === localDay(Date.now() - 24 * 3600_000, tz)) return `yesterday at ${fmtTime(ts)}`;
-  const weekday = new Intl.DateTimeFormat([], { weekday: 'short', timeZone: tz }).format(new Date(ts));
+  const weekday = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', timeZone: tz }).format(new Date(ts));
   return `${weekday} at ${fmtTime(ts)}`;
 }
 
@@ -1151,7 +1154,7 @@ function rideSheet(r, detail) {
 }
 
 function fmtDay(ts) {
-  return new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: dash?.park.timezone }).format(new Date(ts));
+  return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: dash?.park.timezone }).format(new Date(ts));
 }
 
 async function openParkInfo() {
@@ -1380,8 +1383,8 @@ function dayBars(box, { days }) {
 }
 
 const dateOnly = (d) => new Date(`${d}T12:00:00Z`);
-const fmtDate = (d) => new Intl.DateTimeFormat([], { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
-const fmtWeekday = (d) => new Intl.DateTimeFormat([], { weekday: 'short', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtDate = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(dateOnly(d));
+const fmtWeekday = (d) => new Intl.DateTimeFormat(LOCALE, { weekday: 'short', timeZone: 'UTC' }).format(dateOnly(d));
 
 /* ---------- Pull to refresh ---------- */
 // Only on touch, only from the very top, rubber-banded, and it springs home.
