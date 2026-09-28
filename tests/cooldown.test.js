@@ -54,3 +54,16 @@ test('held alerts are per park', () => {
   assert.deepEqual(gateEvents('P6', [], {}, 10 * MIN), []);
   assert.deepEqual(types(gateEvents('P5', [], state('a', 'DOWN'), 10 * MIN)), ['DOWN']);
 });
+
+test('a held alert survives a restart through the saved gate', async () => {
+  const { gateSnapshot, restoreGate } = await import('../server/poller.js');
+  gateEvents('P9', [down('a')], state('a', 'DOWN'), 0);
+  gateEvents('P9', [up('a')], state('a', 'OPERATING'), MIN);
+  gateEvents('P9', [down('a')], state('a', 'DOWN'), 2 * MIN); // held
+  const snap = JSON.parse(JSON.stringify(gateSnapshot('P9'))); // as saved to state.json
+  assert.equal(snap.held.length, 1);
+  // A fresh process: nothing in memory for P10, which gets P9's saved gate under a new name.
+  const renamed = JSON.parse(JSON.stringify(snap).replaceAll('P9:', 'P10:'));
+  restoreGate('P10', renamed);
+  assert.deepEqual(types(gateEvents('P10', [], state('a', 'DOWN'), 10 * MIN)), ['DOWN']);
+});

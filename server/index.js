@@ -8,7 +8,7 @@ import { rideHistory, rideToday, parkSummary } from './insights.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
-import { startPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
+import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule } from './poller.js';
 import { PORT, NTFY_BASE, APP_URL } from './config.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
@@ -364,9 +364,16 @@ if (isMain) {
     startHistorySync();
     startWeatherSync();
   });
-  // Railway stops the old container with SIGTERM on every deploy.
+  // Railway stops the old container with SIGTERM on every deploy. Let the
+  // poll and pushes under way finish (up to 5 s) so no alert is cut off,
+  // then write everything down.
+  let stopping = false;
   for (const signal of ['SIGTERM', 'SIGINT']) {
-    process.on(signal, () => {
+    process.on(signal, async () => {
+      if (stopping) return;
+      stopping = true;
+      server.close();
+      await stopPolling(5000);
       flushState();
       process.exit(0);
     });

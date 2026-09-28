@@ -202,6 +202,25 @@ function forgetHeld(parkId) {
   for (const [key, h] of held) if (h.parkId === parkId) held.delete(key);
 }
 
+// The gate lives in memory, so it is copied into the park's saved state each
+// poll and read back after a restart. A redeploy inside the gap window then
+// still sends a held alert, and still knows what each phone last heard.
+export function gateSnapshot(parkId) {
+  const mine = (map) => Object.fromEntries([...map].filter(([k]) => k.startsWith(`${parkId}:`)));
+  return {
+    held: [...held].filter(([, h]) => h.parkId === parkId).map(([key, h]) => [key, h.ev]),
+    lastSent: mine(lastSent),
+    lastNotified: mine(lastNotified),
+  };
+}
+export function restoreGate(parkId, snap) {
+  if (!snap) return;
+  for (const [key, ev] of snap.held || []) if (!held.has(key)) held.set(key, { parkId, ev });
+  for (const [k, v] of Object.entries(snap.lastSent || {})) if (!lastSent.has(k)) lastSent.set(k, v);
+  for (const [k, v] of Object.entries(snap.lastNotified || {})) if (!lastNotified.has(k)) lastNotified.set(k, v);
+}
+const restored = new Set(); // parks whose saved gate has been read this run
+
 // What to tell people about a DOWN ride: what kind of outage it looks like,
 // and a reopen range from past outages of that kind. Shared by alerts and the
 // dashboard so both always say the same thing.
@@ -505,7 +524,8 @@ async function doPollPark(parkId) {
     if (baseline && state.lastPoll) {
       console.log(`[poller] ${getPark(parkId)?.name || parkId}: last snapshot is ${Math.round((now - state.lastPoll) / 60_000)} min old, starting afresh`);
       forgetHeld(parkId);
-    }
+    } else if (!restored.has(parkId)) restoreGate(parkId, state.gate);
+    restored.add(parkId);
     const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now);
     state.rides = rides;
     state.recent = recordRecent(state.recent, events, now);
@@ -525,6 +545,7 @@ async function doPollPark(parkId) {
     // Every poll, so an alert held by the cooldown goes out once it passes.
     const news = events.filter((ev) => ev.type !== 'CLOSED' || closingIsNews(state, now));
     const toSend = gateEvents(parkId, news, rides, now);
+    state.gate = gateSnapshot(parkId);
     await Promise.all([
       toSend.length ? notifyTrips(parkId, toSend) : null,
       notifyWaitAlerts(parkId, rides, now),
@@ -557,8 +578,20 @@ async function pollAll() {
   await Promise.all(activeParkIds().map((parkId) => pollPark(parkId)));
 }
 
+let pollTimer = null;
 export function startPolling() {
   pollAll();
-  setInterval(pollAll, POLL_INTERVAL_MS);
+  pollTimer = setInterval(pollAll, POLL_INTERVAL_MS);
   console.log(`[poller] polling every ${POLL_INTERVAL_MS / 1000}s`);
+}
+
+// For shutdown: no new polls, and resolve once the ones under way (and the
+// pushes they are sending) finish, or after waitMs, whichever comes first.
+export async function stopPolling(waitMs = 5000) {
+  clearInterval(pollTimer);
+  pollTimer = null;
+  await Promise.race([
+    Promise.allSettled([...inFlight.values()]),
+    new Promise((r) => setTimeout(r, waitMs).unref()),
+  ]);
 }
