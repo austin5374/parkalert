@@ -1,6 +1,8 @@
 // Known parks: ThemeParks.wiki entity IDs + geofence for GPS auto-detection.
 // timezone decides where a park's day starts, which the history archive is keyed by.
 // resort is the heading the park is listed under in the app's park picker.
+// weather: the automated airport weather stations nearest the resort, whose
+// lightning detectors and reports tell when a storm is over (server/weather.js).
 // Add more parks by appending entries here (id from https://api.themeparks.wiki/v1/destinations).
 export const PARKS = [
   {
@@ -8,6 +10,7 @@ export const PARKS = [
     name: 'Magic Kingdom',
     resort: 'Walt Disney World',
     timezone: 'America/New_York',
+    weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.4177,
     lng: -81.5812,
     radiusKm: 2.0,
@@ -17,6 +20,7 @@ export const PARKS = [
     name: 'EPCOT',
     resort: 'Walt Disney World',
     timezone: 'America/New_York',
+    weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.3747,
     lng: -81.5494,
     radiusKm: 2.0,
@@ -26,6 +30,7 @@ export const PARKS = [
     name: 'Hollywood Studios',
     resort: 'Walt Disney World',
     timezone: 'America/New_York',
+    weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.3575,
     lng: -81.5583,
     radiusKm: 1.5,
@@ -35,6 +40,7 @@ export const PARKS = [
     name: 'Animal Kingdom',
     resort: 'Walt Disney World',
     timezone: 'America/New_York',
+    weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.3553,
     lng: -81.5901,
     radiusKm: 2.0,
@@ -44,6 +50,7 @@ export const PARKS = [
     name: 'Disneyland (CA)',
     resort: 'Disneyland Resort',
     timezone: 'America/Los_Angeles',
+    weather: ['KFUL', 'KSNA'], // Fullerton Municipal, John Wayne
     lat: 33.8121,
     lng: -117.919,
     radiusKm: 1.0,
@@ -53,6 +60,7 @@ export const PARKS = [
     name: 'California Adventure',
     resort: 'Disneyland Resort',
     timezone: 'America/Los_Angeles',
+    weather: ['KFUL', 'KSNA'], // Fullerton Municipal, John Wayne
     lat: 33.806,
     lng: -117.9223,
     radiusKm: 1.0,

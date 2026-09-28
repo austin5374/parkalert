@@ -1,6 +1,6 @@
 # ParkAlert 🎢
 
-Mobile-first PWA that pings your phone the moment a Disney ride goes down or comes back up, with how long it was down and, when it goes down, how long outages like it usually last. Built for two phones sharing one trip.
+Mobile-first PWA that pings your phone the moment a Disney ride goes down or comes back up, with how long it was down and, when it goes down, how long outages like it usually last. When a storm is why, it watches the weather and times the reopening from when the storm passes. It can also ping you when a ride's wait drops to what you'll stand in line for. Built for two phones sharing one trip.
 
 ## How it works
 
@@ -8,6 +8,8 @@ Mobile-first PWA that pings your phone the moment a Disney ride goes down or com
 ThemeParks.wiki API ──(poll every 60s)──▶ Node server ──(on status transition)──▶ ntfy.sh ──▶ your phones
         │                                    │
         └──(history, once a day)─────────────┤
+Airport weather reports ──(every 5 min)─────▶│
+Weather report archive ──(hourly backfill)──▶┤
                                              └──▶ serves the PWA dashboard (down rides, watch list, mutes)
 ```
 
@@ -34,8 +36,9 @@ Open http://localhost:3000, pick a park, and you have a trip. `localhost` counts
 | `npm test` | Node's built-in test runner over `tests/*.test.js`. No network: the tests stand up fake ThemeParks.wiki and ntfy servers. |
 | `npm run lint` | ESLint over the server, tests, client and service worker. |
 | `npm run check` | Lint, then tests. What CI runs on every push (`.github/workflows/ci.yml`). |
+| `npm run backtest` | Scores the reopen ranges against this server's own archive: each past outage estimated from earlier days only, then checked against when it really reopened. Run it where the data is: on Railway, open a shell on the service (`railway ssh`) and run it there. |
 
-Data goes in `data/` (git-ignored): `trips.json` (readable), `state.json` (live ride state, waits and today's transitions) and `history.json` (the outage archive). Delete the folder to start from scratch.
+Data goes in `data/` (git-ignored): `trips.json` (readable), `state.json` (live ride state, waits, today's transitions, and how recent estimates turned out), `history.json` (the outage archive) and `weather.json` (a year of airport weather reports). Delete the folder to start from scratch.
 
 ### Project layout
 
@@ -44,29 +47,38 @@ server/
   index.js        HTTP server: API routes, static files, security headers, rate limits
   config.js       every environment setting, with its default
   poller.js       60s polling, transition detection, anti-flicker, alert wording and fan-out
+  waitalerts.js   "tell me when the wait drops to N min" alerts
   notify.js       ntfy publishing
   themeparks.js   ThemeParks.wiki client and schedule parsing
   history.js      nightly backfill of the outage archive
   episodes.js     turns a day of history into outages, sorted by kind
-  predict.js      Kaplan-Meier reopen estimates
+  predict.js      Kaplan-Meier reopen estimates, and the after-the-storm ones
+  metar.js        reads lightning and rain out of airport weather reports
+  weather.js      fetches and keeps those reports; storm and rain timelines per park
+  causes.js       was it the weather, which rides the weather shuts, when it cleared
+  weatheroutlook.js  ties the above to a live down ride
+  scorecard.js    scores each estimate when its ride reopens
+  backtest.js     scores the method against the archive (npm run backtest)
   insights.js     numbers for the ride and park detail sheets
   store.js        JSON persistence, trip codes
   validate.js     request validation
   ratelimit.js    per-client token buckets
   time.js         park-local dates
-  parks.js        the parks, with time zones, resorts and geofences
+  parks.js        the parks, with time zones, resorts, geofences and weather stations
+scripts/
+  backtest.js     the npm run backtest command
 public/
   index.html, style.css, app.js   the PWA (no framework, no build step)
   time.js         DOM-free helpers (dates, durations), loaded before app.js and unit-tested
   sw.js           service worker: the app shell works offline
   manifest.webmanifest   install metadata and icons
   icons/          icon.svg is the source; the PNGs are rendered from it
-tests/            node:test suites; fakes.js stands in for ThemeParks.wiki and ntfy
+tests/            node:test suites; fakes.js stands in for ThemeParks.wiki, ntfy and both weather feeds
 ```
 
 ### Working without the real API
 
-`THEMEPARKS_BASE` points the server at any ThemeParks.wiki-compatible API: a local fake, or a caching mirror. `NTFY_BASE` does the same for pushes. `tests/fakes.js` shows the shape both need.
+`THEMEPARKS_BASE` points the server at any ThemeParks.wiki-compatible API: a local fake, or a caching mirror. `NTFY_BASE` does the same for pushes, and `WEATHER_BASE` and `WEATHER_ARCHIVE` for the two weather feeds. `tests/fakes.js` shows the shape each needs.
 
 ## Deploy on Railway (HTTPS included)
 
@@ -98,6 +110,8 @@ No environment variables are required.
 | `DATA_DIR` | the Railway volume, else `./data` | Where the JSON files live. |
 | `NTFY_BASE` | `https://ntfy.sh` | A self-hosted ntfy server instead of ntfy.sh. |
 | `THEMEPARKS_BASE` | `https://api.themeparks.wiki/v1` | A stand-in or mirror for the ThemeParks.wiki API. |
+| `WEATHER_BASE` | `https://aviationweather.gov/api/data` | Live airport weather reports (NOAA's Aviation Weather Center). |
+| `WEATHER_ARCHIVE` | `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py` | Past airport weather reports (Iowa State's ASOS archive). |
 | `PORT` | `3000` | Set by Railway. |
 
 **Cost**: the server uses about 90 MB of RAM (measured on Node 22), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
@@ -124,8 +138,8 @@ The app has three tabs. **Down now** shows what is down, how long, and the reope
 
 Almost everything opens something:
 
-- **Any ride** (a down card, a row in Rides, a "back up" row) opens its sheet: the reopen range with the likely clock times and how it was worked out, a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages).
-- **The park name** opens today's hours (including evening events), counts for right now and today, and the rides with the most outages this week.
+- **Any ride** (a down card, a row in Rides, a "back up" row) opens its sheet: the reopen range with the likely clock times and how it was worked out, a wait alert (pick 10 to 60 min; you get one push when the posted wait drops that low, today only), a chart of today's wait times you can scrub with a finger, what the ride did today, and its last week in the archive (outages per day, typical and longest, recent outages). Rides with a wait alert set carry a timer badge in the Rides list.
+- **The park name** opens today's hours (including evening events), counts for right now and today, the rides with the most outages this week, and how the reopen estimates have done here over the last 14 days.
 - **A park-wide hold** opens the rides caught in it and how long holds usually last.
 - **Pull down** on any list to refresh.
 
@@ -136,6 +150,7 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 - 🔴 `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
 - 🟢 `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
 - ⛔ `Space Mountain has closed` with `Down since 2:10 PM, now closed. It may not reopen today` when a down ride switches to CLOSED in the middle of the day (not before opening or around closing, when that is just the park's hours). If it reopens within 8 hours you get `is back up` with the whole outage.
+- ⏱️ `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
 - 🟢 `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
 - Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are.
 - Tapping an alert opens the app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else.
@@ -154,13 +169,27 @@ Nobody publishes when a ride will reopen, so ParkAlert estimates it from how lon
 **Outages are sorted by kind**, because each behaves differently and mixing them would make every estimate worse:
 
 - **Breakdowns**: one ride goes down while running. Most outages.
-- **Park-wide holds**: five or more running rides go down within ten minutes of each other. In Florida this is nearly always lightning; two September storms at Magic Kingdom each closed 11 outdoor rides inside two minutes, and those holds ran about three times as long as a typical breakdown there (median 49 min against 14). A fireworks or power hold looks the same in the data, so the app says "park-wide hold" rather than claiming weather. A free weather API was tried and missed both storms, so the cluster itself is the signal.
+- **Park-wide holds**: five or more running rides go down within ten minutes of each other. In Florida this is nearly always lightning; two September storms at Magic Kingdom each closed 11 outdoor rides inside two minutes, and those holds ran about three times as long as a typical breakdown there (median 49 min against 14). A fireworks or power hold looks the same in the ride data; the weather reports (below) tell them apart.
 - **Delayed openings**: the ride went DOWN without having been running first. Several often fail to open together at rope drop, which is not a hold.
 - **Blips** under a minute are dropped.
 
 **How the range is worked out.** For breakdowns and delayed openings the ride's own history is used once it has 8 or more outages; until then, the whole park's. Holds pool the park, then every park. The math is a Kaplan-Meier estimate: outages that never reopened that day count as "lasted at least this long" instead of being dropped, which would make estimates too short. The range is the 25th to 75th percentile of time remaining given how long the ride has already been down, so it updates as the outage goes on. With fewer than 5 comparable outages it says nothing. If the ride has been down longer than nearly every past outage it says so instead of inventing a number. When 10% or more of comparable outages lasted the rest of the day, it says that too.
 
 The dashboard shows how many past outages each range rests on. Six and a hundred are not the same claim.
+
+### When the weather is why
+
+Disney closes outdoor rides while there is lightning within about 10 miles and reopens them about 30 minutes after the last strike. So for a storm outage, how long the ride has been down says little; when the storm ends says nearly everything. ParkAlert watches for that.
+
+**The weather source** is the nearest airport weather stations: Kissimmee (KISM) and Orlando International (KMCO) for Walt Disney World, Fullerton (KFUL) and John Wayne (KSNA) for Disneyland. Their reports say plainly when a thunderstorm is at the airport or in the vicinity (within about 10 miles, the same distance the parks use) and when it is raining, and a special report goes out the moment a storm starts or ends, with the minute. An earlier try with a free weather API missed both of those September storms; these reports are what the airport actually saw. Live reports come from NOAA's Aviation Weather Center every 5 minutes for parks someone is watching; past reports from Iowa State's archive for the same days as the outage archive, so the app can learn from past storms. Both are free and keyless.
+
+**Only the rides the weather shuts count.** A ride is weather-exposed once the archive shows it going down in a park-wide hold or as a storm arrived on two or more days, so indoor rides that keep running through storms never get storm estimates. Some rides also close for rain with no lightning, and stay closed until the track dries: Test Track is known by name, and others are learned the same way from outages that start in rain.
+
+**How the estimate works.** While the storm (or, for a rain ride, the rain) goes on, the range is how long storms here usually last plus how long after one this ride usually reopens, and the ride sheet says "Lightning still nearby" or "Still raining". Once it has passed, the range is timed from when it passed: "Storm passed at 3:12 PM. Usually back in 25 to 35 min", from that ride's own past storms once it has 5, else the park's, else the 30-minute rule. Weather outages are also taken out of the breakdown history, so a storm day no longer stretches every breakdown estimate.
+
+**How close it gets.** After a storm passes, the ranges should be tight (about 10 minutes wide on test data) because the reopening follows a rule. The park sheet shows how wide they really run. Before it passes, nobody knows when a storm will end, so the range is wider. Breakdowns stay wide (often 20 minutes or more) because a sensor fault and a stuck vehicle look the same from outside; no data this app can see says which it is.
+
+**Checking it.** Each estimate is written down when it is made (when the ride goes down, and again when the weather clears) and scored when the ride reopens. The park sheet shows the last 14 days: how many reopenings, how often inside the range, and how wide the ranges were. About half inside is right for a range that is the middle half; much more means ranges are wider than they need be. `npm run backtest` does the same over the whole archive.
 
 ## API
 
@@ -175,7 +204,8 @@ Everything the app uses, all JSON. A trip code is the only credential.
 | `PATCH /api/trips/:code` | Any of `parkId`, `watched` (null or ride ids), `mute` (null or `{until}`), `rideMutes`. Validated as a whole: one bad field rejects the request. |
 | `GET /api/trips/:code/dashboard` | Park, hours, every ride with status, wait and (if down) reopen outlook, and recent transitions. |
 | `GET /api/trips/:code/rides/:id` | One ride's detail: outlook, today's changes and waits, archive history. |
-| `GET /api/trips/:code/park` | Today's counts and the week's least reliable rides. |
+| `GET /api/trips/:code/park` | Today's counts, the week's least reliable rides, and how the reopen estimates scored over the last 14 days. |
+| `PUT /api/trips/:code/wait-alerts/:rideId` `{max}` | Push once today when the ride's wait is `max` minutes (5 to 240) or less. `DELETE` removes it. |
 | `POST /api/trips/:code/test` | A test push to this trip. |
 | `POST /api/trips/:code/simulate` `{type: "up" \| "down"}` | See above. |
 
@@ -193,6 +223,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 - **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride isn't followed (Rides tab switch). Check `/api/health` to see whether the park is being polled at all.
 - **Header says "reconnecting"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health` shows the last error. Alerts resume on their own when it answers again.
 - **Estimates say nothing**: fewer than 5 comparable past outages yet. Set `THEMEPARKS_API_KEY` to backfill 30 days instead of 7.
+- **A storm outage gets an ordinary estimate**: the weather reports are more than 75 minutes old (the feed is down; the server log says so), or the archive hasn't yet shown that ride closing for storms on two days.
 
 ## Notes & limits
 
@@ -201,6 +232,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 - Only transitions involving DOWN alert: down, back up, opened late, and closed while down. Other status changes (a ride opening on time, going to REFURBISHMENT) don't.
 - Trips nobody has opened in three weeks stop being polled and stop getting alerts, which is most of what hosting costs. Opening the app again resumes them. Trips are never deleted.
 - Times are shown in the park's own time zone, so planning from home still reads like the park clock.
+- Weather reports come from airports 5 to 20 miles from the parks. A storm can sit over the park and miss the airport, or the reverse; the 15-minute lead and the two stations per resort soften that, but it will sometimes be off.
 - Estimates are only as good as the history behind them. The first week after a fresh deploy runs on 7 days (30 with a key), and the archive grows by a day each night from there.
 
 Built by Austin Vodrazka with Claude.

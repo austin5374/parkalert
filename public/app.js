@@ -497,9 +497,8 @@ function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
   const since = o.kind === 'opening' ? `Delayed opening since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
-  const where = { ride: 'of this ride', park: 'at this park' }[o.basis?.from] || 'across all parks';
   const foot = [
-    o.basis ? `From ${o.basis.outages} past outages ${where}` : '',
+    basisLine(o),
     following ? '' : 'Not following',
   ].filter(Boolean).join(' · ');
   return `
@@ -608,6 +607,12 @@ function renderRecent(downIds) {
 }
 
 /* ---------- Rides ---------- */
+// A small marker in the Rides list for a ride with a wait alert still to go off.
+function waitBadge(r) {
+  const a = dash.trip.waitAlerts?.[r.id];
+  return a && !a.sentAt ? `<span class="wait-badge" title="Wait alert">${icon('timer')}≤${a.max}</span>` : '';
+}
+
 function rideMeta(r) {
   if (r.status === 'OPERATING') return `Open${r.waitTime != null ? ` · ${r.waitTime} min wait` : ''}`;
   if (r.status === 'DOWN') return `Down ${r.downSince ? fmtDuration(Date.now() - r.downSince) : ''}`.trim();
@@ -663,7 +668,7 @@ function drawRides() {
       <div class="row ride-row">
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${icon('chevron', 'meta-chevron')}</span>
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}${icon('chevron', 'meta-chevron')}</span>
           </span>
         </button>
         <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
@@ -937,7 +942,29 @@ function statusLine(r) {
   return rideMeta(r);
 }
 
+// What a range rests on, in a few words for the card.
+function basisLine(o) {
+  if (!o?.basis) return '';
+  if (o.cause) {
+    if (o.basis.from === 'rule') return 'From the 30-minute lightning rule';
+    return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
+  }
+  const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
+  return `From ${o.basis.outages} past outages ${where}`;
+}
+
+const WEATHER_NOTE = {
+  lightning: "Outdoor rides close while there's lightning nearby and reopen about 30 minutes after the last of it, once they've been checked. The storm's end comes from the automated weather stations nearest the park.",
+  rain: 'This ride closes in rain as well as lightning and reopens once the rain has stopped and the track has dried. The rain comes from the automated weather stations nearest the park.',
+};
+
 function estimateExplainer(o) {
+  if (o?.cause) {
+    if (!o.basis) return 'ParkAlert has not seen enough weather closures here to put a range on this one yet.';
+    if (o.basis.from === 'rule') return 'Until ParkAlert has seen enough storms here to learn how this ride really goes, this uses the 30-minute rule: most reopen 30 to 45 minutes after the storm passes.';
+    const what = o.cause === 'rain' ? 'rain closures' : 'storms';
+    return `Timed from when the ${o.cause === 'rain' ? 'rain stopped' : 'storm passed'}, not from when the ride went down: based on ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. The middle half of them reopened within the range above.`;
+  }
   if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past one here, so there is no honest range to give.' : '';
   const kind = { hold: 'park-wide holds', opening: 'delayed openings' }[o.kind] || 'breakdowns';
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
@@ -964,6 +991,60 @@ async function loadRide(rideId) {
   }
 }
 
+// Wait alert: "tell me when the wait is at most N". Only limits under the
+// current posted wait are offered, since one at or over it would go off at
+// once; a ride that isn't posting a wait can take any of them.
+const WAIT_CHOICES = [10, 15, 20, 30, 45, 60];
+
+function waitAlertBlock(r) {
+  const alert = dash.trip.waitAlerts?.[r.id];
+  const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
+  const armed = alert && !alert.sentAt;
+  let choices = WAIT_CHOICES.filter((m) => posted == null || m < posted);
+  if (armed && !choices.includes(alert.max)) choices = [...choices, alert.max].sort((a, b) => a - b);
+  const state = armed
+    ? `You'll get an alert when the wait is ${alert.max} min or less.`
+    : alert?.sentAt
+      ? `Sent at ${fmtTime(alert.sentAt)}, when the wait was ${alert.sentWait} min. Pick a limit to be told again.`
+      : posted != null && !choices.length
+        ? `The wait is only ${posted} min right now.`
+        : posted != null
+          ? `It's ${posted} min now. Tell me when it's at most:`
+          : 'Tell me when it is running with a wait of at most:';
+  const box = el(`
+    <div>
+      <h2 class="section-label">Wait alert</h2>
+      <div class="group padded wait-alert">
+        <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
+        ${choices.length ? `<div class="chips" role="group" aria-label="Wait alert limit">
+          ${choices.map((m) => `<button class="chip pressable" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}">${m} min</button>`).join('')}
+          ${armed ? '<button class="chip pressable" type="button" data-act="wait-off">Off</button>' : ''}
+        </div>` : ''}
+      </div>
+      <p class="footnote">Goes to everyone on this trip, once, and only today.</p>
+    </div>`);
+  box.querySelectorAll('.chip').forEach((b) => {
+    b.onclick = () => {
+      const m = b.dataset.act.slice(5);
+      setWaitAlert(r.id, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
+    };
+  });
+  return box;
+}
+
+async function setWaitAlert(rideId, max) {
+  try {
+    const path = `/trips/${tripCode}/wait-alerts/${encodeURIComponent(rideId)}`;
+    const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: { max } });
+    dash.trip = trip;
+    renderAll();
+    if (sheetContext?.type === 'ride' && sheetContext.id === rideId) loadRide(rideId);
+    toast(max == null ? 'Wait alert off' : `We'll tell you when it's ${max} min or less`);
+  } catch {
+    toast("Couldn't save that. Check your connection and try again.");
+  }
+}
+
 function rideSheet(r, detail) {
   const o = detail ? detail.outlook : r.outlook;
   const down = r.status === 'DOWN' && r.downSince;
@@ -977,13 +1058,14 @@ function rideSheet(r, detail) {
       : '';
     wrap.appendChild(el(`
       <div class="group padded outlook-block">
-        ${o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
+        ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · park-wide hold' : ''}</p>`
+          : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
         ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
         <p class="big-outlook">${esc(o?.text || 'Not enough history to estimate yet')}</p>
         ${clock ? `<p class="clock">${esc(clock)}</p>` : ''}
         ${timeline({ ...r, outlook: o })}
         ${o?.text ? `<p class="explain">${esc(estimateExplainer(o))}</p>` : ''}
-        ${KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
+        ${o?.cause ? `<p class="explain">${esc(WEATHER_NOTE[o.cause])}</p>` : KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
       </div>`));
   }
 
@@ -998,6 +1080,7 @@ function rideSheet(r, detail) {
     e.currentTarget.setAttribute('aria-checked', String(isFollowing(r.id)));
   };
   wrap.appendChild(follow);
+  wrap.appendChild(waitAlertBlock(r));
 
   if (!detail) {
     wrap.appendChild(el('<p class="footnote" data-loading>Loading wait times and outage history…</p>'));
@@ -1114,6 +1197,14 @@ function parkSheet(info) {
     if (info.week.holdDays) {
       wrap.appendChild(el(`<p class="footnote">Park-wide holds happened on ${info.week.holdDays} of those ${info.week.days} days.</p>`));
     }
+  }
+  if (info?.estimates?.groups.length) {
+    // How the reopen estimates have done here, scored as rides came back.
+    wrap.appendChild(el(`<h2 class="section-label">How the estimates did, last ${info.estimates.days} days</h2>`));
+    wrap.appendChild(el(`<div class="group plain">${info.estimates.groups.map((g) => `
+      <div class="row"><span class="row-label">${esc(g.label)}<small>${g.n} reopening${g.n === 1 ? '' : 's'} · ranges about ${g.width} min wide</small></span>
+      <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>`));
+    wrap.appendChild(el('<p class="footnote">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>'));
   }
   wrap.appendChild(el(`<p class="footnote">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}. ` : ''}Pull down on any list to refresh.</p>`));
   wrap.appendChild(el('<div style="height:1rem"></div>'));

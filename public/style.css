@@ -401,6 +401,16 @@ main {
 .topic code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 0.875rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .topic button { color: var(--accent); font-weight: 600; font-size: 0.9375rem; flex: none; margin-right: -0.3rem; }
 .tip { font-size: 0.875rem !important; }
+.wait-state { color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.chip {
+  min-height: 2.5rem; padding: 0 1rem; border-radius: 999px; text-align: center;
+  background: var(--fill); color: var(--label); font-size: 0.9375rem; font-weight: 500; letter-spacing: 0;
+}
+.chip[aria-pressed='true'] { background: var(--accent); color: #fff; font-weight: 600; }
+.chip.pressable:active { transform: scale(0.96); }
+.wait-badge { display: inline-flex; align-items: center; gap: 0.1rem; color: var(--accent); font-weight: 600; margin-left: 0.3rem; }
+.wait-badge svg { width: 0.9rem; height: 0.9rem; stroke-width: 2; }
 .inline-icon { width: 1.1em; height: 1.1em; vertical-align: -0.2em; color: var(--accent); }
 
 /* ---- Toast ---- */

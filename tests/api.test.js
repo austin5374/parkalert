@@ -277,3 +277,20 @@ test('one client can only mint so many trips', async () => {
   assert.deepEqual(statuses.slice(0, 20), Array(20).fill(201));
   assert.equal(statuses[20], 429);
 });
+
+test('wait alerts can be set, re-set and removed, and bad ones are refused', async () => {
+  const trip = await newTrip();
+  const put = (id, body) => call('PUT', `/api/trips/${trip.code}/wait-alerts/${id}`, body);
+  let r = await put(`${MK}-1`, { max: 30 });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.trip.waitAlerts[`${MK}-1`].max, 30);
+  r = await put(`${MK}-1`, { max: 20 });
+  assert.equal(r.body.trip.waitAlerts[`${MK}-1`].max, 20);
+  for (const body of [{ max: 2 }, { max: 500 }, { max: 12.5 }, { max: '30' }, {}]) {
+    assert.equal((await put(`${MK}-1`, body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await put('%E0%A4%A', { max: 30 })).status, 400, 'malformed id');
+  r = await call('DELETE', `/api/trips/${trip.code}/wait-alerts/${MK}-1`);
+  assert.deepEqual(r.body.trip.waitAlerts, {});
+  assert.deepEqual((await call('GET', `/api/trips/${trip.code}`)).body.trip.waitAlerts, {});
+});

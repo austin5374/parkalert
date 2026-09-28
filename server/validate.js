@@ -24,6 +24,18 @@ export function requireObject(body) {
   return body;
 }
 
+export function requireRideId(id) {
+  if (!isId(id)) bad('bad ride id');
+  return id;
+}
+
+// PUT /api/trips/:code/wait-alerts/:rideId: { max: whole minutes }.
+export function parseWaitAlert(body, min, max) {
+  requireObject(body);
+  if (!Number.isInteger(body.max) || body.max < min || body.max > max) bad(`max must be whole minutes from ${min} to ${max}`);
+  return { max: body.max };
+}
+
 // PATCH /api/trips/:code. Returns only the recognised fields, each checked,
 // so a bad field rejects the whole request before anything changes.
 //   parkId: a known park id

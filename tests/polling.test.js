@@ -68,3 +68,58 @@ test('a down ride that closes mid-day sends "has closed"', async () => {
   assert.deepEqual(fakes.pushes.map((p) => p.title), ['Ride P5 has closed']);
   assert.match(fakes.pushes[0].message, /^Down since .*, now closed\. It may not reopen today · Magic Kingdom$/);
 });
+
+test('a wait alert fires once when the wait drops to the limit, and not while paused', async () => {
+  const { localDate } = await import('../server/time.js');
+  const now = Date.now();
+  const today = localDate(now, 'America/New_York');
+  setup({ p6: ride('Ride P6', 'OPERATING', now - 3600_000) }, now - 60_000);
+  trips.AAAAAA.waitAlerts = { p6: { max: 30, day: today, setAt: now } };
+  const poll = async (waitTime) => {
+    fakes.upstream.live[PARK] = [{ id: 'p6', name: 'Ride P6', status: 'OPERATING', waitTime }];
+    parkState[PARK].lastPoll = Date.now() - 60_000;
+    await pollPark(PARK);
+  };
+  await poll(45);
+  assert.deepEqual(fakes.pushes, []);
+  trips.AAAAAA.mute = { until: Date.now() + 60_000 };
+  await poll(25);
+  assert.deepEqual(fakes.pushes, [], 'paused: held, not used up');
+  trips.AAAAAA.mute = null;
+  await poll(25);
+  assert.deepEqual(fakes.pushes.map((p) => p.title), ['Ride P6: 25 min wait']);
+  assert.equal(trips.AAAAAA.waitAlerts.p6.sentWait, 25);
+  await poll(20);
+  assert.equal(fakes.pushes.length, 1, 'only once');
+});
+
+test('an estimate is written down when a ride goes down and scored when it reopens', async () => {
+  const { history } = await import('../server/store.js');
+  const { scorecard } = await import('../server/scorecard.js');
+  const saved = history.episodes[PARK];
+  // Ten past breakdowns of 10 to 28 min: the ride should be called for 15 to 24 min.
+  history.episodes[PARK] = Array.from({ length: 10 }, (_, i) => ({
+    rideId: 'p7', rideName: 'Ride P7', start: Date.parse(`2026-09-1${i}T15:00:00Z`), minutes: 10 + i * 2,
+    endedAs: 'OPERATING', kind: 'breakdown', date: `2026-09-1${i}`,
+  }));
+  try {
+    const now = Date.now();
+    setup({ p7: ride('Ride P7', 'OPERATING', now - 3600_000) }, now - 60_000);
+    const poll = async (status) => {
+      fakes.upstream.live[PARK] = [{ id: 'p7', name: 'Ride P7', status }];
+      parkState[PARK].lastPoll = Date.now() - 60_000;
+      await pollPark(PARK);
+    };
+    await poll('DOWN');
+    assert.equal(parkState[PARK].calls.p7.length, 1);
+    assert.equal(parkState[PARK].calls.p7[0].stage, 'down');
+    await poll('OPERATING');
+    assert.deepEqual(parkState[PARK].calls, {});
+    assert.equal(parkState[PARK].scores.length, 1);
+    // Back almost at once: well short of the range.
+    assert.equal(parkState[PARK].scores[0].hit, false);
+    assert.deepEqual(scorecard(parkState[PARK].scores).groups.map((g) => [g.id, g.n, g.inRange]), [['other', 1, 0]]);
+  } finally {
+    history.episodes[PARK] = saved;
+  }
+});

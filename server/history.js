@@ -7,6 +7,7 @@ import { extractEpisodes } from './episodes.js';
 import { history, saveHistory } from './store.js';
 import { HISTORY_DAYS as WINDOW_DAYS } from './config.js';
 import { localDate } from './time.js';
+import { syncWeatherArchive } from './weather.js';
 
 const SYNC_INTERVAL_MS = 60 * 60_000;
 // Episodes older than this are dropped. Ride reliability drifts with
@@ -88,6 +89,8 @@ export async function syncHistory(now = Date.now()) {
       prune(now);
       saveHistory();
       console.log(`[history] fetched ${days} park-day(s), ${added} episode(s)`);
+      // New outage days need the weather for those days, to learn from.
+      syncWeatherArchive(now).catch(() => {});
     }
     running = false;
   }
