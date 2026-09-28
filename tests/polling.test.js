@@ -50,3 +50,12 @@ test('after a gap in polling there are no alerts, and clocks start afresh', asyn
 test('the gap threshold sits between a redeploy and a park hop', () => {
   assert.ok(MAX_GAP_MS >= 5 * 60_000 && MAX_GAP_MS <= 30 * 60_000);
 });
+
+test('an empty live response is a failed poll, not every ride vanishing', async () => {
+  const now = Date.now();
+  setup({ p4: ride('Ride P4', 'DOWN', now - 30 * 60_000) }, now - 60_000);
+  fakes.upstream.live[PARK] = [];
+  await pollPark(PARK);
+  assert.equal(parkState[PARK].lastError, 'live data came back empty');
+  assert.equal(parkState[PARK].rides.p4.downSince, now - 30 * 60_000);
+});

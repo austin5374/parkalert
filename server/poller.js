@@ -7,6 +7,9 @@ import { recordWaits } from './insights.js';
 import { localDate } from './history.js';
 
 const POLL_INTERVAL_MS = 60_000;
+// A ride missing from a response keeps its last state this many polls before
+// it is dropped, so one patchy response can't restart its outage clock.
+export const MISSING_POLLS = 5;
 
 // Pure transition detection so it can be tested without the network.
 // Returns { rides, events } where events = [{ type: 'DOWN'|'UP', ride, downtimeMs }].
@@ -40,6 +43,11 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
       }
     }
     rides[att.id] = ride;
+  }
+  for (const [id, prev] of Object.entries(prevRides || {})) {
+    if (rides[id]) continue;
+    const missed = (prev.missed || 0) + 1;
+    if (missed <= MISSING_POLLS) rides[id] = { ...prev, missed };
   }
   return { rides, events };
 }
@@ -309,6 +317,9 @@ async function doPollPark(parkId) {
   try {
     await refreshSchedule(parkId);
     const live = await fetchLiveAttractions(parkId);
+    // An empty list for a park we know is an API hiccup, not every ride
+    // vanishing; count it as a failed poll and keep what we have.
+    if (!live.length && Object.keys(state.rides || {}).length) throw new Error('live data came back empty');
     const now = Date.now();
     const baseline = isBaseline(state.lastPoll, now);
     if (baseline && state.lastPoll) {

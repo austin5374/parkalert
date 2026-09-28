@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { remaining, estimate, describe, classifyLive, MIN_SAMPLES } from '../server/predict.js';
-import { applyLiveData } from '../server/poller.js';
+import { applyLiveData, MISSING_POLLS } from '../server/poller.js';
 
 const ep = (minutes, extra = {}) => ({ rideId: 'a', minutes, endedAs: 'OPERATING', kind: 'breakdown', ...extra });
 const eps = (list, extra) => list.map((m) => ep(m, extra));
@@ -103,4 +103,20 @@ test('the poller remembers what a ride went DOWN from, across polls', () => {
   ({ rides } = applyLiveData({}, att('CLOSED'), 0));
   ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
   assert.equal(rides.a.downFrom, 'CLOSED');
+});
+
+test('a ride missing from one response keeps its outage clock, and is dropped if it stays gone', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }, { id: 'b', name: 'B', status: 'OPERATING', waitTime: 5 }];
+  let { rides } = applyLiveData({}, att('OPERATING'), 0);
+  ({ rides } = applyLiveData(rides, att('DOWN'), 60_000));
+  const onlyB = att('DOWN').slice(1);
+  let events;
+  ({ rides, events } = applyLiveData(rides, onlyB, 120_000));
+  assert.equal(rides.a.status, 'DOWN', 'kept while missing');
+  assert.deepEqual(events, []);
+  ({ rides, events } = applyLiveData(rides, att('DOWN'), 180_000));
+  assert.equal(rides.a.downSince, 60_000, 'same outage when it reappears');
+  assert.deepEqual(events, []);
+  for (let i = 0; i < MISSING_POLLS + 1; i++) ({ rides } = applyLiveData(rides, onlyB, 240_000 + i * 60_000));
+  assert.equal(rides.a, undefined, 'gone after several polls');
 });
