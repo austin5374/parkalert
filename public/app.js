@@ -427,6 +427,24 @@ function hoursText() {
   return 'Hours unavailable';
 }
 
+// The park name is the screen's title and the way into the park sheet, so it
+// shrinks to fit beside the alerts pill ("Magic Kin…" told nobody anything),
+// down to a floor, and past that takes a second line. Relative to the
+// computed size, so the reader's text size setting still counts.
+function fitTitle() {
+  const h = $('#park-name');
+  h.style.fontSize = '';
+  h.classList.remove('wrap');
+  const max = parseFloat(getComputedStyle(h).fontSize);
+  const floor = max * 0.62;
+  for (let size = max; h.scrollWidth > h.clientWidth && size > floor; ) {
+    size = Math.max(floor, size - 1);
+    h.style.fontSize = `${size}px`;
+  }
+  if (h.scrollWidth > h.clientWidth) h.classList.add('wrap');
+}
+addEventListener('resize', () => dash && fitTitle());
+
 function renderHeader() {
   $('#park-name').textContent = parkLabel(dash.park.name);
   document.title = `${parkLabel(dash.park.name)} · ParkAlert`;
@@ -450,6 +468,7 @@ function renderHeader() {
   const pill = $('#btn-alerts');
   pill.className = `pill pressable ${st.kind}`;
   pill.innerHTML = `${icon(glyph)}<span>${label}</span>`;
+  fitTitle(); // after the pill, whose label sets the room left
   pill.setAttribute('aria-label', st.kind === 'paused' && st.until ? `Alerts paused until ${fmtUntil(st.until)}` : label);
 
   const down = dash.rides.filter((r) => r.status === 'DOWN' && isFollowing(r.id)).length;
@@ -670,6 +689,8 @@ function renderTrip() {
 // stands: loading, or unreachable with a way to try again.
 function renderNoData() {
   $('#park-name').textContent = 'ParkAlert';
+  $('#park-name').style.fontSize = '';
+  $('#park-name').classList.remove('wrap');
   const meta = $('#park-meta');
   meta.textContent = offline ? 'Offline. Waiting for a connection…' : 'Loading…';
   meta.classList.toggle('warn', offline);
