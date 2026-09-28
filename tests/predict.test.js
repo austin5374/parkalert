@@ -173,3 +173,18 @@ test('a down ride that closes says so, and reopening later is "back up" with the
   ({ events } = applyLiveData(rides, att('OPERATING'), H));
   assert.deepEqual(events, []);
 });
+
+test('a ride still down when the rest of its hold reopens stays in the hold', async () => {
+  const { applyLiveData } = await import('../server/poller.js');
+  const t = 1_000_000_000;
+  const live = (downIds) => Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, name: `R${i}`, status: downIds.includes(i) ? 'DOWN' : 'OPERATING', waitTime: null }));
+  let { rides } = applyLiveData({}, live([]), t);
+  ({ rides } = applyLiveData(rides, live([0, 1, 2, 3, 4, 5, 6]), t + 60_000));
+  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'hold', rides: 7 });
+  ({ rides } = applyLiveData(rides, live([6]), t + 40 * 60_000));
+  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'hold', rides: 7 });
+  // Reopening ends it; going down again later is a new outage.
+  ({ rides } = applyLiveData(rides, live([]), t + 50 * 60_000));
+  ({ rides } = applyLiveData(rides, live([6]), t + 90 * 60_000));
+  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'breakdown' });
+});

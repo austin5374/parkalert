@@ -4,7 +4,7 @@ import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
-import { estimate, describe, classifyLive } from './predict.js';
+import { estimate, describe, classifyLive, clusterLive } from './predict.js';
 import { weatherOutlook, modelHistory } from './weatheroutlook.js';
 import { refreshWeather } from './weather.js';
 import { isLateOpening } from './episodes.js';
@@ -43,6 +43,10 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
     if (att.status === 'DOWN') {
       ride.downSince = outage ? outage.downSince : now;
       ride.downFrom = outage ? outage.downFrom ?? null : prev?.status ?? null;
+      if (outage?.liveKind) {
+        ride.liveKind = outage.liveKind;
+        ride.holdSize = outage.holdSize;
+      }
     }
     if (att.status === 'CLOSED' && outage) {
       ride.downSince = outage.downSince;
@@ -75,7 +79,21 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
     const missed = (prev.missed || 0) + 1;
     if (missed <= MISSING_POLLS) rides[id] = { ...prev, missed };
   }
+  rememberHolds(rides);
   return { rides, events };
+}
+
+// A down ride seen in a park-wide hold keeps that for the rest of its
+// outage, and the hold's largest size, however many of the others reopen.
+export function rememberHolds(rides) {
+  for (const [id, r] of Object.entries(rides)) {
+    if (r.status !== 'DOWN') continue;
+    const now = clusterLive(rides, id);
+    if (now.kind === 'hold') {
+      r.liveKind = 'hold';
+      r.holdSize = Math.max(r.holdSize || 0, now.rides);
+    }
+  }
 }
 
 function localTime(ts, timezone) {
