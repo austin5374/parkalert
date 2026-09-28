@@ -9,7 +9,26 @@ const PLAY_STORE = 'https://play.google.com/store/apps/details?id=io.heckel.ntfy
 let tripCode = localStorage.getItem('parkalert.trip');
 let dash = null; // last /dashboard payload
 let parks = [];
-let offline = false;
+let offline = false; // the last refresh failed; `failure` says how
+// Why: 'offline' (no connection), 'server' (ParkAlert answered with an
+// error, as Railway's proxy does when the app is down), 'busy' (429) or
+// 'slow' (no answer in time). A phone that is online is never told it's
+// offline because the server is down.
+let failure = 'offline';
+function failureOf(err) {
+  if (navigator.onLine === false) return 'offline';
+  if (err?.status === 429) return 'busy';
+  if (err?.status >= 500) return 'server';
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return 'slow';
+  if (err?.status) return 'server';
+  return 'offline';
+}
+const FAILURE_META = {
+  offline: 'Offline',
+  server: "ParkAlert isn't responding",
+  busy: 'Busy, trying again shortly',
+  slow: 'Slow connection',
+};
 let refreshTimer = null;
 let view = 'down';
 
@@ -686,7 +705,7 @@ function renderHeader() {
   const meta = $('#park-meta');
   const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS || !!dash.lastError;
   meta.textContent = offline
-    ? `Offline · as of ${fmtUntil(dash.lastPoll)}`
+    ? `${FAILURE_META[failure]} · as of ${fmtUntil(dash.lastPoll)}`
     : stale
       ? `Updated ${dash.lastPoll ? fmtDuration(Date.now() - dash.lastPoll) : 'a while'} ago · reconnecting`
       : hoursText();
@@ -1061,7 +1080,7 @@ function renderNoData() {
   $('#park-name').style.fontSize = '';
   $('#park-name').classList.remove('wrap');
   const meta = $('#park-meta');
-  meta.textContent = offline ? 'Offline. Waiting for a connection…' : 'Loading…';
+  meta.textContent = offline ? (failure === 'offline' ? 'Offline. Waiting for a connection…' : `${FAILURE_META[failure]}…`) : 'Loading…';
   meta.classList.toggle('warn', offline);
   $('#btn-alerts').classList.add('hidden');
   $('#down-badge').classList.add('hidden');
@@ -1073,8 +1092,8 @@ function renderNoData() {
   const state = offline
     ? el(`<div class="empty offline">
         ${icon('wifi-off')}
-        <h2 class="title-2">Can't reach ParkAlert</h2>
-        <p>Rides show up here as soon as your phone reconnects.</p>
+        <h2 class="title-2">${failure === 'offline' ? "You're offline" : "Can't reach ParkAlert"}</h2>
+        <p>${failure === 'offline' ? 'Rides show up here as soon as your phone reconnects.' : "Your connection is fine; ParkAlert isn't answering. This tries again on its own."}</p>
         <button class="btn-secondary pressable" type="button">Try again</button>
       </div>`)
     : el('<div class="empty loading" role="status"><p>Loading rides…</p></div>');
@@ -1085,7 +1104,7 @@ function renderNoData() {
   });
   $('#down-list').replaceChildren(state);
   $('#rides-list').className = 'group rides';
-  $('#rides-list').innerHTML = `<p class="no-results">${offline ? 'Rides show up once your phone reconnects.' : 'Loading rides…'}</p>`;
+  $('#rides-list').innerHTML = `<p class="no-results">${offline ? (failure === 'offline' ? 'Rides show up once your phone reconnects.' : "Rides show up once ParkAlert answers.") : 'Loading rides…'}</p>`;
 }
 
 function renderAll() {
@@ -1865,6 +1884,7 @@ async function fetchDashboard() {
       return;
     }
     offline = true;
+    failure = failureOf(err);
   }
   renderAll();
   if (!offline && sheetContext?.type === 'ride') loadRide(sheetContext.id);
@@ -2067,7 +2087,7 @@ const resume = () => {
 };
 document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
 addEventListener('online', resume);
-addEventListener('offline', () => { offline = true; if (dash) renderHeader(); });
+addEventListener('offline', () => { offline = true; failure = 'offline'; if (dash) renderHeader(); });
 
 // Keep elapsed times honest between refreshes.
 setInterval(() => {
