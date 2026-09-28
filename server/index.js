@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
-import { trips, parkState, createTrip, getTrip, saveTrips } from './store.js';
+import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip } from './store.js';
 import { startPolling, pollPark, simulateTransition, downOutlook } from './poller.js';
 import { startHistorySync } from './history.js';
 import { publish } from './notify.js';
@@ -50,7 +50,10 @@ function tripView(trip) {
   return { code, topic, parkId, watched, mute, rideMutes };
 }
 
+const NTFY_BASE = process.env.NTFY_BASE || 'https://ntfy.sh';
+
 async function dashboard(trip) {
+  touchTrip(trip);
   if (!parkState[trip.parkId]?.lastPoll) await pollPark(trip.parkId);
   const state = parkState[trip.parkId] || {};
   const park = getPark(trip.parkId);
@@ -62,7 +65,10 @@ async function dashboard(trip) {
       timezone: state.timezone || null,
       openingTime: state.schedule?.openingTime || null,
       closingTime: state.schedule?.closingTime || null,
+      lateEvent: state.schedule?.lateEvent || null,
     },
+    ntfyBase: NTFY_BASE,
+    recent: (state.recent || []).filter((e) => e.at > Date.now() - 2 * 3600_000),
     lastPoll: state.lastPoll || null,
     lastError: state.lastError || null,
     now: Date.now(),
@@ -108,8 +114,11 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     if (body.parkId !== undefined && body.parkId !== trip.parkId) {
       if (!getPark(body.parkId)) return json(res, 400, { error: 'unknown parkId' });
+      // Ride ids are park-specific, so each park keeps its own follow list and
+      // hopping back to a park restores it instead of starting over.
+      trip.watchedByPark = { ...trip.watchedByPark, [trip.parkId]: trip.watched };
       trip.parkId = body.parkId;
-      trip.watched = null; // ride ids are park-specific
+      trip.watched = trip.watchedByPark[body.parkId] ?? null;
       trip.rideMutes = {};
       pollPark(trip.parkId);
     }

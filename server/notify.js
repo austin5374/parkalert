@@ -1,7 +1,7 @@
 const NTFY_BASE = process.env.NTFY_BASE || 'https://ntfy.sh';
 
 // JSON publish API: unlike header-based publishing it supports full UTF-8.
-export async function publish(topic, { title, message, tags, priority }) {
+export async function publish(topic, { title, message, tags, priority, click }) {
   try {
     const res = await fetch(NTFY_BASE, {
       method: 'POST',
@@ -12,6 +12,7 @@ export async function publish(topic, { title, message, tags, priority }) {
         message,
         ...(tags ? { tags: tags.split(',') } : {}),
         ...(priority ? { priority } : {}),
+        ...(click ? { click } : {}),
       }),
       signal: AbortSignal.timeout(15000),
     });

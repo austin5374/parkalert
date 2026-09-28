@@ -50,23 +50,32 @@ export async function fetchLiveAttractions(parkId) {
     }));
 }
 
-// Today's operating hours (park-local) + timezone.
+// Today's hours (park-local) + timezone.
 export async function fetchSchedule(parkId) {
-  const data = await getJSON(`/entity/${parkId}/schedule`);
+  return parseSchedule(await getJSON(`/entity/${parkId}/schedule`));
+}
+
+// Pure so it can be tested. closingTime is the regular close; lastCloseTime is
+// when the last guests leave, which on a party night (Mickey's Not-So-Scary
+// Halloween Party runs 7pm to midnight after a 6pm close) is hours later.
+// Auto-mute must use lastCloseTime or party guests silently get no alerts.
+export function parseSchedule(data, now = Date.now()) {
   const timezone = data.timezone || 'America/New_York';
-  const today = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date());
-  const entry = (data.schedule || []).find(
-    (s) => s.date === today && s.type === 'OPERATING'
-  );
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date(now));
+  const entries = (data.schedule || []).filter((s) => s.date === today && s.closingTime);
+  const regular = entries.find((s) => s.type === 'OPERATING');
+  const late = entries
+    .filter((s) => s.type === 'OPERATING' || s.type === 'TICKETED_EVENT')
+    .sort((a, b) => Date.parse(b.closingTime) - Date.parse(a.closingTime))[0];
+  const lateEvent = late && late !== regular && regular && Date.parse(late.closingTime) > Date.parse(regular.closingTime)
+    ? late
+    : null;
   return {
     timezone,
     date: today,
-    openingTime: entry?.openingTime || null,
-    closingTime: entry?.closingTime || null,
+    openingTime: regular?.openingTime || null,
+    closingTime: regular?.closingTime || null,
+    lastCloseTime: late?.closingTime || null,
+    lateEvent: lateEvent ? { name: lateEvent.description || 'Evening event', closingTime: lateEvent.closingTime } : null,
   };
 }

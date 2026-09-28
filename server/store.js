@@ -89,6 +89,22 @@ export function getTrip(code) {
   return trips[String(code || '').toUpperCase()] || null;
 }
 
-export function activeParkIds() {
-  return [...new Set(Object.values(trips).map((t) => t.parkId))];
+// A trip nobody has opened in three weeks is a finished vacation. Its park is
+// no longer polled, which is most of what this app costs to run. Opening the
+// app again brings it straight back.
+export const TRIP_IDLE_MS = 21 * 24 * 3600_000;
+
+export function isTripActive(trip, now = Date.now()) {
+  return now - (trip.lastSeenAt ?? trip.createdAt ?? now) < TRIP_IDLE_MS;
+}
+
+export function activeParkIds(now = Date.now()) {
+  return [...new Set(Object.values(trips).filter((t) => isTripActive(t, now)).map((t) => t.parkId))];
+}
+
+// Called on every dashboard load; written at most hourly to spare the disk.
+export function touchTrip(trip, now = Date.now()) {
+  if (now - (trip.lastSeenAt ?? 0) < 3600_000) return;
+  trip.lastSeenAt = now;
+  saveTrips();
 }
