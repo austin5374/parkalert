@@ -19,9 +19,14 @@ export default [
     languageOptions: { sourceType: 'module', globals: globals.node },
   },
   {
-    // A classic script, not a module: no build step, loaded straight from index.html.
-    files: ['public/app.js'],
+    // Classic scripts, not modules: no build step, loaded straight from
+    // index.html, time.js first so app.js can use its functions.
+    files: ['public/app.js', 'public/time.js'],
     languageOptions: { sourceType: 'script', globals: globals.browser },
+  },
+  {
+    files: ['public/app.js'],
+    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly' } },
   },
   {
     files: ['public/sw.js'],

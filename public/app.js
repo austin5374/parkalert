@@ -38,6 +38,18 @@ function fmtTime(ts) {
   }).format(new Date(ts));
 }
 
+// A time that may not be today, said the way a person would: "9:30 PM",
+// "tomorrow at 7:00 AM", or "Mon at 7:00 AM". Park days, not phone days.
+function fmtUntil(ts) {
+  const tz = dash?.park.timezone || undefined;
+  const today = localDay(Date.now(), tz);
+  const day = localDay(ts, tz);
+  if (day === today) return fmtTime(ts);
+  if (day === localDay(Date.now() + 24 * 3600_000, tz)) return `tomorrow at ${fmtTime(ts)}`;
+  const weekday = new Intl.DateTimeFormat([], { weekday: 'short', timeZone: tz }).format(new Date(ts));
+  return `${weekday} at ${fmtTime(ts)}`;
+}
+
 function fmtDuration(ms) {
   const min = Math.max(0, Math.round(ms / 60000));
   if (min < 60) return `${min} min`;
@@ -414,7 +426,7 @@ function renderHeader() {
   const pill = $('#btn-alerts');
   pill.className = `pill pressable ${st.kind}`;
   pill.innerHTML = `${icon(glyph)}<span>${label}</span>`;
-  pill.setAttribute('aria-label', st.kind === 'paused' && st.until ? `Alerts paused until ${fmtTime(st.until)}` : label);
+  pill.setAttribute('aria-label', st.kind === 'paused' && st.until ? `Alerts paused until ${fmtUntil(st.until)}` : label);
 
   const down = dash.rides.filter((r) => r.status === 'DOWN' && isFollowing(r.id)).length;
   const badge = $('#down-badge');
@@ -610,7 +622,7 @@ function renderTrip() {
   d.textContent = ready ? 'Working' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
-  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtTime(st.until)}` : 'Paused') : 'Off';
+  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtUntil(st.until)}` : 'Paused') : 'Off';
   $('#park-detail').textContent = parkLabel(dash.park.name);
 }
 
@@ -657,13 +669,15 @@ function renderAll() {
 /* ---------- Sheets ---------- */
 function openPause() {
   const st = alertState();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(7, 0, 0, 0);
+  // 7am on the park's clock: this morning if it's not 7 yet, else tomorrow.
+  // The phone's own midnight would make a 12:30am pause last 30 hours.
+  const tz = dash.park.timezone || undefined;
+  const morning = nextLocalHour(Date.now(), tz, 7);
+  const thisMorning = localDay(morning, tz) === localDay(Date.now(), tz);
   const options = [
     ['For 1 hour', Date.now() + 3600_000],
     ['For 3 hours', Date.now() + 3 * 3600_000],
-    ['Until tomorrow morning', tomorrow.getTime()],
+    [thisMorning ? 'Until 7 this morning' : 'Until tomorrow morning', morning],
   ];
   const note = st.kind === 'closed'
     ? 'The park is closed, so alerts are already off until it opens.'
@@ -687,7 +701,7 @@ function openPause() {
 
 function setMute(mute) {
   save((t) => { t.mute = mute; }, { mute }, (before) => {
-    const text = mute ? `Alerts paused until ${fmtTime(mute.until)}` : 'Alerts are back on';
+    const text = mute ? `Alerts paused until ${fmtUntil(mute.until)}` : 'Alerts are back on';
     toast(text, { label: 'Undo', run: () => save((t) => { t.mute = before.mute; }, { mute: before.mute }) });
   });
 }
