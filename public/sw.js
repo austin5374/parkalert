@@ -1,4 +1,4 @@
-const CACHE = 'parkalert-v5';
+const CACHE = 'parkalert-v6';
 const ASSETS = ['/', '/style.css', '/time.js', '/app.js', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -13,17 +13,24 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// API: network only (live data). Static: network-first with cache fallback so the shell opens offline.
+// API: network only (live data). The app's own files: network first, with
+// the cached copy when offline. Only good responses are kept, and every page
+// load (/, /?join=CODE, a deep link) is the same shell, cached once as "/".
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+  if (e.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  const page = e.request.mode === 'navigate';
+  if (!page && !ASSETS.includes(url.pathname)) return;
+  const key = page ? '/' : url.pathname;
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(key, copy));
+        }
         return res;
       })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match('/')))
+      .catch(() => caches.match(key).then((r) => r || Response.error()))
   );
 });
