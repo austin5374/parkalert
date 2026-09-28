@@ -24,6 +24,17 @@ const platform = /android/i.test(navigator.userAgent)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const icon = (name, cls = '') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
+// Re-rendering a list replaces its nodes, which drops keyboard and
+// screen-reader focus to the top of the page every refresh and on every
+// toggle. Note which control had focus and put it back on its replacement.
+function keepFocus(root, render) {
+  const a = document.activeElement;
+  const attr = a && a !== root && root.contains(a) ? ['data-id', 'data-ride', 'data-act'].find((n) => a.hasAttribute(n)) : null;
+  const selector = attr && `${a.tagName.toLowerCase()}[${attr}="${CSS.escape(a.getAttribute(attr))}"]`;
+  render();
+  if (selector && !root.contains(a)) root.querySelector(selector)?.focus({ preventScroll: true });
+}
+
 function el(html) {
   const t = document.createElement('template');
   t.innerHTML = html.trim();
@@ -232,11 +243,17 @@ const sheet = (() => {
   scrim.addEventListener('click', () => close());
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen) close(); });
 
-  // Swap content in place (live refresh) without losing the reader's scroll position.
+  // A finger on the sheet (scrubbing a chart, say) holds off live refreshes.
+  let touching = false;
+  body.addEventListener('pointerdown', () => { touching = true; });
+  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { touching = false; }, true);
+
+  // Swap content in place (live refresh), keeping the reader's scroll
+  // position and focus. Skipped mid-touch; the next refresh catches up.
   function update(content) {
-    if (!isOpen) return;
+    if (!isOpen || touching) return;
     const top = body.scrollTop;
-    body.replaceChildren(content);
+    keepFocus(body, () => body.replaceChildren(content));
     body.scrollTop = top;
   }
 
@@ -490,6 +507,10 @@ function setupRow() {
 }
 
 function renderDown() {
+  keepFocus($('#view-down'), drawDown);
+}
+
+function drawDown() {
   const list = $('#down-list');
   const down = dash.rides
     .filter((r) => r.status === 'DOWN' && r.downSince)
@@ -558,6 +579,10 @@ function rideMeta(r) {
 }
 
 function renderRides() {
+  keepFocus($('#rides-list'), drawRides);
+}
+
+function drawRides() {
   const q = $('#ride-search').value.trim().toLowerCase();
   const all = [...dash.rides].sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)));
   const shown = q ? all.filter((r) => r.name.toLowerCase().includes(q)) : all;
@@ -908,7 +933,7 @@ function rideSheet(r, detail) {
     <div class="group ${down ? 'spaced-sm' : ''}"><div class="row">
       ${icon('bell', 'row-icon tint-accent')}
       <span class="row-label">Alerts for this ride</span>
-      <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}"></button>
+      <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}" data-act="follow"></button>
     </div></div>`);
   follow.querySelector('.switch').onclick = (e) => {
     toggleFollow(r.id);
@@ -1094,7 +1119,7 @@ function waitChart(box, { waits, now }) {
   const base = H - bottom;
 
   const readout = el('<p class="chart-readout" aria-live="polite"></p>');
-  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img' });
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img', 'data-act': 'wait-chart' });
   svg.append(
     svgEl('line', { x1: 0, x2: W, y1: y(max), y2: y(max), class: 'grid' }),
     svgEl('line', { x1: 0, x2: W, y1: base, y2: base, class: 'axis' })
@@ -1189,7 +1214,7 @@ function dayBars(box, { days }) {
       : svgEl('rect', { class: 'bar empty', x: x0, y: base - 2, width: bw, height: 2, rx: 1 });
     bars.push(mark);
     // The whole slot is the hit target, far bigger than a thin column.
-    const hit = svgEl('rect', { x: slot * i, y: 0, width: slot, height: H, class: 'hit', tabindex: '0', role: 'button',
+    const hit = svgEl('rect', { x: slot * i, y: 0, width: slot, height: H, class: 'hit', tabindex: '0', role: 'button', 'data-act': `day-${d.date}`,
       'aria-label': `${fmtDate(d.date)}: ${d.outages} outages, ${d.minutes} minutes down` });
     hit.addEventListener('click', () => select(i));
     hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(i); } });
