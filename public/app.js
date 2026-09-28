@@ -1141,7 +1141,7 @@ function rideSheet(r, detail) {
             { hold: 'Park-wide hold', opening: 'Delayed opening' }[ep.kind],
             ep.reopened ? '' : "Didn't reopen that day",
           ].filter(Boolean).join(' · ') || `Went down at ${fmtTime(ep.start)}`)}</small></span>
-          <span class="row-detail">${ep.reopened ? '' : 'at least '}${fmtDuration(ep.minutes * 60000)}</span>
+          <span class="row-detail">${ep.reopened ? fmtDuration(ep.minutes * 60000) : ''}</span>
         </div>`).join('')}</div>`));
     }
     wrap.appendChild(el(`<p class="footnote">Outage history comes from the ThemeParks.wiki archive, ${h.archivedDays} days so far and growing nightly.</p>`));

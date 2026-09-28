@@ -35,7 +35,7 @@ test('ride history ignores blips and other rides, and reports typical and longes
   const h = rideHistory(eps, 'a', ['2026-09-21', '2026-09-22', '2026-09-23']);
   assert.equal(h.outages, 3);
   assert.equal(h.typicalMinutes, 15); // median of the two that reopened
-  assert.equal(h.longestMinutes, 90);
+  assert.equal(h.longestMinutes, 20); // the 90 never reopened: not a length
   assert.equal(h.last[0].reopened, false);
   assert.equal(h.archivedDays, 3);
 });

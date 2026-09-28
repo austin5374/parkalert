@@ -52,7 +52,9 @@ export function rideHistory(episodes, rideId, fetchedDates, days = 7) {
     archivedDays: new Set(fetchedDates).size,
     outages: mine.length,
     typicalMinutes: resolved.length ? Math.round(median(resolved)) : null,
-    longestMinutes: mine.length ? Math.round(Math.max(...mine.map((ep) => ep.minutes))) : null,
+    // Only outages seen reopening: one that never did is censored at the end
+    // of the park day, so its "length" can be a night spent closed.
+    longestMinutes: resolved.length ? Math.round(Math.max(...resolved)) : null,
     last: [...mine].sort((a, b) => b.start - a.start).slice(0, 6)
       .map(({ start, minutes, kind, endedAs }) => ({ start, minutes: Math.round(minutes), kind, reopened: endedAs === 'OPERATING' })),
   };
