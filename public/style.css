@@ -462,6 +462,9 @@ html.sheet-up body { background: transparent; }
 .toast.show { opacity: 1; transform: none; pointer-events: auto; }
 .toast button { color: var(--accent); font-weight: 600; flex: none; }
 .no-tabbar .toast { bottom: calc(env(safe-area-inset-bottom) + 1.2rem); }
+/* Over a sheet, a toast drops from the top instead of covering its buttons. */
+.toast.top { bottom: auto; top: calc(env(safe-area-inset-top) + 0.6rem); transform: translateY(-1rem) scale(0.96); }
+.toast.top.show { transform: none; }
 
 /* ---- Detail sheets ---- */
 .group.padded { padding: 0.9rem var(--gutter) 1rem; }

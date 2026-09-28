@@ -151,16 +151,39 @@ function save(apply, body, afterSave) {
 }
 
 /* ---------- Toast ---------- */
+// One at a time, in order. A toast with an action (Undo, Reload) is never
+// cut short by the next one, which waits its turn; plain ones give way to
+// whatever comes next. With a sheet open, toasts show at the top, clear of
+// the sheet's buttons.
 let toastTimer = null;
+let toastNow = null; // { text, action }
+const toastQueue = [];
 function toast(text, action) {
+  const item = { text, action };
+  if (toastNow?.action) {
+    toastQueue.push(item);
+    return;
+  }
+  showToast(item);
+}
+function showToast(item) {
   const t = $('#toast');
+  toastNow = item;
+  const { text, action } = item;
   t.innerHTML = `<span>${esc(text)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ''}`;
   if (action) t.querySelector('button').onclick = () => { hideToast(); action.run(); };
+  t.classList.toggle('top', sheet.isOpen);
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, action?.sticky ? 12000 : action ? 5000 : 2800);
 }
-function hideToast() { $('#toast').classList.remove('show'); }
+function hideToast() {
+  clearTimeout(toastTimer);
+  $('#toast').classList.remove('show');
+  toastNow = null;
+  const next = toastQueue.shift();
+  if (next) setTimeout(() => showToast(next), 250);
+}
 
 /* ---------- Spring (damping ratio + response, as Apple frames it) ---------- */
 function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate, onDone }) {
