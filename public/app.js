@@ -165,10 +165,38 @@ const sheet = (() => {
   // The sheet's height changes after it opens (a ride's history loads in),
   // so it is read again whenever a close or a drag needs it.
   const measure = () => { h = panel.getBoundingClientRect().height || h; return h; };
+  // Detents, as in Maps: a tall ride sheet rests at a medium height (rest > 0,
+  // the offset that leaves 55% of the screen showing) and a drag up or a
+  // flick takes it to full height (rest = 0). Short sheets only have full.
+  let rest = 0;
+  let medium = 0; // the medium detent's offset, or 0 when there isn't one
+  let wantMedium = false; // this sheet has a medium detent once it is tall enough
+  let pendingMedium = false; // opened short; take the medium detent when it grows
+  const MEDIUM_SHARE = 0.55;
+  // Worked out again whenever the content's height changes (a ride's
+  // history loads after the sheet opens): a sheet resting at medium stays
+  // there, now with the same 55% of the screen showing.
+  const setDetents = () => {
+    const wasMedium = medium > 0 && rest === medium;
+    measure();
+    medium = wantMedium && h > innerHeight * (MEDIUM_SHARE + 0.07) ? Math.round(h - innerHeight * MEDIUM_SHARE) : 0;
+    return wasMedium;
+  };
+  const app = $('#app');
+  // While a full-height sheet is up, the page behind recedes a little, as
+  // behind an iOS page sheet; nothing moves under reduced motion.
+  const recede = (v) => {
+    const full = h >= innerHeight - 80 && !reducedMotion();
+    const p = full ? Math.max(0, Math.min(1, 1 - v / (medium || h))) : 0;
+    app.style.transform = p ? `scale(${1 - 0.06 * p})` : '';
+    app.style.borderRadius = p ? `${Math.round(12 * p)}px` : '';
+    document.documentElement.classList.toggle('sheet-up', p > 0);
+  };
   const paint = (v) => {
     y = v;
     panel.style.transform = `translateY(${v}px)`;
     scrim.style.opacity = String(Math.max(0, Math.min(1, 1 - v / h)));
+    recede(v);
   };
 
   function animateTo(target, velocity = 0, damping = 1, done) {
@@ -188,6 +216,7 @@ const sheet = (() => {
   const setInert = (on) => background.forEach((n) => { n.inert = on; });
 
   function finishClose() {
+    recede(h);
     layer.classList.add('hidden');
     setInert(false);
     body.replaceChildren();
@@ -225,7 +254,7 @@ const sheet = (() => {
     depth++;
   };
 
-  function open(content, { onClose } = {}) {
+  function open(content, { onClose, detent = 'large' } = {}) {
     // Opened again while still closing: finish the old sheet's bookkeeping
     // and rise from where it is now, rather than snapping to the bottom.
     const wasClosing = closing;
@@ -247,9 +276,15 @@ const sheet = (() => {
     layer.classList.remove('hidden');
     setInert(true);
     h = panel.getBoundingClientRect().height || 400;
+    wantMedium = detent === 'medium';
+    setDetents();
+    // A medium sheet that opens short (its content still loading) takes the
+    // medium detent as soon as it grows into one.
+    rest = medium;
+    pendingMedium = wantMedium && !medium;
     if (!isOpen && !wasClosing) paint(h);
     isOpen = true;
-    animateTo(0);
+    animateTo(rest);
     panel.focus({ preventScroll: true });
   }
 
@@ -263,6 +298,10 @@ const sheet = (() => {
     body.replaceChildren(content);
     body.scrollTop = 0;
     panel.focus({ preventScroll: true });
+    if (setDetents()) {
+      rest = medium;
+      animateTo(rest);
+    }
   }
 
   let closing = false;
@@ -304,9 +343,14 @@ const sheet = (() => {
     const a = s[0], b = s[s.length - 1];
     const v = s.length > 1 && b.t > a.t ? ((b.y - a.y) / (b.t - a.t)) * 1000 : 0; // px/s
     drag = null;
-    if (y + project(v) > h * 0.45) close(v);
+    const to = y + project(v);
+    // Past 45% of the way from the lowest detent to the bottom closes; else
+    // the nearest detent to where the flick would come to rest.
+    const low = medium || 0;
+    if (to > low + (h - low) * 0.45) return close(v);
+    rest = medium && to > medium / 2 ? medium : 0;
     // Settling back after a flick carries its momentum, so a little give reads right.
-    else animateTo(0, v, Math.abs(v) > 300 ? 0.82 : 1);
+    animateTo(rest, v, Math.abs(v) > 300 ? 0.82 : 1);
   }
 
   // The grabber drags with any pointer (a mouse included).
@@ -343,7 +387,10 @@ const sheet = (() => {
     }
     const atTop = body.scrollTop <= 0;
     if (touch.mode === null && Math.abs(cy - touch.startY) < 6) return;
-    if (atTop && goingDown && e.cancelable) {
+    // Below full height, the content doesn't scroll: the sheet moves, up to
+    // full height or down to close.
+    const belowFull = y > 0.5;
+    if (((atTop && goingDown) || belowFull) && e.cancelable) {
       touch.mode = 'sheet';
       e.preventDefault();
       begin(cy, e.timeStamp);
@@ -389,6 +436,12 @@ const sheet = (() => {
     const top = body.scrollTop;
     keepFocus(body, () => body.replaceChildren(content));
     body.scrollTop = top;
+    const wasMedium = setDetents();
+    if (medium && (wasMedium || pendingMedium)) {
+      pendingMedium = false;
+      rest = medium;
+      animateTo(rest);
+    }
     after?.();
   }
 
@@ -1070,8 +1123,12 @@ let sheetContext = null;
 const sheetStack = [];
 function openSheet(content, context) {
   // The context is set after open(), which may first finish off a sheet
-  // still closing (whose onClose clears the context).
-  sheet.open(content, { onClose: () => { sheetContext = null; sheetStack.length = 0; } });
+  // still closing (whose onClose clears the context). Ride sheets open at
+  // the medium detent, so the list stays in view behind them.
+  sheet.open(content, {
+    detent: context.type === 'ride' ? 'medium' : 'large',
+    onClose: () => { sheetContext = null; sheetStack.length = 0; },
+  });
   sheetStack.length = 0;
   sheetContext = context;
   mountCharts($('#sheet-body'));

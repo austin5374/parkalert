@@ -362,6 +362,10 @@ main {
 }
 
 /* ---- Sheet ---- */
+/* Behind a full-height sheet the page recedes onto black, as on iOS. */
+html.sheet-up { background: #000; }
+html.sheet-up body { background: transparent; }
+#app { transform-origin: 50% 0; }
 .sheet-layer { position: fixed; inset: 0; z-index: 50; }
 .scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; }
 .sheet {
