@@ -445,6 +445,11 @@ html.sheet-up body { background: transparent; }
 }
 .chip[aria-pressed='true'] { background: var(--accent); color: #fff; font-weight: 600; }
 .chip.pressable:active { transform: scale(0.96); }
+/* Wait limits: one segmented row (Off, 10, 15, ...), as a picker in Settings. */
+.segmented.wait-limits { margin: 0.75rem 0 0; }
+.segmented.wait-limits .chip { flex: 1; min-height: 2.25rem; padding: 0; border-radius: 0.5rem; background: none; font-size: 0.9375rem; color: var(--label); }
+.segmented.wait-limits .chip[aria-pressed='true'] { background: var(--surface); color: var(--label); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.sheet .segmented.wait-limits { background: var(--fill); }
 .wait-badge { display: inline-flex; align-items: center; gap: 0.1rem; color: var(--accent); font-weight: 600; margin-left: 0.3rem; }
 .wait-badge svg { width: 0.9rem; height: 0.9rem; stroke-width: 2; }
 .inline-icon { width: 1.1em; height: 1.1em; vertical-align: -0.2em; color: var(--accent); }
@@ -582,3 +587,4 @@ main { position: relative; transition: none; }
 .ax-type .badge { font-size: 11px; min-width: 18px; height: 18px; line-height: 18px; }
 .ax-type .ride-row .meta { align-items: flex-start; }
 .ax-type .ride-row .meta .dot { margin-top: 0.4em; }
+@media (prefers-color-scheme: dark) { .segmented.wait-limits .chip[aria-pressed='true'] { background: #636366; } }

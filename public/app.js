@@ -1577,9 +1577,9 @@ function waitAlertBlock(r) {
       <h2 class="section-label">Wait alert</h2>
       <div class="group padded wait-alert">
         <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
-        ${choices.length ? `<div class="chips" role="group" aria-label="Wait alert limit">
-          ${choices.map((m) => `<button class="chip pressable" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}">${m} min</button>`).join('')}
-          ${armed ? '<button class="chip pressable" type="button" data-act="wait-off">Off</button>' : ''}
+        ${choices.length ? `<div class="segmented wait-limits" role="group" aria-label="Wait alert limit">
+          ${armed ? `<button class="chip" type="button" data-act="wait-off" aria-pressed="false">Off</button>` : ''}
+          ${choices.map((m) => `<button class="chip" type="button" data-act="wait-${m}" aria-pressed="${armed && alert.max === m}" aria-label="${m} minutes">${m}</button>`).join('')}
         </div>` : ''}
       </div>
       <p class="footnote">Goes to everyone on this trip, once, and only today.</p>
