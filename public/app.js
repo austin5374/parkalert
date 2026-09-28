@@ -242,6 +242,13 @@ const RESORTS = [
 ];
 const parkLabel = (name) => name.replace(' (CA)', '');
 
+// The park list is only needed to pick a park, so a phone that already has a
+// trip never waits on it (or fails without it) at launch.
+async function loadParks() {
+  if (!parks.length) ({ parks } = await api('/parks'));
+  return parks;
+}
+
 function parkGroups(currentId, onPick) {
   const wrap = document.createElement('div');
   for (const resort of RESORTS) {
@@ -287,6 +294,19 @@ function setupStatus(text, warn = false) {
   s.classList.toggle('warn', warn);
 }
 
+const OFFLINE_SETUP = "Can't reach ParkAlert right now. This will retry when you're back online.";
+
+async function renderSetupParks() {
+  try {
+    await loadParks();
+  } catch {
+    setupStatus(OFFLINE_SETUP, true);
+    return;
+  }
+  if ($('#setup-status').textContent === OFFLINE_SETUP) setupStatus('');
+  $('#setup-parks').replaceChildren(parkGroups(null, (p) => startTrip(p.id)));
+}
+
 // Location is asked for only when the person taps for it, never on arrival.
 function locate() {
   if (!navigator.geolocation || !window.isSecureContext) {
@@ -295,7 +315,13 @@ function locate() {
   }
   setupStatus('Finding your park…');
   navigator.geolocation.getCurrentPosition(
-    (pos) => {
+    async (pos) => {
+      try {
+        await loadParks();
+      } catch {
+        setupStatus(OFFLINE_SETUP, true);
+        return;
+      }
       const park = nearestPark({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       if (park) {
         setupStatus(`You're at ${parkLabel(park.name)}.`);
@@ -629,7 +655,13 @@ function setMute(mute) {
   });
 }
 
-function openPark() {
+async function openPark() {
+  try {
+    await loadParks();
+  } catch {
+    toast("Can't load the park list. Check your connection.");
+    return;
+  }
   const content = el(`<div>${sheetHead('Park', 'Changes the park for everyone on this trip. Each park keeps its own follow list.')}</div>`);
   content.appendChild(parkGroups(dash.park.id, async (p) => {
     sheet.close();
@@ -1183,8 +1215,10 @@ function showSetup() {
   $('#setup').classList.remove('hidden');
   document.body.classList.add('no-tabbar');
   document.title = 'ParkAlert';
-  $('#setup-parks').replaceChildren(parkGroups(null, (p) => startTrip(p.id)));
+  renderSetupParks();
 }
+
+const onSetup = () => !$('#setup').classList.contains('hidden');
 
 async function showApp({ firstRun = false } = {}) {
   $('#setup').classList.add('hidden');
@@ -1287,8 +1321,10 @@ $('#ride-search').addEventListener('input', () => dash && renderRides());
 const nav = $('#nav');
 addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 2), { passive: true });
 
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-addEventListener('online', refresh);
+// Coming back (to the tab, or online) catches up whichever screen is showing.
+const resume = () => (onSetup() ? (!parks.length && renderSetupParks()) : refresh());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
+addEventListener('online', resume);
 addEventListener('offline', () => { offline = true; if (dash) renderHeader(); });
 
 // Keep elapsed times honest between refreshes.
@@ -1300,14 +1336,6 @@ setInterval(() => {
 
 /* ---------- Boot ---------- */
 (async function boot() {
-  try {
-    ({ parks } = await api('/parks'));
-  } catch {
-    $('#setup').classList.remove('hidden');
-    setupStatus("Can't reach ParkAlert right now. Check your connection and reload.", true);
-    return;
-  }
-
   const joinParam = new URLSearchParams(location.search).get('join');
   if (joinParam) {
     history.replaceState(null, '', '/');
@@ -1321,27 +1349,17 @@ setInterval(() => {
         toast(`Joined trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
       }
       return;
-    } catch {
-      toast(`Invite code ${code} wasn't found`);
+    } catch (err) {
+      toast(err.status === 404
+        ? `Invite code ${code} wasn't found`
+        : `Couldn't open the invite. Check your connection, or join with code ${code}.`);
     }
   }
 
-  if (tripCode) {
-    try {
-      await api(`/trips/${tripCode}`);
-    } catch (err) {
-      if (err.status === 404) {
-        localStorage.removeItem('parkalert.trip');
-        tripCode = null;
-        showSetup();
-        return;
-      }
-      // Offline at launch: keep the trip and show what we can.
-    }
-    showApp();
-    return;
-  }
-  showSetup();
+  // A saved trip opens straight away, online or not. A trip that no longer
+  // exists is caught by the first refresh, which says so and leaves it.
+  if (tripCode) showApp();
+  else showSetup();
 })();
 
 if ('serviceWorker' in navigator) {
