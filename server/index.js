@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
-import { rideHistory, rideToday, parkSummary } from './insights.js';
+import { rideHistory, rideToday, parkSummary, waitTrend } from './insights.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
@@ -14,8 +14,9 @@ import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, dow
 import { PORT, NTFY_BASE, HEALTH_TOKEN } from './config.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
-import { publish } from './notify.js';
-import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert } from './validate.js';
+import { deliver, MAX_DEVICES, deviceMuted } from './deliver.js';
+import { vapidKeys, isPushEndpoint } from './webpush.js';
+import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert, parseSubscription, parseDeviceMute } from './validate.js';
 import { LIMITS, createLimiter, clientKey, createKnownCodes } from './ratelimit.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -116,7 +117,7 @@ const parkToday = (parkId, now = Date.now()) => localDate(now, zoneOf(parkId));
 
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
-  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)) };
+  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0 };
 }
 
 
@@ -145,6 +146,7 @@ async function dashboard(trip) {
     rides: Object.entries(state.rides || {}).map(([id, r]) => ({
       id,
       ...r,
+      trend: r.status === 'OPERATING' ? waitTrend(state.waits?.[id]) : null,
       ...(r.status === 'DOWN' && r.downSince
         ? { outlook: downOutlook(trip.parkId, id, (Date.now() - r.downSince) / 60_000) }
         : {}),
@@ -187,6 +189,11 @@ async function handleApi(req, res, url) {
       : { ok, uptimeSeconds: Math.round(process.uptime()) });
   }
 
+  // The key browsers need to subscribe to this server's pushes.
+  if (req.method === 'GET' && url.pathname === '/api/push-key') {
+    return json(res, 200, { publicKey: vapidKeys().publicKey });
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/trips') {
     if ((wait = limit.create.take(who))) return tooMany(res, wait);
     const body = requireObject(await readBody(req));
@@ -212,7 +219,7 @@ async function handleApi(req, res, url) {
 
   // Test and simulated alerts are metered per client and per trip, so
   // neither one caller nor many can flood a trip's phones.
-  if (trip && req.method === 'POST' && (parts[3] === 'test' || parts[3] === 'simulate')) {
+  if (trip && req.method === 'POST' && (parts[3] === 'test' || parts[3] === 'simulate' || (parts[3] === 'devices' && parts[5] === 'test'))) {
     if ((wait = limit.push.take(who) || limit.push.take(`trip:${trip.code}`))) return tooMany(res, wait);
   }
 
@@ -320,14 +327,57 @@ async function handleApi(req, res, url) {
     return json(res, result.error ? 409 : 200, result);
   }
 
+  // This phone's own notifications: register it (again, idempotently, by
+  // endpoint), pause it alone, send it a test, or take it off the trip.
+  if (trip && parts[3] === 'devices') {
+    trip.devices ??= [];
+    if (req.method === 'POST' && parts.length === 4) {
+      const sub = parseSubscription(await readBody(req), isPushEndpoint);
+      let device = trip.devices.find((d) => d.endpoint === sub.endpoint);
+      if (device) device.keys = sub.keys;
+      else {
+        device = { id: crypto.randomBytes(9).toString('base64url'), ...sub, mute: null, createdAt: Date.now() };
+        trip.devices.push(device);
+        // A phone that reinstalled the app many times leaves old ones behind.
+        if (trip.devices.length > MAX_DEVICES) trip.devices.splice(0, trip.devices.length - MAX_DEVICES);
+      }
+      saveTrips();
+      return json(res, 201, { device: { id: device.id, mute: device.mute } });
+    }
+    const device = trip.devices.find((d) => d.id === parts[4]);
+    if (!device) return json(res, 404, { error: 'device not found' });
+    if (req.method === 'GET' && parts.length === 5) {
+      return json(res, 200, { device: { id: device.id, mute: deviceMuted(device) ? device.mute : null } });
+    }
+    if (req.method === 'PATCH' && parts.length === 5) {
+      device.mute = parseDeviceMute(await readBody(req));
+      saveTrips();
+      return json(res, 200, { device: { id: device.id, mute: device.mute } });
+    }
+    if (req.method === 'DELETE' && parts.length === 5) {
+      trip.devices = trip.devices.filter((d) => d !== device);
+      saveTrips();
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && parts[5] === 'test') {
+      const ok = await deliver(trip, {
+        title: 'ParkAlert is on',
+        message: 'This phone will get an alert when a ride you follow goes down or comes back up.',
+        click: appLink(trip),
+      }, { device: device.id, tag: 'test' });
+      return json(res, ok ? 200 : 502, { ok });
+    }
+    return json(res, 404, { error: 'not found' });
+  }
+
   if (trip && req.method === 'POST' && parts[3] === 'test') {
     // It goes to every phone on the trip, not just the one that asked, so it
     // says what it is rather than "this phone".
-    const ok = await publish(trip.topic, {
+    const ok = await deliver(trip, {
       title: `ParkAlert test for trip ${trip.code}`,
       message: 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
       click: appLink(trip),
-    });
+    }, { tag: 'test' });
     return json(res, ok ? 200 : 502, { ok });
   }
 

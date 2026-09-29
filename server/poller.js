@@ -1,5 +1,6 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
-import { publish, formatDuration } from './notify.js';
+import { formatDuration } from './notify.js';
+import { deliver } from './deliver.js';
 import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
@@ -396,11 +397,12 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
             : type === 'CLOSED' ? closedMessage(ev, parkName, state.timezone)
               : upMessage(ev, parkName)),
           click: appLink(trip, { ride: ev.ride.id }),
+          tag: `ride:${ev.ride.id}`,
         }));
       }
       for (const push of pushes) {
         if (simulated) push.message += ' · SIMULATED TEST';
-        if (await publish(trip.topic, push)) sent++;
+        if (await deliver(trip, push, { tag: push.tag || `${type.toLowerCase()}:group` })) sent++;
       }
     }
   }));
@@ -422,7 +424,7 @@ export async function notifyWaitAlerts(parkId, rides, now = Date.now()) {
     const paused = trip.mute && (trip.mute.until === null || trip.mute.until > now);
     if (paused || isPastClosing(state, now)) return;
     for (const { rideId, ride, alert } of dueWaitAlerts(trip, rides, today)) {
-      if (!(await publish(trip.topic, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }))) continue;
+      if (!(await deliver(trip, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }, { tag: `wait:${rideId}`, now }))) continue;
       alert.sentAt = now;
       alert.sentWait = ride.waitTime;
       changed = true;

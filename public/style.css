@@ -644,3 +644,22 @@ main { position: relative; transition: none; }
 }
 .sort-btn svg { width: 1.05rem; height: 1.05rem; stroke-width: 2; }
 .sort-btn:active { opacity: 0.6; transition: none; }
+
+/* "Or use the ntfy app instead": the fallback, folded away under the main path. */
+.more { margin: 1.4rem var(--gutter) 0; }
+.more summary {
+  list-style: none; cursor: pointer; color: var(--accent); font-size: 0.9375rem; font-weight: 600;
+  padding: 0.6rem 0; display: flex; align-items: center; gap: 0.35rem;
+}
+.more summary::-webkit-details-marker { display: none; }
+.more summary::after { content: ''; width: 0.45rem; height: 0.45rem; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg); margin-top: -0.2rem; transition: transform 200ms ease; }
+.more[open] summary::after { transform: rotate(225deg); margin-top: 0.25rem; }
+.more .steps { padding: 0.6rem 0 0; }
+.footnote.center { text-align: center; }
+
+/* Wait trend beside a ride's wait: rising in the warning color, falling in green. */
+.trend { display: inline-flex; margin-left: 0.2rem; }
+.trend svg { width: 0.95rem; height: 0.95rem; stroke-width: 2.2; }
+.trend.up { color: var(--orange); }
+.trend.down { color: var(--green); }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

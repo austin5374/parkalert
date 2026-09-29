@@ -49,3 +49,36 @@ self.addEventListener('fetch', (e) => {
       .then((hit) => hit || fetch(e.request))
   );
 });
+
+// The app's own notifications. The server sends { title, body, url, tag };
+// a newer notification with the same tag (the same ride) replaces the older.
+self.addEventListener('push', (e) => {
+  let d;
+  try { d = e.data.json(); } catch { d = { title: 'ParkAlert', body: e.data?.text() || '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'ParkAlert', {
+    body: d.body || '',
+    tag: d.tag || undefined,
+    renotify: !!d.tag,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    data: { url: d.url || '/' },
+  }));
+});
+
+// A tapped notification opens what it is about, in the app window if one is
+// open (it is told where to go) or in a new one.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || '/', self.location.origin);
+  const target = url.origin === self.location.origin ? url.href : self.location.origin + '/';
+  e.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = windows.find((w) => new URL(w.url).origin === self.location.origin);
+    if (open) {
+      await open.focus();
+      open.postMessage({ type: 'open', url: target });
+      return;
+    }
+    await self.clients.openWindow(target);
+  })());
+});
