@@ -123,6 +123,7 @@ No environment variables are required.
 | `WEATHER_BASE` | `https://aviationweather.gov/api/data` | Live airport weather reports (NOAA's Aviation Weather Center). |
 | `WEATHER_ARCHIVE` | `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py` | Past airport weather reports (Iowa State's ASOS archive). |
 | `HEALTH_TOKEN` | none | Unlocks the per-park detail in `/api/health`. |
+| `TRUST_PROXY` | on for Railway, else off | Whether a proxy in front adds the client's address to `X-Forwarded-For`. Off, the header is ignored and each client is its socket's address, since anyone could otherwise name their own rate-limit bucket. Set `1` behind any other proxy. |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | made on first start | The Web Push key pair (base64url). Normally created once and kept in `vapid.json` on the volume; changing it would cut off every phone's notifications until it re-subscribes. |
 | `PORT` | `3000` | Set by Railway. |
 
@@ -244,7 +245,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 ## Security
 
 - **ntfy topics are the security model**: anyone with the topic name can read/write it. The random suffix makes it unguessable; treat trip links like a shared secret.
-- **Rate limits** per client (the last `X-Forwarded-For` entry on Railway): new trips 20 then 20 an hour; test and simulated pushes 10 then 30 an hour, per client and per trip; unknown trip codes 30 then 60 an hour, after which even a right guess waits. Every push leaves from this one server, whose IP ntfy.sh rate-limits, so this keeps one abuser from throttling everyone's alerts. Limits live in memory and reset on restart.
+- **Rate limits** per client (the last `X-Forwarded-For` entry behind a trusted proxy such as Railway's, else the socket's address; see `TRUST_PROXY`): new trips 20 then 20 an hour; test and simulated pushes 10 then 30 an hour, per client and per trip; unknown trip codes 30 then 60 an hour, after which even a right guess waits. Every push leaves from this one server, whose IP ntfy.sh rate-limits, so this keeps one abuser from throttling everyone's alerts. Limits live in memory and reset on restart.
 - Every response carries a Content-Security-Policy (same-origin only, and no inline scripts except `index.html`'s small boot script, allowed by its hash), `nosniff`, `no-referrer` and frame denial, plus HSTS over HTTPS.
 - On a slow connection: API JSON over 1 KB is gzipped (the dashboard is about 30 KB raw, 4 KB compressed), the page shows its loading skeleton (or the first-run screen) before `app.js` arrives, and a tapped alert on a phone with no trip of its own opens the linked trip without an extra round trip.
 

@@ -351,6 +351,9 @@ async function handleApi(req, res, url) {
     const alerts = { ...trip.waitAlerts };
     if (req.method === 'PUT') {
       const { max } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      // Only a ride the park has: an alert for anything else could never fire.
+      const known = parkState[trip.parkId]?.rides;
+      if (!known || !Object.hasOwn(known, rideId)) return json(res, 404, { error: 'ride not found' });
       alerts[rideId] = { max, day: today, setAt: Date.now() };
       if (Object.keys(alerts).length > MAX_WAIT_ALERTS) return json(res, 400, { error: 'too many wait alerts' });
     } else delete alerts[rideId];
@@ -459,7 +462,14 @@ function loadStatic(rel) {
 }
 
 function serveStatic(req, res, url) {
-  let filePath = path.normalize(path.join(PUBLIC_DIR, decodeURIComponent(url.pathname)));
+  let decoded;
+  try {
+    decoded = decodeURIComponent(url.pathname);
+  } catch {
+    // A broken escape ("%E0%A4%A") is the client's mistake, not a crash.
+    return json(res, 400, { error: 'bad escape in the address' });
+  }
+  let filePath = path.normalize(path.join(PUBLIC_DIR, decoded));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     return res.end();

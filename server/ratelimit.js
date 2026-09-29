@@ -3,6 +3,7 @@
 // server, whose IP ntfy.sh rate-limits. One client hammering the test button
 // or minting trips could get every trip's alerts throttled, so the calls that
 // cost something are metered.
+import { TRUST_PROXY } from './config.js';
 
 export const LIMITS = {
   api: { burst: 600, perHour: 36_000 }, // any API call: a flood guard, far above a phone's refresh
@@ -44,11 +45,12 @@ export function createLimiter({ burst, perHour }) {
 
 // Who is asking. Railway's edge proxy connects on the client's behalf and
 // appends the client's address to X-Forwarded-For, so the last entry is the
-// one a client cannot forge; without a proxy, it is the socket's peer. An
-// IPv6 client is keyed by its /64: one subscriber gets a whole /64 and could
+// one a client cannot forge; without a trusted proxy (see TRUST_PROXY), the
+// header is the client's own word and it is the socket's peer. An IPv6
+// client is keyed by its /64: one subscriber gets a whole /64 and could
 // otherwise step through addresses to dodge every limit.
-export function clientKey(req) {
-  const xff = req.headers['x-forwarded-for'];
+export function clientKey(req, { trustProxy = TRUST_PROXY } = {}) {
+  const xff = trustProxy ? req.headers['x-forwarded-for'] : null;
   const last = xff ? String(xff).split(',').pop().trim() : '';
   return networkKey(last || req.socket.remoteAddress || 'unknown');
 }

@@ -37,3 +37,11 @@ export const HISTORY_DAYS = Number(env.HISTORY_DAYS) || (THEMEPARKS_API_KEY ? 30
 // /api/health says only ok or not to everyone; with ?token= matching this,
 // it also lists each watched park and its last error.
 export const HEALTH_TOKEN = env.HEALTH_TOKEN || null;
+
+// Whether X-Forwarded-For comes from a proxy we trust (Railway's edge adds
+// the client's address). Without one, any client could name its own address
+// and pick its own rate-limit bucket, so it is ignored unless running on
+// Railway or TRUST_PROXY=1 says there is a proxy in front.
+export const TRUST_PROXY = env.TRUST_PROXY != null
+  ? env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true'
+  : !!(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PUBLIC_DOMAIN);

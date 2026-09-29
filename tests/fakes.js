@@ -83,6 +83,8 @@ export async function startFakes() {
   process.env.WEATHER_BASE = `${base}/weather`;
   process.env.WEATHER_ARCHIVE = `${base}/archive`;
   process.env.HEALTH_TOKEN = 'health-secret';
+  // The tests stand in for Railway's proxy, naming each client's address.
+  process.env.TRUST_PROXY = '1';
   process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'parkalert-test-'));
   return { upstream, pushes, close: () => server.close() };
 }

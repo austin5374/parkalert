@@ -367,3 +367,18 @@ test("the page's one inline script is allowed by its hash, and no other", async 
   assert.match(csp, new RegExp(`script-src 'self' 'sha256-${hash.replace(/[+/]/g, '\\$&')}'`));
   assert.doesNotMatch(csp, /unsafe-inline'[^;]*;[^;]*script|script-src[^;]*unsafe-inline/);
 });
+
+test('bad input at the edges is a 400 or 404, never a 500 or a silent accept', async () => {
+  // A broken escape in the address.
+  assert.equal((await fetch(`${base}/%E0%A4%A`)).status, 400);
+  const trip = await newTrip();
+  await call('GET', `/api/trips/${trip.code}/dashboard`);
+  // A wait alert for a ride the park doesn't have could never fire.
+  assert.equal((await call('PUT', `/api/trips/${trip.code}/wait-alerts/no-such-ride`, { max: 30 })).status, 404);
+  assert.equal((await call('PUT', `/api/trips/${trip.code}/wait-alerts/${MK}-1`, { max: 30 })).status, 200);
+  // A pause ends at a real time within the year.
+  for (const until of [-5, 0, Date.now() + 400 * 24 * 3600_000]) {
+    assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { mute: { until } })).status, 400, `until ${until}`);
+  }
+  assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { mute: { until: Date.now() + 3600_000 } })).status, 200);
+});
