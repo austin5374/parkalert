@@ -573,11 +573,16 @@ export function pollPark(parkId) {
 // than serve the old snapshot as live. Bounded, so a slow API costs a few
 // seconds, not a hung request; the reader can tell from lastPoll.
 export const FRESH_MS = 2 * POLL_INTERVAL_MS;
+// A fresh snapshot is answered at once, even with a poll under way: on a
+// slow feed one nearly always is, and every refresh waited 5 s for it. A
+// lagging one waits a moment for the poll; with nothing current at all (a
+// park just switched to, or after a gap) it waits longer for real data.
 export async function freshPark(parkId, waitMs = 5000) {
   const s = parkState[parkId];
-  if (!s?.lastPoll || Date.now() - s.lastPoll > FRESH_MS || inFlight.has(parkId)) {
-    await Promise.race([pollPark(parkId), new Promise((r) => setTimeout(r, waitMs).unref())]);
-  }
+  const age = s?.lastPoll ? Date.now() - s.lastPoll : Infinity;
+  if (age <= FRESH_MS) return s;
+  const wait = age > MAX_GAP_MS ? waitMs : Math.min(waitMs, 1500);
+  await Promise.race([pollPark(parkId), new Promise((r) => setTimeout(r, wait).unref())]);
   return parkState[parkId] || {};
 }
 
@@ -594,6 +599,7 @@ async function doPollPark(parkId) {
   // a California park never runs on New York time while that loads.
   parkState[parkId] ??= { rides: {}, timezone: getPark(parkId)?.timezone || 'America/New_York', schedule: null };
   const state = parkState[parkId];
+  let fetched = false;
   try {
     // Weather is fetched alongside, and never holds up the ride poll; every
     // minute while a hold is on, since its end is what everyone waits for.
@@ -603,6 +609,7 @@ async function doPollPark(parkId) {
     // An empty list for a park we know is an API hiccup, not every ride
     // vanishing; count it as a failed poll and keep what we have.
     if (!live.length && Object.keys(state.rides || {}).length) throw new Error('live data came back empty');
+    fetched = true;
     const now = Date.now();
     const baseline = isBaseline(state.lastPoll, now);
     if (baseline && state.lastPoll) {
@@ -621,6 +628,8 @@ async function doPollPark(parkId) {
     state.waits = recordWaits(state.waits, rides, now, baseline && state.lastPoll ? state.lastPoll + POLL_INTERVAL_MS : null);
     state.lastPoll = now;
     state.lastError = null;
+    const feedWasDown = state.feedDown;
+    state.feedDown = null;
     trackEstimates(parkId, state, events, now);
     saveState();
     if (events.length) {
@@ -638,11 +647,47 @@ async function doPollPark(parkId) {
       notifyWaitAlerts(parkId, rides, now),
       notifyCrowds(parkId, now),
       notifyStormPassed(parkId, now),
+      feedWasDown?.toldAt ? notifyFeed(parkId, 'back', now) : null,
     ]);
   } catch (err) {
     state.lastError = err.message;
     console.error(`[poller] poll failed for ${parkId}:`, err.message);
+    // The park's ride feed failing (not a push going wrong): after ten
+    // minutes of it, phones hear once that alerts can't work.
+    if (!fetched) {
+      const now = Date.now();
+      state.feedDown ??= { since: now, toldAt: null };
+      if (!state.feedDown.toldAt && now - state.feedDown.since >= FEED_DOWN_TELL_MS) {
+        state.feedDown.toldAt = now;
+        saveState();
+        await notifyFeed(parkId, 'down', now).catch((e) => console.error('[poller] feed notice:', e.message));
+      }
+    }
   }
+}
+
+// While the park's ride feed is down nobody can see a ride go down, and
+// phones would otherwise sit there trusting the silence. One push when it
+// has been down ten minutes; a quiet one replacing it when it is back.
+export const FEED_DOWN_TELL_MS = 10 * 60_000;
+export async function notifyFeed(parkId, kind, now = Date.now()) {
+  const state = parkState[parkId] || {};
+  if (isParkClosed(state, now)) return 0;
+  const parkName = getPark(parkId)?.name || 'the park';
+  const push = kind === 'down'
+    ? {
+      title: `Ride alerts paused at ${parkName}`,
+      message: `The park's ride feed hasn't answered since ${localTime(state.lastPoll ?? now, state.timezone)}, so ParkAlert can't see rides go down. Alerts resume when it's back.`,
+      priority: 3,
+    }
+    : { title: 'Ride alerts are back on', message: `${parkName}'s ride feed is answering again.`, priority: 3, quiet: true };
+  const targets = Object.values(trips).filter((t) => t.parkId === parkId && isTripActive(t, now)
+    && !(t.mute && (t.mute.until === null || t.mute.until > now)) && hasReceiver(t, now));
+  let sent = 0;
+  await Promise.all(targets.map(async (trip) => {
+    if ((await deliver(trip, { ...push, click: appLink(trip) }, { tag: 'feed', now })).ok) sent++;
+  }));
+  return sent;
 }
 
 // Gates saved before gate.js keyed rides as "parkId:rideId" and kept a

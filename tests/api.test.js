@@ -201,6 +201,10 @@ test('the page and the dashboard carry the same app version, so an old page can 
 
 test('an unchanged dashboard is a 304 with no body', async () => {
   const trip = await newTrip();
+  // Creating a trip warms its park with a poll; a fresh snapshot is answered
+  // without waiting for it, so let it land before comparing.
+  const { pollPark } = await import('../server/poller.js');
+  await pollPark(MK);
   const first = await fetch(`${base}/api/trips/${trip.code}/dashboard`);
   const etag = first.headers.get('etag');
   assert.ok(etag);

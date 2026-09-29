@@ -251,7 +251,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 
 - **No alerts on one phone**: Trip tab → Alerts on this phone. Send a test; if it doesn't arrive, check that notifications are allowed for ntfy and that the topic you subscribed to matches exactly.
 - **`sent: 0` from simulate or no alerts at all**: the trip is paused, the park is past its last close, or the ride's alerts are off (its switch on the Rides tab). Check `/api/health?token=…` to see whether the park is being polled at all.
-- **Header says "Ride times may be out of date"**: the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. Alerts resume on their own when it answers again.
+- **Header says "Ride feed not answering"** (or "Ride times may be out of date"): the server hasn't had a good answer from ThemeParks.wiki for 3+ minutes; `/api/health?token=…` shows the last error. One failed poll says nothing. After 10 minutes of failures, phones get `Ride alerts paused at Magic Kingdom` once, and a quiet `Ride alerts are back on` replaces it when the feed answers. Alerts resume on their own. A slow feed never slows the app: a snapshot under two polls old is answered at once, and pull to refresh says how old the ride times are rather than "Updated just now".
 - **Estimates say "From typical theme park outages"**: fewer than 5 comparable past outages anywhere yet, so the built-in prior is in use. Set `THEMEPARKS_API_KEY` to backfill 30 days instead of 7.
 - **A storm outage gets an ordinary estimate**: the weather reports are more than 75 minutes old (the feed is down; the server log says so), or the archive hasn't yet shown that ride closing for storms on two days.
 

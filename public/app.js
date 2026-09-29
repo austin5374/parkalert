@@ -1045,12 +1045,16 @@ function renderHeader() {
   document.title = `${parkLabel(dash.park.name)} · ParkAlert`;
 
   const meta = $('#park-meta');
-  const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS || !!dash.lastError;
+  // Old by the data's age alone: one failed poll is not an outage (the
+  // server polls every minute, and says nothing is wrong for 3).
+  const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
   const flash = metaFlash && Date.now() < metaFlash.until ? metaFlash : null;
   meta.textContent = flash ? flash.text : offline
     ? `${FAILURE_META[failure]} · as of ${fmtUntil(dash.lastPoll)}`
     : stale
-      ? `Ride times may be out of date · ${dash.lastPoll ? `${fmtDuration(Date.now() - dash.lastPoll)} old` : 'waiting for the ride feed'}`
+      ? !dash.lastPoll ? 'Waiting for the ride feed'
+        : dash.lastError ? `Ride feed not answering · as of ${fmtUntil(dash.lastPoll)}`
+          : `Ride times may be out of date · ${fmtDuration(Date.now() - dash.lastPoll)} old`
       : hoursText();
   meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
 
@@ -2729,9 +2733,13 @@ function flashMeta(text, warn = false) {
   setTimeout(() => { if (dash) renderHeader(); }, 3100);
 }
 
+// "Updated" is about the ride data, not the request: a slow park feed can
+// answer a refresh with times from minutes ago.
 pullToRefresh($('main'), $('#ptr'), async () => {
   await refresh();
+  const age = dash?.lastPoll ? Date.now() - dash.lastPoll : null;
   if (offline) flashMeta(failure === 'offline' ? "Couldn't refresh: you're offline" : "Couldn't refresh: ParkAlert isn't responding", true);
+  else if (age != null && age > 90_000) flashMeta(`Ride times ${fmtDuration(age)} old · the park's feed is slow`, true);
   else flashMeta('Updated just now');
 });
 pullToRefresh($('#setup .setup'), $('#setup-ptr'), async () => {
