@@ -113,7 +113,7 @@
         <div class="nav-titles">
           <button class="cover-btn" id="btn-park" type="button" aria-haspopup="dialog" aria-labelledby="park-name park-meta"></button>
           <h1 id="park-name" class="large-title">ParkAlert</h1>
-          <p class="nav-meta"><span id="park-meta" aria-live="polite">Loading…</span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
+          <p class="nav-meta"><span id="park-meta">Loading…</span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
         </div>
         <button id="btn-alerts" class="pill pressable hidden" type="button" aria-haspopup="dialog">
           <svg><use href="#i-bell"/></svg><span>Alerts on</span>
@@ -240,6 +240,8 @@
   <!-- Bottom sheet: one at a time, dragged down or tapped outside to dismiss. -->
   <!-- Detail screens (a ride, the park, a hold) push in from the right. -->
   <div id="pages" class="pages hidden"><div class="page-shade"></div></div>
+  <!-- What a screen reader should hear when the header's status changes. -->
+  <p id="announce" class="vh" aria-live="polite"></p>
 
   <div id="sheet-layer" class="sheet-layer hidden">
     <div class="scrim" id="scrim"></div>

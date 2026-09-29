@@ -1069,6 +1069,8 @@ addEventListener('resize', () => { lastFit = null; if (dash) renderHeader(); });
 
 let lastFit = null;
 let lastBadge = null;
+let lastMetaGist = null;
+const announce = (text) => { $('#announce').textContent = text; };
 function renderHeader() {
   $('#park-name').textContent = parkLabel(dash.park.name);
   $('#nav-bar-title').textContent = parkLabel(dash.park.name);
@@ -1087,6 +1089,11 @@ function renderHeader() {
           : `Ride times may be out of date · ${fmtDuration(Date.now() - dash.lastPoll)} old`
       : hoursText();
   meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
+  // Screen readers hear it when it says something new, not each minute
+  // that "2 min old" becomes "3 min old".
+  const gist = meta.textContent.replace(/\d+/g, '#');
+  if (lastMetaGist !== null && gist !== lastMetaGist) announce(meta.textContent);
+  lastMetaGist = gist;
 
   const st = alertState();
   const [glyph, label] = {
@@ -1229,7 +1236,7 @@ function crowdRowHtml() {
 // A few dozen outages can't make anything certain, so the ends read ">95%"
 // and "<5%", never 100% or 0%. A key for a share that small is drawn hollow,
 // as its fill on the bar is.
-function chanceHtml(o) {
+function chanceHtml(o, id = '') {
   const c = o?.chance;
   if (!c) return '';
   const pct = (p) => Math.round(p * 100);
@@ -1240,13 +1247,14 @@ function chanceHtml(o) {
       <span class="c30" style="width:${pct(c[30])}%"></span>
       <span class="c15" style="width:${pct(c[15])}%"></span>
     </div>
-    <p class="chance-key"><span class="chance-label">Chance it's back within</span>${key(15, '15 min')}${key(30, '30 min')}${key(60, '1 hr')}</p>`;
+    <p class="chance-key"${id ? ` id="${id}"` : ''}><span class="chance-label">Chance it's back within</span>${key(15, '15 min')}${key(30, '30 min')}${key(60, '1 hr')}</p>`;
 }
 
-function adviceHtml(o, cls = 'card-advice') {
+function adviceHtml(o, cls = 'card-advice', id = '') {
   const a = o?.advice;
-  if (!a) return o?.text ? `<p class="card-outlook">${esc(o.text)}</p>` : '';
-  return `<p class="${cls} advice-${a.key}"><strong>${esc(a.verdict)}.</strong> ${esc(a.detail)}</p>`;
+  const idAttr = id ? ` id="${id}"` : '';
+  if (!a) return o?.text ? `<p class="card-outlook"${idAttr}>${esc(o.text)}</p>` : '';
+  return `<p class="${cls} advice-${a.key}"${idAttr}><strong>${esc(a.verdict)}.</strong> ${esc(a.detail)}</p>`;
 }
 
 
@@ -1282,20 +1290,25 @@ function downCard(r) {
     basisLine(o),
     following ? '' : 'Alerts off',
   ].filter(Boolean).join(' · ');
+  // A link to the ride's page that reads as the whole card: its name, then
+  // when it went down, the advice, the chances and the clock.
+  const id = `card-${r.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  const clock = backClock(r, o);
+  const described = [`${id}-s`, (o.advice || o.text) && `${id}-a`, o.chance && `${id}-p`, clock && `${id}-c`].filter(Boolean).join(' ');
   return `
-    <article class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="button" tabindex="0"
-             aria-label="${esc(r.name)}, ${esc(since)}${downFor(r) ? `, ${esc(downFor(r))}` : ''}. Show details">
+    <div class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="link" tabindex="0"
+         aria-labelledby="${id}-n" aria-describedby="${described}">
       <div class="card-top">
-        <h3 class="card-title">${esc(r.name)}</h3>
-        <span class="elapsed">${downFor(r)}</span>
+        <h2 class="card-title" id="${id}-n">${esc(r.name)}</h2>
+        <span class="elapsed" aria-hidden="true">${downFor(r)}</span>
         ${icon('chevron', 'chevron')}
       </div>
-      <p class="card-sub">${since}</p>
-      ${adviceHtml(o)}
-      ${o.chance ? chanceHtml(o) : timeline(r)}
-      ${backClock(r, o) ? `<p class="card-clock">${esc(backClock(r, o))}</p>` : ''}
+      <p class="card-sub" id="${id}-s">${esc(since)}${downFor(r) ? `<span class="vh">, ${esc(downFor(r))}</span>` : ''}</p>
+      ${adviceHtml(o, 'card-advice', `${id}-a`)}
+      ${o.chance ? chanceHtml(o, `${id}-p`) : timeline(r)}
+      ${clock ? `<p class="card-clock" id="${id}-c">${esc(clock)}</p>` : ''}
       ${foot ? `<p class="card-foot">${esc(foot)}</p>` : ''}
-    </article>`;
+    </div>`;
 }
 
 const setupRowHtml = () => `
@@ -2561,8 +2574,9 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-ride]');
   if (t) openRide(t.dataset.ride);
 });
+// A card is a link: Enter opens it.
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('article[data-ride]')) {
+  if (e.key === 'Enter' && e.target.matches('.card[data-ride]')) {
     e.preventDefault();
     openRide(e.target.dataset.ride);
   }

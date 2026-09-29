@@ -689,7 +689,8 @@ main { position: relative; transition: none; }
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .card-clock { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
-.segmented .count { color: var(--label-2); font-weight: 500; font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
+/* Full label colour on the grey track: the secondary one fell short of 4.5:1. */
+.segmented .count { color: var(--label); font-weight: 400; font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
 .page .ptr { top: calc(env(safe-area-inset-top) + 2.9rem); z-index: 2; }
 
 /* ---- Crowd level: one quiet row, a ten-step meter ---- */
