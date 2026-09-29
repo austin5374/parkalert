@@ -752,7 +752,7 @@ main { position: relative; transition: none; }
 /* iPad and wider: Down now's cards in two columns across a wider page,
    instead of one phone-width column with empty sides. Rides and Trip stay
    a comfortable reading width. */
-@media (min-width: 56rem) {
+@media (min-width: 48rem) {
   main, .nav-inner { max-width: 56rem; }
   #view-down .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
   #view-down .cards[data-key=hold] { grid-template-columns: minmax(0, 1fr); }
