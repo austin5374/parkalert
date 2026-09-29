@@ -1910,6 +1910,8 @@ function ntfyStepsContent() {
   });
   q('yes').addEventListener('click', () => {
     localStorage.setItem(alertsReadyKey(), '1');
+    // The server counts the ntfy topic as reaching someone once a phone says so.
+    patchTrip({ ntfyWorking: true }).catch(() => {});
     sheet.close();
     renderAll();
     toast('Alerts are working on this phone');

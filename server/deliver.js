@@ -42,5 +42,21 @@ export async function deliver(trip, push, { tag = null, device = null, now = Dat
   }
   const results = await Promise.all(jobs);
   if (gone) saveTrips();
-  return results.some(Boolean);
+  // Who it reached: phones on the app's own notifications, and the trip's
+  // ntfy topic (which accepts a message whether or not anyone subscribes).
+  const ntfy = device ? false : results[0];
+  const devices = (device ? results : results.slice(1)).filter(Boolean).length;
+  return { ok: ntfy || devices > 0, ntfy, devices };
 }
+
+// Does the ntfy topic count as reaching someone? For a trip with no phones on
+// the app's own notifications, ntfy is how it gets alerts. Once it has some,
+// only if a phone on ntfy has said a test arrived.
+export const ntfyCounts = (trip) => !trip.devices?.length || !!trip.ntfyConfirmedAt;
+
+// Whether a push that went out reached someone who will see it.
+export const reachedSomeone = (trip, result) => result.devices > 0 || (result.ntfy && ntfyCounts(trip));
+
+// Whether anyone could receive a push now: an unpaused phone, or ntfy.
+export const hasReceiver = (trip, now = Date.now()) =>
+  ntfyCounts(trip) || (trip.devices || []).some((d) => !deviceMuted(d, now));

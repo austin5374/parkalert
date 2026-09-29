@@ -61,6 +61,10 @@ export function parseTripPatch(body, isPark) {
     if (typeof body.crowdAlerts !== 'boolean') bad('crowdAlerts must be true or false');
     out.crowdAlerts = body.crowdAlerts;
   }
+  if (body.ntfyWorking !== undefined) {
+    if (typeof body.ntfyWorking !== 'boolean') bad('ntfyWorking must be true or false');
+    out.ntfyWorking = body.ntfyWorking;
+  }
   if (body.mute !== undefined) {
     if (body.mute === null || body.mute === false) out.mute = null;
     else {

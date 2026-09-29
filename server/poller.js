@@ -1,5 +1,5 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
-import { deliver } from './deliver.js';
+import { deliver, hasReceiver, reachedSomeone } from './deliver.js';
 import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
@@ -409,7 +409,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
     const badge = Object.entries(rides).filter(([id, r]) => r.status === 'DOWN' && followsRide(trip, id)).length;
     for (const push of pushes) {
       if (simulated) push.message += ' · SIMULATED TEST';
-      if (await deliver(trip, push, { tag: push.tag, badge })) sent++;
+      if ((await deliver(trip, push, { tag: push.tag, badge })).ok) sent++;
     }
   }));
   // Once told, an incident's later rides update its push instead of starting another.
@@ -433,9 +433,11 @@ export async function notifyWaitAlerts(parkId, rides, now = Date.now()) {
   await Promise.all(targets.map(async (trip) => {
     if (pruneWaitAlerts(trip, today)) changed = true;
     const paused = trip.mute && (trip.mute.until === null || trip.mute.until > now);
-    if (paused || isPastClosing(state, now)) return;
+    // With every phone paused, nobody would see it: hold it, don't use it up.
+    if (paused || isPastClosing(state, now) || !hasReceiver(trip, now)) return;
     for (const { rideId, ride, alert } of dueWaitAlerts(trip, rides, today)) {
-      if (!(await deliver(trip, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }, { tag: `wait:${rideId}`, now }))) continue;
+      const result = await deliver(trip, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }, { tag: `wait:${rideId}`, now });
+      if (!reachedSomeone(trip, result)) continue;
       alert.sentAt = now;
       alert.sentWait = ride.waitTime;
       changed = true;
@@ -682,12 +684,12 @@ export async function notifyCrowds(parkId, now = Date.now()) {
     && !(t.mute && (t.mute.until === null || t.mute.until > now)));
   let sent = 0;
   await Promise.all(targets.map(async (trip) => {
-    if (await deliver(trip, {
+    if ((await deliver(trip, {
       title: `Lines are building at ${parkName}`,
       message: `The big rides average ${building.to} min, up from ${building.from} half an hour ago.${quick.length ? ` Shortest now: ${quick.join(', ')}.` : ''}`,
       click: appLink(trip, { view: 'park' }),
       priority: 3,
-    }, { tag: 'crowd', now })) sent++;
+    }, { tag: 'crowd', now })).ok) sent++;
   }));
   return sent;
 }

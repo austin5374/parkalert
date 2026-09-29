@@ -46,8 +46,8 @@ test('every phone on the trip gets the alert, encrypted and signed', async () =>
   hits.length = 0;
   const trip = { code: 'AAAAAA', topic: 't', devices: [device('a'), device('b')] };
   trips.AAAAAA = trip;
-  const ok = await deliver(trip, { title: 'Space Mountain is down', message: 'Usually back in 10 to 40 min', priority: 3 }, { tag: 'ride:x' });
-  assert.equal(ok, true);
+  const result = await deliver(trip, { title: 'Space Mountain is down', message: 'Usually back in 10 to 40 min', priority: 3 }, { tag: 'ride:x' });
+  assert.deepEqual(result, { ok: true, ntfy: true, devices: 2 });
   assert.deepEqual(hits.map((h) => h.path).sort(), ['/a', '/b']);
   for (const h of hits) {
     assert.equal(h.headers['content-encoding'], 'aes128gcm');
@@ -86,4 +86,17 @@ test('alerts go out urgent, and quiet updates and routine pushes do not', async 
   await deliver(trip, { title: 'lines building', message: 'm', priority: 3 });
   await deliver(trip, { title: '6 of 18 back', message: 'm', priority: 4, quiet: true });
   assert.deepEqual(hits.map((h) => h.headers.urgency), ['high', 'high', 'normal', 'normal']);
+});
+
+test('a push to a trip whose only phone is paused reaches nobody who will see it', async () => {
+  const { reachedSomeone, hasReceiver } = await import('../server/deliver.js');
+  const paused = { mute: { until: Date.now() + 60_000 } };
+  const trip = { code: 'FFFFFF', topic: 't', devices: [device('p', paused)] };
+  const result = await deliver(trip, { title: 'wait', message: 'm' });
+  assert.deepEqual([result.ntfy, result.devices], [true, 0]);
+  assert.equal(reachedSomeone(trip, result), false, 'ntfy accepted it, but no phone here uses ntfy');
+  assert.equal(hasReceiver(trip), false);
+  trip.ntfyConfirmedAt = Date.now(); // a phone on ntfy said a test arrived
+  assert.equal(reachedSomeone(trip, result), true);
+  assert.equal(hasReceiver({ topic: 't' }), true, 'a trip on ntfy alone is reached through it');
 });

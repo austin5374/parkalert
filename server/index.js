@@ -302,6 +302,8 @@ async function handleApi(req, res, url) {
     if (patch.mute !== undefined) trip.mute = patch.mute;
     if (patch.rideMutes !== undefined) trip.rideMutes = patch.rideMutes;
     if (patch.crowdAlerts !== undefined) trip.crowdAlerts = patch.crowdAlerts;
+    // A phone on ntfy said a test arrived: the topic reaches someone.
+    if (patch.ntfyWorking !== undefined) trip.ntfyConfirmedAt = patch.ntfyWorking ? Date.now() : null;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });
   }
@@ -370,7 +372,7 @@ async function handleApi(req, res, url) {
       return json(res, 200, { ok: true });
     }
     if (req.method === 'POST' && parts[5] === 'test') {
-      const ok = await deliver(trip, {
+      const { ok } = await deliver(trip, {
         title: 'ParkAlert is on',
         message: 'This phone will get an alert when a ride you follow goes down or comes back up.',
         click: appLink(trip),
@@ -383,7 +385,7 @@ async function handleApi(req, res, url) {
   if (trip && req.method === 'POST' && parts[3] === 'test') {
     // It goes to every phone on the trip, not just the one that asked, so it
     // says what it is rather than "this phone".
-    const ok = await deliver(trip, {
+    const { ok } = await deliver(trip, {
       title: `ParkAlert test for trip ${trip.code}`,
       message: 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
       click: appLink(trip),
