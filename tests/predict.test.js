@@ -80,10 +80,10 @@ test('describe reads like a person said it', () => {
   );
 });
 
-test('a live hold needs five running rides down within ten minutes of this one', () => {
+test('a live hold needs five running rides down within three minutes of this one', () => {
   const t = 1_000_000_000;
   const rides = {};
-  for (let i = 0; i < 5; i++) rides[`r${i}`] = { status: 'DOWN', downSince: t + i * 60_000, downFrom: 'OPERATING' };
+  for (let i = 0; i < 5; i++) rides[`r${i}`] = { status: 'DOWN', downSince: t + i * 30_000, downFrom: 'OPERATING' };
   rides.later = { status: 'DOWN', downSince: t + 60 * 60_000, downFrom: 'OPERATING' };
   assert.deepEqual(classifyLive(rides, 'r0'), { kind: 'hold', rides: 5 });
   assert.deepEqual(classifyLive(rides, 'later'), { kind: 'breakdown' });
@@ -180,9 +180,10 @@ test('a ride still down when the rest of its hold reopens stays in the hold', as
   const live = (downIds) => Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, name: `R${i}`, status: downIds.includes(i) ? 'DOWN' : 'OPERATING', waitTime: null }));
   let { rides } = applyLiveData({}, live([]), t);
   ({ rides } = applyLiveData(rides, live([0, 1, 2, 3, 4, 5, 6]), t + 60_000));
-  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'hold', rides: 7 });
+  const kindOf = (id) => { const k = classifyLive(rides, id); return [k.kind, k.rides]; };
+  assert.deepEqual(kindOf('r6'), ['hold', 7]);
   ({ rides } = applyLiveData(rides, live([6]), t + 40 * 60_000));
-  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'hold', rides: 7 });
+  assert.deepEqual(kindOf('r6'), ['hold', 7]);
   // Reopening ends it; going down again later is a new outage.
   ({ rides } = applyLiveData(rides, live([]), t + 50 * 60_000));
   ({ rides } = applyLiveData(rides, live([6]), t + 90 * 60_000));
@@ -230,4 +231,43 @@ test('the advice follows the chance, closing time and closed-for-the-day share',
   assert.equal(advise({ p25: 30, p50: 35, p75: 45, basis: 'rule' }).key, 'nearby', 'the lightning rule has no curve');
   assert.equal(advise(null), null);
   assert.equal(advise(est({ 15: 0.7, 30: 0.8, 60: 0.9 })).detail, '70% of outages like this are over within 15 min.');
+});
+
+// Five polls a minute apart at one park: A, then B, then a wave of three.
+const wave = (stormAt) => {
+  const t = 2_000_000_000;
+  const names = ['A', 'B', 'C', 'D', 'E'];
+  const live = (downs) => names.map((n) => ({ id: n, name: n, status: downs.includes(n) ? 'DOWN' : 'OPERATING', waitTime: null }));
+  let { rides } = applyLiveData({}, live([]), t);
+  ({ rides } = applyLiveData(rides, live(['A']), t + 40_000, { stormAt }));
+  ({ rides } = applyLiveData(rides, live(['A', 'B']), t + 70_000, { stormAt }));
+  ({ rides } = applyLiveData(rides, live(['A', 'B', 'C', 'D', 'E']), t + 100_000, { stormAt }));
+  return rides;
+};
+
+test('breakdowns already announced do not turn into a hold when a wave follows', () => {
+  const rides = wave(null);
+  for (const id of ['A', 'B', 'C', 'D', 'E']) assert.equal(classifyLive(rides, id).kind, 'breakdown', id);
+});
+
+test('when the weather reports lightning, rides that went down first join the storm hold', () => {
+  const rides = wave(() => true);
+  const kinds = ['A', 'B', 'C', 'D', 'E'].map((id) => classifyLive(rides, id));
+  assert.ok(kinds.every((k) => k.kind === 'hold' && k.rides === 5));
+  assert.equal(new Set(kinds.map((k) => k.incident)).size, 1, 'one hold, one incident');
+});
+
+test('a hold rolling in over two polls is one incident', () => {
+  const t = 3_000_000_000;
+  const ids = Array.from({ length: 8 }, (_, i) => `h${i}`);
+  const live = (n) => ids.map((id, i) => ({ id, name: id, status: i < n ? 'DOWN' : 'OPERATING', waitTime: null }));
+  let { rides } = applyLiveData({}, live(0), t);
+  ({ rides } = applyLiveData(rides, live(5), t + 60_000));
+  const next = applyLiveData(rides, live(8), t + 120_000);
+  rides = next.rides;
+  const { events } = next;
+  const incidents = new Set(ids.map((id) => rides[id].incident));
+  assert.equal(incidents.size, 1);
+  assert.ok(ids.every((id) => rides[id].liveKind === 'hold' && rides[id].holdSize === 8));
+  assert.ok(events.every((ev) => ev.ride.incident === [...incidents][0]), 'the new rides\' events carry the incident');
 });

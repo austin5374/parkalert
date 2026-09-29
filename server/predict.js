@@ -104,16 +104,18 @@ function everywhere(history, kind) {
   return list;
 }
 
-// Which kind of outage is this live DOWN ride? Same rules the history
-// classifier uses, applied to current park state (rides: parkState[p].rides).
-// Returns { kind, rides } where rides is the hold size for a 'hold'.
-// A ride the poller has already seen in a hold stays in it (ride.liveKind)
-// until it reopens: once the others come back, the last ones still down are
-// the same storm, not a fresh breakdown with a shorter estimate.
+// Which kind of outage is this live DOWN ride? The poller settles it the
+// first poll the ride is seen down (ride.liveKind, see rememberHolds in
+// poller.js) and it stays that way until the ride reopens: once the others
+// come back, the last ones still down are the same storm, and a breakdown
+// already announced as one keeps its advice. A snapshot without that falls
+// back to the same rule the history classifier uses.
+// Returns { kind, rides, incident } where rides is the hold size for a 'hold'.
 export function classifyLive(rides, rideId) {
   const ride = rides[rideId];
   if (isLateOpening({ from: ride?.downFrom })) return { kind: 'opening' };
-  if (ride?.liveKind === 'hold') return { kind: 'hold', rides: ride.holdSize };
+  if (ride?.liveKind === 'hold') return { kind: 'hold', rides: ride.holdSize, incident: ride.incident ?? null };
+  if (ride?.liveKind === 'breakdown') return { kind: 'breakdown' };
   return clusterLive(rides, rideId);
 }
 

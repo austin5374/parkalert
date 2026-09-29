@@ -5,10 +5,10 @@ import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
-import { estimate, describe, shownWindow, classifyLive, clusterLive, advise } from './predict.js';
-import { weatherOutlook, modelHistory } from './weatheroutlook.js';
+import { estimate, describe, shownWindow, classifyLive, advise } from './predict.js';
+import { weatherOutlook, modelHistory, stormAt, rainSensitive } from './weatheroutlook.js';
 import { refreshWeather } from './weather.js';
-import { isLateOpening } from './episodes.js';
+import { isLateOpening, CLUSTER_WINDOW_MS, CLUSTER_MIN_RIDES } from './episodes.js';
 import { recordWaits } from './insights.js';
 import { liveIndex, parkCrowd } from './crowdstate.js';
 import { linesBuilding } from './crowds.js';
@@ -27,10 +27,12 @@ export const MISSING_POLLS = 5;
 export const CLOSED_OUTAGE_MS = 8 * 3600_000;
 
 // Pure transition detection so it can be tested without the network.
-// Returns { rides, events } where events = [{ type: 'DOWN'|'UP', ride, downtimeMs }].
-export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
+// Returns { rides, events } where events = [{ type: 'DOWN'|'UP'|'CLOSED', ride, downtimeMs }].
+//   stormAt(t): whether the weather reported lightning nearby at t, which
+//     lets rides already settled as breakdowns join a hold (see rememberHolds)
+export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { stormAt = null } = {}) {
   const rides = {};
-  const events = [];
+  const changes = []; // [type, id, extra], turned into events once kinds are settled
   for (const att of liveAttractions) {
     const prev = prevRides?.[att.id];
     const ride = {
@@ -52,31 +54,30 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
       ride.downFrom = outage ? outage.downFrom ?? null : prev?.status ?? null;
       if (outage?.liveKind) {
         ride.liveKind = outage.liveKind;
-        ride.holdSize = outage.holdSize;
+        if (outage.holdSize) ride.holdSize = outage.holdSize;
+        if (outage.incident) ride.incident = outage.incident;
       }
     }
     if (att.status === 'CLOSED' && outage) {
       ride.downSince = outage.downSince;
       ride.downFrom = outage.downFrom ?? null;
       ride.closedWhileDown = true;
+      if (outage.incident) ride.incident = outage.incident;
     }
     if (prev && prev.status !== att.status) {
       if (prev.status === 'OPERATING' && att.status === 'DOWN') {
-        events.push({ type: 'DOWN', ride: { id: att.id, ...ride } });
+        changes.push(['DOWN', att.id, {}]);
       } else if (outage && att.status === 'OPERATING') {
-        events.push({
-          type: 'UP',
-          ride: { id: att.id, ...ride },
+        changes.push(['UP', att.id, {
           downtimeMs: outage.downSince ? now - outage.downSince : null,
           // It never opened on time, so it is opening late, not coming back.
           late: isLateOpening({ from: outage.downFrom }),
-        });
+          // What the outage was, for grouping its "back up" with the others.
+          kind: outage.liveKind ?? null,
+          incident: outage.incident ?? null,
+        }]);
       } else if (prev.status === 'DOWN' && att.status === 'CLOSED') {
-        events.push({
-          type: 'CLOSED',
-          ride: { id: att.id, ...ride },
-          downtimeMs: prev.downSince ? now - prev.downSince : null,
-        });
+        changes.push(['CLOSED', att.id, { downtimeMs: prev.downSince ? now - prev.downSince : null, incident: prev.incident ?? null }]);
       }
     }
     rides[att.id] = ride;
@@ -86,21 +87,39 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now()) {
     const missed = (prev.missed || 0) + 1;
     if (missed <= MISSING_POLLS) rides[id] = { ...prev, missed };
   }
-  rememberHolds(rides);
+  rememberHolds(rides, { stormAt });
+  const events = changes.map(([type, id, extra]) => ({ type, ride: { id, ...rides[id] }, ...extra }));
   return { rides, events };
 }
 
-// A down ride seen in a park-wide hold keeps that for the rest of its
-// outage, and the hold's largest size, however many of the others reopen.
-export function rememberHolds(rides) {
-  for (const [id, r] of Object.entries(rides)) {
-    if (r.status !== 'DOWN') continue;
-    const now = clusterLive(rides, id);
-    if (now.kind === 'hold') {
-      r.liveKind = 'hold';
-      r.holdSize = Math.max(r.holdSize || 0, now.rides);
+// What kind of outage each down ride is, settled the first poll it is seen
+// down: part of a park-wide hold (CLUSTER_MIN_RIDES rides down within
+// CLUSTER_WINDOW_MS of each other), or a breakdown. Settled, because its
+// alert has gone out saying which, with that kind's advice; a later wave of
+// rides must not turn yesterday's "check back soon" into "ride something
+// else". A ride settled as a breakdown joins a hold only if the weather
+// reported lightning when it went down (a storm rolling in over two polls).
+// Hold rides share an incident id and carry the hold's largest size so far.
+export function rememberHolds(rides, { stormAt = null } = {}) {
+  const down = Object.values(rides).filter((r) => r.status === 'DOWN' && r.downSince && !isLateOpening({ from: r.downFrom }));
+  const eligible = (r) => !r.liveKind || r.liveKind === 'hold' || (r.liveKind === 'breakdown' && !!stormAt?.(r.downSince));
+  for (const r of down) {
+    if (r.liveKind) continue;
+    const mates = down.filter((o) => eligible(o) && Math.abs(o.downSince - r.downSince) <= CLUSTER_WINDOW_MS);
+    if (mates.length < CLUSTER_MIN_RIDES) continue;
+    const incident = mates.find((o) => o.liveKind === 'hold' && o.incident)?.incident
+      || `hold-${Math.round(Math.min(...mates.map((o) => o.downSince)) / 1000)}`;
+    for (const o of mates) {
+      o.liveKind = 'hold';
+      o.incident ??= incident;
     }
   }
+  const size = {};
+  for (const r of down) {
+    if (!r.liveKind) r.liveKind = 'breakdown';
+    if (r.liveKind === 'hold') size[r.incident ?? 'hold'] = (size[r.incident ?? 'hold'] || 0) + 1;
+  }
+  for (const r of down) if (r.liveKind === 'hold') r.holdSize = Math.max(r.holdSize || 0, size[r.incident ?? 'hold']);
 }
 
 function localTime(ts, timezone) {
@@ -163,10 +182,21 @@ const restored = new Set(); // parks whose saved gate has been read this run
 // When the weather is why the ride is down, the estimate runs from when it
 // clears, and the text says where the weather stands.
 export function downOutlook(parkId, rideId, elapsedMin, now = Date.now()) {
+  const ride = parkState[parkId]?.rides?.[rideId];
+  // Every ride in a hold gets the hold's one outlook, timed from when the
+  // hold began, so the hold card and its rides never give different advice.
+  // A rain-sensitive ride keeps its own: it also waits for a dry track.
+  if (ride?.liveKind === 'hold' && ride.incident && !rainSensitive(parkId, rideId, ride.name)) {
+    return holdOutlook(parkId, ride.incident, now);
+  }
+  return rideOutlook(parkId, rideId, elapsedMin, now);
+}
+
+function rideOutlook(parkId, rideId, elapsedMin, now, { shared = false } = {}) {
   const rides = parkState[parkId]?.rides || {};
   const live = classifyLive(rides, rideId);
-  const w = weatherOutlook(parkId, rideId, rides[rideId], live.kind, now);
-  const est = w?.est ?? estimate(modelHistory(), parkId, rideId, elapsedMin, live.kind);
+  const w = weatherOutlook(parkId, rideId, rides[rideId], live.kind, now, { shared });
+  const est = w?.est ?? estimate(modelHistory(), parkId, shared ? null : rideId, elapsedMin, live.kind);
   return {
     ...live,
     ...(w ? { cause: w.cause, weather: w.weather, clearedAt: w.clearedAt ?? null } : {}),
@@ -177,6 +207,22 @@ export function downOutlook(parkId, rideId, elapsedMin, now = Date.now()) {
     chance: est && !est.longerThanUsual && est.chance ? est.chance : null,
     advice: advise(est, { minutesToClose: minutesToClose(parkId, now) }),
   };
+}
+
+// One outlook per hold, worked out from the ride that went down first and
+// kept for a few seconds, so every ride asked about in one go gets the same.
+const holdOutlooks = new Map(); // "park|incident" -> { at, outlook }
+function holdOutlook(parkId, incident, now) {
+  const key = `${parkId}|${incident}`;
+  const hit = holdOutlooks.get(key);
+  if (hit && Math.abs(now - hit.at) < 15_000) return hit.outlook;
+  const all = Object.entries(parkState[parkId]?.rides || {}).filter(([, r]) => r.status === 'DOWN' && r.incident === incident);
+  const dry = all.filter(([id, r]) => !rainSensitive(parkId, id, r.name));
+  const [firstId, first] = (dry.length ? dry : all).reduce((a, b) => (b[1].downSince < a[1].downSince ? b : a));
+  const outlook = rideOutlook(parkId, firstId, (now - first.downSince) / 60_000, now, { shared: true });
+  if (holdOutlooks.size > 50) holdOutlooks.clear();
+  holdOutlooks.set(key, { at: now, outlook });
+  return outlook;
 }
 
 // Minutes until the park's last close today (events included), or null.
@@ -505,7 +551,7 @@ async function doPollPark(parkId) {
       forgetPending(parkId);
     } else if (!restored.has(parkId)) restoreGate(parkId, upgradeGate(parkId, state.gate));
     restored.add(parkId);
-    const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now);
+    const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now, { stormAt: (t) => stormAt(parkId, t, now) });
     state.rides = rides;
     state.recent = recordRecent(state.recent, events, now);
     // Break the wait chart where polling stopped, rather than holding the

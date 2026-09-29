@@ -3,7 +3,7 @@
 // what the dashboard and alerts ask about a down ride.
 import { history } from './store.js';
 import { timelines, STALE_MS } from './weather.js';
-import { learnTraits, causeOf, clearedAt, clearanceOffsets, spellDurations } from './causes.js';
+import { learnTraits, causeOf, clearedAt, clearanceOffsets, spellDurations, spellCovering, RAIN_RIDES } from './causes.js';
 import { afterClearing, duringWeather } from './predict.js';
 
 // What each park's archive says about weather, rebuilt only when the archive
@@ -44,7 +44,9 @@ export function modelHistory() {
 // recent reports to say (the ordinary estimate then stands). Otherwise
 //   { cause: 'lightning' | 'rain', weather: 'ongoing' | 'passed',
 //     clearedAt?, since?, est }  (est may be null)
-export function weatherOutlook(parkId, rideId, ride, kind, now = Date.now()) {
+//   shared: estimate for a whole hold, from the park's storms rather than
+//     this ride's own, so every ride in the hold says the same thing
+export function weatherOutlook(parkId, rideId, ride, kind, now = Date.now(), { shared = false } = {}) {
   if (!ride?.downSince) return null;
   const m = model(parkId);
   if (!(now - m.tl.latest < STALE_MS)) return null;
@@ -53,7 +55,7 @@ export function weatherOutlook(parkId, rideId, ride, kind, now = Date.now()) {
   const c = clearedAt(cause, ride.downSince, now, m.tl);
   if (!c) return null;
   if (c.state === 'passed') {
-    return { cause, weather: 'passed', clearedAt: c.end, est: afterClearing(m.offsets[cause], rideId, (now - c.end) / 60_000, cause) };
+    return { cause, weather: 'passed', clearedAt: c.end, est: afterClearing(m.offsets[cause], shared ? null : rideId, (now - c.end) / 60_000, cause) };
   }
   const durations = c.what === 'rain' ? m.durations.rain : m.durations.thunder;
   return {
@@ -61,7 +63,7 @@ export function weatherOutlook(parkId, rideId, ride, kind, now = Date.now()) {
     weather: 'ongoing',
     what: c.what,
     since: c.since,
-    est: duringWeather(durations, (now - c.since) / 60_000, m.offsets[cause], rideId, cause),
+    est: duringWeather(durations, (now - c.since) / 60_000, m.offsets[cause], shared ? null : rideId, cause),
   };
 }
 
@@ -69,4 +71,18 @@ export function weatherOutlook(parkId, rideId, ride, kind, now = Date.now()) {
 export function parkTraits(parkId) {
   const { traits } = model(parkId);
   return { weather: [...traits.weather], rain: [...traits.rain] };
+}
+
+// Did the stations report lightning near the park at time t (allowing for
+// the lead, see causes.js)? Only with current reports; without them, no.
+export function stormAt(parkId, t, now = Date.now()) {
+  const tl = timelines(parkId);
+  if (!(now - tl.latest < STALE_MS)) return false;
+  return !!spellCovering(tl.thunder, t);
+}
+
+// Rides that wait for a dry track as well as for the lightning to pass.
+export function rainSensitive(parkId, rideId, rideName) {
+  const { traits } = model(parkId);
+  return traits.rain.has(rideId) || RAIN_RIDES.some((re) => re.test(rideName || ''));
 }

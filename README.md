@@ -192,7 +192,7 @@ Nobody publishes when a ride will reopen, so ParkAlert estimates it from how lon
 **Outages are sorted by kind**, because each behaves differently and mixing them would make every estimate worse:
 
 - **Breakdowns**: one ride goes down while running. Most outages.
-- **Park-wide holds**: five or more running rides go down within ten minutes of each other. In Florida this is nearly always lightning; two September storms at Magic Kingdom each closed 11 outdoor rides inside two minutes, and those holds ran about three times as long as a typical breakdown there (median 49 min against 14). A fireworks or power hold looks the same in the ride data; the weather reports (below) tell them apart.
+- **Park-wide holds**: five or more running rides go down within three minutes of each other. In Florida this is nearly always lightning; two September storms at Magic Kingdom each closed 11 outdoor rides inside two minutes, and those holds ran about three times as long as a typical breakdown there (median 49 min against 14). A fireworks or power hold looks the same in the ride data; the weather reports (below) tell them apart. Live, a ride's kind is settled the first poll it is seen down and kept until it reopens, so a wave of breakdowns minutes later never turns advice already given into a hold's. A ride settled as a breakdown joins a hold only when the weather reported lightning as it went down. Every ride in a hold gets the hold's one estimate.
 - **Delayed openings**: the ride went DOWN without having been running first. Several often fail to open together at rope drop, which is not a hold.
 - **Blips** under a minute are dropped.
 
