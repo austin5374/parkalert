@@ -720,3 +720,9 @@ main { position: relative; transition: none; }
 .lg-today { background: var(--accent); }
 .lg-usual { background: var(--label-3); }
 .lg-max { margin-left: auto; }
+
+/* A row that opens in place: its chevron turns down when open. */
+.chevron.turn { transition: transform 200ms ease; }
+.chevron.turn.open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .chevron.turn { transition: none; } }
+.recent-row.sub { padding-left: calc(var(--gutter) + 1rem); }

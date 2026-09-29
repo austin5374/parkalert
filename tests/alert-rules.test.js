@@ -42,7 +42,7 @@ test('a hold is one push that leads with the hold, the range and what to do', ()
   const at = Date.parse('2026-09-27T19:12:00Z');
   const outlook = { kind: 'hold', text: 'Often back in 45 to 105 min', advice: { verdict: 'Ride something else' } };
   const down = incidentDownMessage('hold', names, 'Magic Kingdom', outlook, at, 'America/New_York');
-  assert.equal(down.title, 'Park-wide hold: 7 rides closed');
+  assert.equal(down.title, '7 rides paused at once', 'not a storm unless the weather says so');
   assert.equal(down.message, 'Often back in 45 to 105 min · Ride something else\nA, B, C, D, E and 2 more\nMagic Kingdom · 3:12\u00a0PM');
   assert.equal(incidentDownMessage('hold', names, 'Magic Kingdom', { ...outlook, cause: 'lightning' }, at, 'America/New_York').title, 'Storm hold: 7 rides closed');
   const wave = incidentDownMessage('group', ['A', 'B', 'C'], 'EPCOT', null, at, 'America/New_York');

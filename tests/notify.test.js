@@ -55,7 +55,7 @@ test('a storm hold is one push naming the rides, and tapping it opens the hold',
   const { sent } = await notifyTrips(PARK, events, { simulated: true });
   assert.equal(sent, 1);
   assert.equal(received.length, 1);
-  assert.equal(received[0].title, 'Park-wide hold: 6 rides closed');
+  assert.equal(received[0].title, '6 rides paused at once');
   assert.match(received[0].message, /Ride 0, Ride 1, Ride 2, Ride 3, Ride 4 and 1 more/);
   assert.match(received[0].message, /Magic Kingdom · /);
   assert.equal(received[0].click, 'https://parkalert.example/?trip=AAAAAA&view=hold');

@@ -1231,6 +1231,12 @@ function adviceHtml(o, cls = 'card-advice') {
 }
 
 
+// A hold is a storm only when the weather says so; otherwise it is named
+// for what was seen (a fireworks or power hold looks the same).
+const holdName = (o, n) => (o?.cause ? `Storm hold · ${n} ride${n === 1 ? '' : 's'}` : `${n} ride${n === 1 ? '' : 's'} paused at once`);
+// The rides in a hold: this trip's first, then A to Z.
+const holdOrder = (a, b) => (isFollowing(b.id) - isFollowing(a.id)) || sortKey(a.name).localeCompare(sortKey(b.name));
+
 // How long a ride has been down, as far as anyone knows: exact, or at
 // least this long when it went down unseen (in a gap in the feed, or before
 // ParkAlert first looked), or nothing claimed under a minute of that.
@@ -1329,9 +1335,10 @@ function downHtml() {
       // rows inside it, each opening its own page.
       const first = holds.reduce((a, r) => (r.downSince < a.downSince ? r : a));
       const o = first.outlook || {};
+      holds.sort(holdOrder);
       parts.push(`
         <div class="cards" data-key="hold"><div class="card hold-card">
-          <button class="hold-header pressable" type="button" data-act="open-hold">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
+          <button class="hold-header pressable" type="button" data-act="open-hold">${icon(o.cause ? 'bolt' : 'pause')}<span>${esc(holdName(o, holds.length))}</span>${icon('chevron', 'chevron')}</button>
           <p class="card-sub">${esc([downWhen(first).replace(/^Down s/, 'S'), downFor(first)].filter(Boolean).join(' · '))}</p>
           ${adviceHtml(o)}
           ${o.chance ? chanceHtml(o) : timeline(first)}
@@ -1376,6 +1383,9 @@ function staleText() {
 
 // Rides that came back, or gave up and closed, recently: so an alert opened
 // late still makes sense. Each ride's latest word only.
+const RECENT_SINGLE_MS = 30 * 60_000;
+const openReturns = new Set(); // incidents whose returns are shown ride by ride
+
 function renderRecent(downIds) {
   const status = new Map(dash.rides.map((r) => [r.id, r.status]));
   const seen = new Set();
@@ -1386,6 +1396,36 @@ function renderRecent(downIds) {
   });
   const ups = latest.filter((e) => e.type === 'UP');
   const closed = latest.filter((e) => e.type === 'CLOSED');
+  // A hold's (or a wave's) returns are one row that opens with a tap: after a
+  // storm that was twenty rows for two hours. A single return stays half an
+  // hour.
+  const byIncident = new Map();
+  for (const e of ups) if (e.incident) byIncident.set(e.incident, [...(byIncident.get(e.incident) || []), e]);
+  const groups = [...byIncident].filter(([, es]) => es.length >= 3);
+  const grouped = new Set(groups.flatMap(([, es]) => es));
+  const entries = [
+    ...groups.map(([id, es]) => ({ at: Math.max(...es.map((e) => e.at)), id, es })),
+    ...ups.filter((e) => !grouped.has(e) && Date.now() - e.at < RECENT_SINGLE_MS).map((e) => ({ at: e.at, e })),
+  ].sort((a, b) => b.at - a.at);
+  const upRow = (e, cls = '') => `
+      <button class="row recent-row pressable ${cls}" type="button" data-ride="${esc(e.id)}">
+        ${icon('arrow-up', 'row-icon tint-green')}
+        <span class="row-label">${esc(e.name)}<small>${e.late
+          ? `Opened at ${fmtTime(e.at)}`
+          : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
+        ${icon('chevron', 'chevron')}
+      </button>`;
+  const groupRows = ({ id, es }) => {
+    const open = openReturns.has(id);
+    const what = id.startsWith('hold') ? 'back after the hold' : 'back up';
+    const times = es.map((e) => e.at);
+    return `
+      <button class="row recent-row pressable" type="button" data-act="toggle-returns" data-inc="${esc(id)}" aria-expanded="${open}">
+        ${icon('arrow-up', 'row-icon tint-green')}
+        <span class="row-label">${es.length} rides ${what}<small>Back ${fmtSpan(Math.min(...times), Math.max(...times))}</small></span>
+        ${icon('chevron', `chevron turn${open ? ' open' : ''}`)}
+      </button>${open ? es.map((e) => upRow(e, 'sub')).join('') : ''}`;
+  };
   const parts = [];
   if (closed.length) {
     parts.push(`<h2 class="section-label" data-key="closed-label">Closed after an outage</h2>
@@ -1396,16 +1436,9 @@ function renderRecent(downIds) {
         ${icon('chevron', 'chevron')}
       </button>`).join('')}</div>`);
   }
-  if (ups.length) {
+  if (entries.length) {
     parts.push(`<h2 class="section-label" data-key="up-label">Back up recently</h2>
-      <div class="group" data-key="up">${ups.map((e) => `
-      <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
-        ${icon('arrow-up', 'row-icon tint-green')}
-        <span class="row-label">${esc(e.name)}<small>${e.late
-          ? `Opened at ${fmtTime(e.at)}`
-          : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
-        ${icon('chevron', 'chevron')}
-      </button>`).join('')}</div>`);
+      <div class="group" data-key="up">${entries.map((x) => (x.es ? groupRows(x) : upRow(x.e))).join('')}</div>`);
   }
   parts.push(shortWaitsHtml());
   morph($('#recent-block'), parts.join(''));
@@ -1717,6 +1750,11 @@ $('#app').addEventListener('click', (e) => {
   else if (act === 'open-hold') openHold();
   else if (act === 'open-park') openParkInfo();
   else if (act === 'retry-dash') { offline = false; renderAll(); refresh(); }
+  else if (act === 'toggle-returns') {
+    const id = e.target.closest('[data-inc]').dataset.inc;
+    if (!openReturns.delete(id)) openReturns.add(id);
+    renderDown();
+  }
 });
 
 function renderAll() {
@@ -2037,7 +2075,8 @@ const TAB_TITLE = { down: 'Down now', rides: 'Rides', trip: 'Trip' };
 const backLabel = () => pages.top?.title() || TAB_TITLE[view] || 'Back';
 
 const KIND_NOTE = {
-  hold: 'Several rides went down together, which usually means lightning nearby or another park-wide hold. These run longer than a breakdown, and the rides tend to reopen together.',
+  hold: 'Several rides went down within a few minutes of each other. That usually means a park-wide hold, for fireworks or a power or safety check, and the rides tend to reopen together.',
+  storm: 'Lightning nearby closed the outdoor rides together. Storm holds run longer than a breakdown, and the rides tend to reopen together.',
   opening: 'This ride did not open on time. Delayed openings are estimated from past delayed openings, not breakdowns.',
 };
 
@@ -2202,8 +2241,8 @@ function rideHtml(r, detail, failed) {
     const clock = backClock(r, o);
     parts.push(`
       <div class="group padded outlook-block" data-key="outlook">
-        ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · park-wide hold' : ''}</p>`
-          : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
+        ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · storm hold' : ''}</p>`
+          : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('pause')}Paused with other rides</p>` : ''}
         ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
         <p class="big-outlook">${esc(o?.advice?.verdict || o?.text || 'Not enough history to estimate yet')}</p>
         ${o?.advice ? `<p class="advice-detail">${esc(o.advice.detail)}${o.advice && isFollowing(r.id) && alertsReady() ? " You'll get an alert when it's back." : ''}</p>` : ''}
@@ -2390,14 +2429,16 @@ function openHold() {
     key: 'hold',
     url: '/hold',
     back: backLabel(),
-    title: () => 'Park-wide hold',
+    title: () => (heldRides()[0]?.outlook?.cause ? 'Storm hold' : 'Rides paused at once'),
     render: holdHtml,
   });
 }
 
+const heldRides = () => dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold' && !r.other).sort(holdOrder);
+
 function holdHtml() {
-  const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold' && !r.other);
-  const parts = [`<p class="page-sub" data-key="note">${esc(KIND_NOTE.hold)}</p>`];
+  const holds = heldRides();
+  const parts = [`<p class="page-sub" data-key="note">${esc(KIND_NOTE[holds[0]?.outlook?.cause ? 'storm' : 'hold'])}</p>`];
   if (!holds.length) {
     // Left open while the rides came back: say so rather than go blank.
     parts.push(`<div class="group padded" data-key="over"><p class="big-outlook">The hold is over</p><p class="explain">Every ride in it is running again or has closed. They're listed under Back up recently on Down now.</p></div>`);

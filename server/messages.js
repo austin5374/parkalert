@@ -25,8 +25,11 @@ export function outlookLine(outlook) {
   return outlook.text || outlook.advice?.verdict || null;
 }
 
+// What a hold is called: a storm only when the weather says so. Otherwise
+// just what was seen, since a fireworks or power hold (or a few breakdowns
+// at once) looks the same in the ride data.
 const isStorm = (outlook) => !!outlook?.cause;
-export const holdTitle = (outlook) => (isStorm(outlook) ? 'Storm hold' : 'Park-wide hold');
+export const holdTitle = (outlook, n) => (isStorm(outlook) ? `Storm hold: ${n} rides closed` : `${n} rides paused at once`);
 
 // ---- One ride ----
 
@@ -41,7 +44,7 @@ export function wentDown(ride, timezone) {
 
 export function downMessage(ride, outlook, parkName, timezone) {
   const lines = [`${wentDown(ride, timezone)} · ${parkName}`];
-  if (outlook?.kind === 'hold') lines.push(`Part of a ${holdTitle(outlook).toLowerCase()}: ${outlook.rides} rides closed`);
+  if (outlook?.kind === 'hold') lines.push(isStorm(outlook) ? `Part of a storm hold: ${outlook.rides} rides closed` : `One of ${outlook.rides} rides paused at once`);
   const line = outlookLine(outlook);
   if (line) lines.push(line);
   return { title: `${ride.name} is down`, message: lines.join('\n'), priority: 3, urgency: 'high' };
@@ -108,7 +111,7 @@ export function incidentDownMessage(kind, names, parkName, outlook, at, timezone
   const when = `${parkName} · ${after != null ? `between ${localTime(after, timezone)} and ${localTime(at, timezone)}` : localTime(at, timezone)}`;
   if (kind === 'hold') {
     const lines = [outlookLine(outlook), listNames(names), when].filter(Boolean);
-    return { title: `${holdTitle(outlook)}: ${names.length} rides closed`, message: lines.join('\n'), priority: 3, urgency: 'high' };
+    return { title: holdTitle(outlook, names.length), message: lines.join('\n'), priority: 3, urgency: 'high' };
   }
   const lines = [listNames(names), when, outlookLine(outlook)].filter(Boolean);
   return { title: `${names.length} rides went down`, message: lines.join('\n'), priority: 3, urgency: 'high' };
@@ -117,7 +120,7 @@ export function incidentDownMessage(kind, names, parkName, outlook, at, timezone
 // More rides joining a hold already announced: the same notification,
 // updated quietly. down: how many of this trip's rides are now closed.
 export function incidentGrewMessage(kind, down, added, parkName, outlook) {
-  const title = kind === 'hold' ? `${holdTitle(outlook)}: ${down} rides closed` : `${down} rides down`;
+  const title = kind === 'hold' ? holdTitle(outlook, down) : `${down} rides down`;
   return { title, message: [`Also closed: ${listNames(added)}`, parkName].join('\n'), priority: 3, quiet: true };
 }
 
