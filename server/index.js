@@ -45,13 +45,25 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// index.html's one inline script (it shows the right screen before app.js
+// arrives on a slow connection) is allowed by its hash, so no other inline
+// script can run.
+const BOOT_SCRIPT_HASH = (() => {
+  try {
+    const m = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/);
+    return m ? ` 'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'` : '';
+  } catch {
+    return '';
+  }
+})();
+
 // Everything the page loads comes from here. Inline styles are allowed
-// because the templates set a few style attributes; scripts never are, so
-// even a slip in escaping could not run one.
+// because the templates set a few style attributes; scripts never are
+// (bar the boot script above), so even a slip in escaping could not run one.
 const SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src 'self'${BOOT_SCRIPT_HASH}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "connect-src 'self'",
@@ -67,8 +79,21 @@ const SECURITY_HEADERS = {
 };
 
 function json(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
+  sendJson(res, status, JSON.stringify(body));
+}
+
+// JSON over 1 KB goes gzipped to clients that take it: the dashboard is
+// 30 KB raw and 4 KB compressed, and phones fetch it every 30 seconds on
+// park Wi-Fi and cellular.
+function sendJson(res, status, text, headers = {}) {
+  const gzip = text.length > 1024 && /\bgzip\b/.test(res.req?.headers['accept-encoding'] || '');
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    Vary: 'Accept-Encoding',
+    ...(gzip ? { 'Content-Encoding': 'gzip' } : {}),
+    ...headers,
+  });
+  res.end(gzip ? zlib.gzipSync(text) : text);
 }
 
 const limit = Object.fromEntries(Object.entries(LIMITS).map(([name, cfg]) => [name, createLimiter(cfg)]));
@@ -246,8 +271,7 @@ async function handleApi(req, res, url) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
       return res.end();
     }
-    res.writeHead(200, { 'Content-Type': 'application/json', ETag: etag, 'Cache-Control': 'no-cache' });
-    return res.end(JSON.stringify(body));
+    return sendJson(res, 200, JSON.stringify(body), { ETag: etag, 'Cache-Control': 'no-cache' });
   }
 
   // Everything the ride detail sheet shows: live status, today's changes and

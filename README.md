@@ -245,7 +245,8 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 
 - **ntfy topics are the security model**: anyone with the topic name can read/write it. The random suffix makes it unguessable; treat trip links like a shared secret.
 - **Rate limits** per client (the last `X-Forwarded-For` entry on Railway): new trips 20 then 20 an hour; test and simulated pushes 10 then 30 an hour, per client and per trip; unknown trip codes 30 then 60 an hour, after which even a right guess waits. Every push leaves from this one server, whose IP ntfy.sh rate-limits, so this keeps one abuser from throttling everyone's alerts. Limits live in memory and reset on restart.
-- Every response carries a Content-Security-Policy (same-origin only, no inline scripts), `nosniff`, `no-referrer` and frame denial, plus HSTS over HTTPS.
+- Every response carries a Content-Security-Policy (same-origin only, and no inline scripts except `index.html`'s small boot script, allowed by its hash), `nosniff`, `no-referrer` and frame denial, plus HSTS over HTTPS.
+- On a slow connection: API JSON over 1 KB is gzipped (the dashboard is about 30 KB raw, 4 KB compressed), the page shows its loading skeleton (or the first-run screen) before `app.js` arrives, and a tapped alert on a phone with no trip of its own opens the linked trip without an extra round trip.
 
 ## Troubleshooting
 

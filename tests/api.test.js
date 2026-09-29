@@ -346,3 +346,24 @@ test('wait alerts can be set, re-set and removed, and bad ones are refused', asy
   assert.deepEqual(r.body.trip.waitAlerts, {});
   assert.deepEqual((await call('GET', `/api/trips/${trip.code}`)).body.trip.waitAlerts, {});
 });
+
+test('API JSON over 1 KB is gzipped for clients that take it', async () => {
+  const trip = await newTrip();
+  const res = await fetch(`${base}/api/trips/${trip.code}/dashboard`, { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(res.headers.get('content-encoding'), 'gzip');
+  assert.equal(res.headers.get('vary'), 'Accept-Encoding');
+  assert.ok((await res.json()).rides, 'and reads as the same JSON');
+  const small = await fetch(`${base}/api/trips/${trip.code}`, { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(small.headers.get('content-encoding'), null, 'small answers are not worth it');
+});
+
+test("the page's one inline script is allowed by its hash, and no other", async () => {
+  const res = await fetch(`${base}/`);
+  const csp = res.headers.get('content-security-policy');
+  const html = await res.text();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const { createHash } = await import('node:crypto');
+  const hash = createHash('sha256').update(script).digest('base64');
+  assert.match(csp, new RegExp(`script-src 'self' 'sha256-${hash.replace(/[+/]/g, '\\$&')}'`));
+  assert.doesNotMatch(csp, /unsafe-inline'[^;]*;[^;]*script|script-src[^;]*unsafe-inline/);
+});

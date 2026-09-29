@@ -3183,6 +3183,7 @@ function confirmInvite(code, trip) {
 
 /* ---------- Boot ---------- */
 (async function boot() {
+  let shown = false;
   const params = new URLSearchParams(location.search);
   const joinParam = params.get('join');
   // A tapped push: ?trip=CODE and a ride or view to open. On iPhone the link
@@ -3200,17 +3201,29 @@ function confirmInvite(code, trip) {
     const code = tripParam.toUpperCase();
     if (code !== tripCode) {
       const previous = tripCode;
+      // A phone with no trip of its own (Safari's storage, apart from the Home
+      // Screen app's) has nothing to lose: open the linked trip at once, and
+      // the first refresh finds it if it is gone.
+      if (!previous) {
+        setTrip(code);
+        return;
+      }
       // Check the linked trip still exists before leaving this phone's own
       // trip for it; switching first and finding it gone would drop both.
-      // Offline, the check can't run, so trust the link as before.
+      // Meanwhile this phone's own trip shows from its saved copy. Offline,
+      // the check can't run, so trust the link as before.
+      const toOpen = pendingOpen;
+      pendingOpen = null;
+      showApp();
+      shown = true;
       let missing = false;
       try { await api(`/trips/${code}`); } catch (err) { missing = err.status === 404; }
       if (!missing) {
+        pendingOpen = toOpen;
         setTrip(code);
-        if (previous) toast(`Showing trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
+        toast(`Showing trip ${code}`, { label: 'Undo', run: () => setTrip(previous) });
         return;
       }
-      pendingOpen = null;
       toast(`That alert was for trip ${code}, which no longer exists`);
     }
   }
@@ -3222,8 +3235,10 @@ function confirmInvite(code, trip) {
 
   // A saved trip opens straight away, online or not. A trip that no longer
   // exists is caught by the first refresh, which says so and leaves it.
-  if (tripCode) showApp();
-  else showSetup();
+  if (!shown) {
+    if (tripCode) showApp();
+    else showSetup();
+  }
   // An invite opened offline earlier, still waiting.
   if (!joinParam && pendingInvite()) {
     setPendingInvite(pendingInvite());

@@ -110,7 +110,7 @@
         <div class="nav-titles">
           <button class="cover-btn" id="btn-park" type="button" aria-haspopup="dialog" aria-labelledby="park-name park-meta"></button>
           <h1 id="park-name" class="large-title">ParkAlert</h1>
-          <p class="nav-meta"><span id="park-meta" aria-live="polite"></span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
+          <p class="nav-meta"><span id="park-meta" aria-live="polite">Loading…</span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
         </div>
         <button id="btn-alerts" class="pill pressable hidden" type="button" aria-haspopup="dialog">
           <svg><use href="#i-bell"/></svg><span>Alerts on</span>
@@ -121,7 +121,11 @@
     <main>
       <div id="ptr" class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>
       <section id="view-down" class="view" aria-label="Down now">
-        <div id="down-list"></div>
+        <!-- What shows before app.js has run: the same skeleton it draws while loading. -->
+        <div id="down-list"><div class="cards" data-key="skeleton">
+          <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>
+          <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>
+        </div></div>
         <div id="recent-block"></div>
       </section>
 
@@ -244,6 +248,19 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script>
+    // On a slow connection app.js takes seconds to arrive. Until it does, show
+    // the right screen: the app's frame and its loading skeleton for a phone
+    // with a trip (or a link to one), else the first-run screen, which needs
+    // no script to read. The server allows this one inline script by its hash.
+    (function () {
+      var trip = null;
+      try { trip = localStorage.getItem('parkalert.trip'); } catch (e) {}
+      var app = !!trip || /[?&](trip|join)=/.test(location.search);
+      document.getElementById(app ? 'app' : 'setup').classList.remove('hidden');
+      if (!app) document.body.classList.add('no-tabbar');
+    })();
+  </script>
   <script src="/time.js"></script>
   <script src="/app.js"></script>
 </body>
