@@ -663,3 +663,7 @@ main { position: relative; transition: none; }
 .trend.up { color: var(--orange); }
 .trend.down { color: var(--green); }
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.card-clock { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
+.segmented .count { color: var(--label-2); font-weight: 500; font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
+.page .ptr { top: calc(env(safe-area-inset-top) + 2.9rem); z-index: 2; }

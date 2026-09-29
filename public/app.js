@@ -561,6 +561,13 @@ const pages = (() => {
         <div class="page-body"></div>
       </section>`);
     p.body = p.el.querySelector('.page-body');
+    // Pull down on a page to refresh it too, as on the tabs.
+    const ptr = el('<div class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>');
+    p.el.insertBefore(ptr, p.body);
+    pullToRefresh(p.body, ptr, async () => { await refresh(); await p.load?.(); }, {
+      scrollTop: () => p.body.scrollTop,
+      blocked: () => sheet.isOpen || pages.top !== p,
+    });
     p.body.addEventListener('scroll', () => p.el.classList.toggle('titled', p.body.scrollTop > 36), { passive: true });
     host.appendChild(p.el);
     stack.push(p);
@@ -1088,6 +1095,14 @@ function timeline(r) {
   </div>`;
 }
 
+// The range as clock times, which is what people plan around.
+function likelyBack(o) {
+  const w = o?.window;
+  if (!w || w.lo == null) return '';
+  const lo = fmtTime(Date.now() + w.lo * 60000), hi = fmtTime(Date.now() + (w.hi ?? w.lo * 2) * 60000);
+  return lo === hi ? `Likely back around ${lo}` : `Likely back ${lo} to ${hi}`;
+}
+
 function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
@@ -1107,6 +1122,7 @@ function downCard(r) {
       <p class="card-sub">${since}</p>
       ${timeline(r)}
       ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
+      ${likelyBack(o) ? `<p class="card-clock">${esc(likelyBack(o))}</p>` : ''}
       ${foot ? `<p class="card-foot">${esc(foot)}</p>` : ''}
     </article>`;
 }
@@ -1343,6 +1359,14 @@ function drawRides() {
   const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
   const following = all.filter((r) => isFollowing(r.id)).length;
 
+  // Counts on the filter, as Mail shows unread: how many are open or down
+  // before you tap.
+  for (const b of document.querySelectorAll('[data-filter]')) {
+    const f = b.dataset.filter;
+    const n = f === 'all' ? null : all.filter(FILTERS[f]).length;
+    const label = { all: 'All', open: 'Open', down: 'Down', following: 'With alerts' }[f];
+    morph(b, n == null ? label : `${label} <span class="count">${n}</span>`);
+  }
   $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length}` : `Alerts on for ${following} of ${all.length}`;
   const btn = $('#btn-follow-all');
   btn.textContent = following === all.length ? 'Turn all off' : 'Turn all on';
@@ -2374,7 +2398,9 @@ const fmtShort = (d) => new Intl.DateTimeFormat(LOCALE, { month: 'short', day: '
 // Afterwards it says how it went, as Mail does under its title: "Updated
 // just now", or that it couldn't. Works on the setup screen too, where it
 // retries the park list.
-function pullToRefresh(area, ptr, onRefresh) {
+// scrollTop: how far the area is scrolled (the window, or a page's body).
+// blocked: when not to start (a sheet or a page is over it).
+function pullToRefresh(area, ptr, onRefresh, { scrollTop = () => scrollY, blocked = () => sheet.isOpen || pages.depth } = {}) {
   const THRESHOLD = 64, HOLD = 52;
   let start = null, pull = 0, busy = false, anim = null, armed = false;
   const paint = (v) => {
@@ -2392,7 +2418,7 @@ function pullToRefresh(area, ptr, onRefresh) {
     anim = spring({ from: pull, to, damping: 1, response: 0.3, onUpdate: paint, onDone: done });
   };
   area.addEventListener('touchstart', (e) => {
-    if (busy || sheet.isOpen || pages.depth || scrollY > 0 || e.touches.length > 1) return;
+    if (busy || blocked() || scrollTop() > 0 || e.touches.length > 1) return;
     anim?.stop();
     start = e.touches[0].clientY;
   }, { passive: true });
