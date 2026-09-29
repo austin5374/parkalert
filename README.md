@@ -142,7 +142,7 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 
 ## Using it
 
-1. Open the app and pick your park, or tap **Use my location**. Location is only asked for when you tap it.
+1. Open the app and pick your park, or tap **Use my location**, which suggests the park you are in ("Start at Magic Kingdom") for you to confirm, since a hotel next door or the walkway between two parks can look like the wrong one. Location is only asked for when you tap it.
 2. A short setup sheet opens: tap **Turn on notifications**, allow them, and a test arrives. On iPhone this needs ParkAlert on the Home Screen first, and the sheet says so and shows how. The free **ntfy** app is the fallback, one tap away under "Or use the ntfy app instead". Until a phone is set up, the header says **Set up alerts** instead of **Alerts on**, so a phone that will never be pinged is obvious. A phone that already allows notifications joins a new trip's alerts on its own.
 3. Add it to your home screen for the full-screen experience: Trip tab → **Add to Home Screen** (Chrome offers its own install prompt; on iPhone the sheet shows where Safari's menu item is).
 4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-character code to type on the setup screen (pasting the whole invite works too). Tapping an invite while already on another trip asks first, and an invite opened with no signal is kept until the phone reconnects.

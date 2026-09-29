@@ -777,8 +777,14 @@ function locate() {
       }
       const park = nearestPark({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       if (park) {
-        setupStatus(`You're at ${parkLabel(park.name)}.`);
-        startTrip(park.id);
+        // A hotel next door or the walkway between two parks can land on
+        // the wrong one, so it is a suggestion to confirm.
+        setupStatus(`Looks like you're at ${parkLabel(park.name)}.`);
+        const found = $('#setup-found');
+        found.innerHTML = `<button class="btn-primary pressable" type="button">Start at ${esc(parkLabel(park.name))}</button>`;
+        found.classList.remove('hidden');
+        found.querySelector('button').onclick = () => startTrip(park.id);
+        found.querySelector('button').focus();
       } else {
         setupStatus("You don't seem to be in a park yet. Pick one below.", true);
       }
