@@ -45,7 +45,7 @@ test('after the storm passes, the range runs from the all-clear and is narrow', 
   const o = downOutlook(MK, 'out0', 75, now);
   assert.equal(o.cause, 'lightning');
   assert.equal(o.weather, 'passed');
-  assert.match(o.text, /^Storm passed at \d{1,2}:\d{2}\s?[AP]M\. Usually back in \d+ to \d+ min$/);
+  assert.match(o.text, /^Storm passed at \d{1,2}:\d{2}\s?[AP]M\. Often back in \d+ to \d+ min$/);
   assert.equal(o.basis.from, 'ride');
   assert.ok(o.window.hi - o.window.lo <= 15, `window ${o.window.lo}-${o.window.hi}`);
   assert.ok(o.window.lo >= 15 && o.window.hi <= 35, `window ${o.window.lo}-${o.window.hi}`);

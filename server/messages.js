@@ -18,7 +18,7 @@ export function listNames(names, max = 5) {
   return `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 }
 
-// A range and the advice that goes with it: "Usually back in 10 to 40 min · Check back soon".
+// A range and the advice that goes with it: "Often back in 10 to 40 min · Check back soon".
 export function outlookLine(outlook) {
   if (!outlook) return null;
   if (outlook.text && outlook.advice) return `${outlook.text} · ${outlook.advice.verdict}`;

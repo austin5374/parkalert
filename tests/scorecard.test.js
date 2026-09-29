@@ -70,12 +70,15 @@ test('the scorecard groups by kind of estimate', () => {
     s('down', null, false, 36, 18),
   ], T0);
   assert.equal(card.days, 14);
+  // A share of one or two reopenings is noise: no "0% in range" after one.
   assert.deepEqual(card.groups.map((g) => [g.id, g.n, g.inRange, g.width, g.within15]), [
-    ['cleared', 2, 50, 11, 50],
-    ['weather', 1, 0, 40, 0],
-    ['other', 2, 50, 33, 50],
+    ['cleared', 2, null, 11, 50],
+    ['weather', 1, null, 40, 0],
+    ['other', 2, null, 33, 50],
   ]);
   assert.deepEqual(scorecard([], T0).groups, []);
+  const ten = scorecard(Array.from({ length: 10 }, (_, i) => s('down', null, i < 4, 30, 6)), T0);
+  assert.equal(ten.groups[0].inRange, 40, 'ten reopenings are enough to say');
 });
 
 test('a ride that closes for the day after its range has passed counts as a miss', () => {
@@ -87,6 +90,5 @@ test('a ride that closes for the day after its range has passed counts as a miss
   assert.equal(a.miss, null);
   const card = scorecard(r.scores, T0 + 40 * MIN);
   assert.equal(card.groups[0].n, 2);
-  assert.equal(card.groups[0].inRange, 0);
   assert.equal(card.groups[0].closed, 1);
 });

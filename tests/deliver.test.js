@@ -46,7 +46,7 @@ test('every phone on the trip gets the alert, encrypted and signed', async () =>
   hits.length = 0;
   const trip = { code: 'AAAAAA', topic: 't', devices: [device('a'), device('b')] };
   trips.AAAAAA = trip;
-  const result = await deliver(trip, { title: 'Space Mountain is down', message: 'Usually back in 10 to 40 min', priority: 3 }, { tag: 'ride:x' });
+  const result = await deliver(trip, { title: 'Space Mountain is down', message: 'Often back in 10 to 40 min', priority: 3 }, { tag: 'ride:x' });
   assert.deepEqual(result, { ok: true, ntfy: true, devices: 2 });
   assert.deepEqual(hits.map((h) => h.path).sort(), ['/a', '/b']);
   for (const h of hits) {

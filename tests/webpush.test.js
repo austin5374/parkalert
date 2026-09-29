@@ -32,7 +32,7 @@ test('a push decrypts on the phone to exactly what was sent', () => {
   ua.generateKeys();
   const auth = crypto.randomBytes(16);
   const sub = { p256dh: ua.getPublicKey().toString('base64url'), auth: auth.toString('base64url') };
-  const msg = JSON.stringify({ title: 'Space Mountain is down', body: 'Usually back in 10 to 40 min' });
+  const msg = JSON.stringify({ title: 'Space Mountain is down', body: 'Often back in 10 to 40 min' });
   const { text, rs } = decrypt(encrypt(msg, sub), ua, auth);
   assert.equal(text, msg);
   assert.equal(rs, 4096);

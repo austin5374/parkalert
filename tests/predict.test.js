@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { remaining, estimate, describe, classifyLive, MIN_SAMPLES } from '../server/predict.js';
+import { remaining, estimate, describe, advise, classifyLive, MIN_SAMPLES } from '../server/predict.js';
 import { applyLiveData, MISSING_POLLS, MISSING_DOWN_MS, CLOSED_OUTAGE_MS } from '../server/poller.js';
 
 const ep = (minutes, extra = {}) => ({ rideId: 'a', minutes, endedAs: 'OPERATING', kind: 'breakdown', ...extra });
@@ -56,27 +56,34 @@ test('holds pool hold episodes only, falling back to every park', () => {
   assert.equal(elsewhere.basis, 'all parks');
 });
 
-test('breakdowns never borrow from other parks', () => {
-  assert.equal(estimate({ P: [], Q: eps([5, 6, 7, 8, 9, 10]) }, 'P', 'a', 0, 'breakdown'), null);
+test("breakdowns never borrow from other parks: with none here, the built-in prior", () => {
+  assert.equal(estimate({ P: [], Q: eps([5, 6, 7, 8, 9, 10]) }, 'P', 'a', 0, 'breakdown').basis, 'prior');
 });
 
-test('down longer than nearly all history says so instead of inventing a number', () => {
+test('down longer than nearly all history says so instead of inventing a number, and advises going', () => {
   const est = estimate({ P: eps([5, 6, 7, 8, 9, 10]) }, 'P', 'a', 120, 'breakdown');
   assert.deepEqual(est, { longerThanUsual: true, kind: 'breakdown' });
-  assert.equal(describe(est), 'Down longer than most outages here');
+  assert.equal(describe(est), 'Down longer than nearly every past outage like it');
+  assert.deepEqual(advise(est), { key: 'long', verdict: 'Ride something else', detail: 'Outages this long rarely end soon.' });
 });
 
-test('no history at all gives no estimate', () => {
-  assert.equal(estimate({}, 'P', 'a', 0, 'breakdown'), null);
+test('no history at all falls back to the built-in prior, which says so', () => {
+  const est = estimate({}, 'P', 'a', 0, 'breakdown');
+  assert.equal(est.basis, 'prior');
+  assert.ok(est.p50 >= 10 && est.p50 <= 20, `a typical breakdown, not ${est.p50}`);
+  assert.ok(estimate({}, 'P', null, 0, 'hold').p50 > est.p50, 'holds run longer');
+  assert.ok(advise(est), 'every down ride says what to do');
+  // Past the prior's long tail, it says so rather than guessing.
+  assert.equal(estimate({}, 'P', 'a', 600, 'breakdown').longerThanUsual, true);
   assert.equal(describe(null), null);
 });
 
 test('describe reads like a person said it', () => {
-  assert.equal(describe({ p25: 4.2, p50: 12, p75: 38, stayedDownShare: 0 }), 'Usually back in 4 to 40 min');
-  assert.equal(describe({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), 'Usually back in about 30 min');
+  assert.equal(describe({ p25: 4.2, p50: 12, p75: 38, stayedDownShare: 0 }), 'Often back in 4 to 40 min');
+  assert.equal(describe({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), 'Often back in about 30 min');
   assert.equal(
     describe({ p25: 30, p50: 60, p75: 120, stayedDownShare: 0.14 }),
-    'Usually back in 30 min to 2 hr. About 14% stay closed for the day'
+    'Often back in 30 min to 2 hr. About 14% stay closed for the day'
   );
 });
 
@@ -223,15 +230,15 @@ test('a ride still down when the rest of its hold reopens stays in the hold', as
 });
 
 test('ranges past an hour read in hours, and the lightning rule says it is a rule', () => {
-  assert.equal(describe({ p25: 45, p50: 60, p75: 92, stayedDownShare: 0 }), 'Usually back in 45 min to 1 hr 30 min');
-  assert.equal(describe({ p25: 70, p50: 80, p75: null, stayedDownShare: 0 }), 'Usually back in about 1 hr 20 min');
-  assert.equal(describe({ p25: 30, p50: 35, p75: 45, stayedDownShare: 0, basis: 'rule' }), 'By the 30-minute rule, back in 30 to 45 min');
+  assert.equal(describe({ p25: 45, p50: 60, p75: 92, stayedDownShare: 0 }), 'Often back in 45 min to 1 hr 30 min');
+  assert.equal(describe({ p25: 70, p50: 80, p75: null, stayedDownShare: 0 }), 'Often back in about 1 hr 20 min');
+  assert.equal(describe({ p25: 30, p50: 35, p75: 45, stayedDownShare: 0, basis: 'rule' }), 'By the 30-minute lightning rule, back in 30 to 45 min');
 });
 
 test('the window is the range as the text states it', async () => {
   const { shownWindow } = await import('../server/predict.js');
   const est = { p25: 11.3, p50: 20, p75: 37.8, stayedDownShare: 0 };
-  assert.equal(describe(est), 'Usually back in 11 to 40 min');
+  assert.equal(describe(est), 'Often back in 11 to 40 min');
   assert.deepEqual(shownWindow(est), { lo: 11, hi: 40 });
   assert.deepEqual(shownWindow({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), { lo: 30, hi: null });
   assert.equal(shownWindow({ longerThanUsual: true }), null);
@@ -302,4 +309,18 @@ test('a hold rolling in over two polls is one incident', () => {
   assert.equal(incidents.size, 1);
   assert.ok(ids.every((id) => rides[id].liveKind === 'hold' && rides[id].holdSize === 8));
   assert.ok(events.every((ev) => ev.ride.incident === [...incidents][0]), 'the new rides\' events carry the incident');
+});
+
+test('one card, one set of numbers: the same rounded share everywhere, and no certainties', () => {
+  const est = { p25: 10, p50: 20, p75: 40, stayedDownShare: 0.3, chance: { 15: 0.3, 30: 0.5, 60: 0.7 }, n: 10 };
+  assert.match(describe(est), /About 30% stay closed for the day/);
+  assert.equal(advise(est).detail, "30% of outages like this didn't reopen that day.");
+  // A quarter reads as 25% in both places (it read "3 in 10" beside "25%").
+  const quarter = { ...est, stayedDownShare: 0.25 };
+  assert.match(describe(quarter), /About 25% stay closed/);
+  assert.notEqual(advise(quarter).key, 'closed');
+  const sure = { p25: 2, p50: 5, p75: 9, stayedDownShare: 0, chance: { 15: 1, 30: 1, 60: 1 }, n: 10 };
+  assert.equal(advise(sure).detail, 'Nearly all outages like this are over within 15 min.');
+  const never = { p25: 70, p50: 90, p75: 120, stayedDownShare: 0, chance: { 15: 0, 30: 0, 60: 0 }, n: 10 };
+  assert.equal(advise(never).detail, 'These usually take over an hour.');
 });

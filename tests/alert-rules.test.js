@@ -40,10 +40,10 @@ test('a day with no schedule leaves every time null', () => {
 test('a hold is one push that leads with the hold, the range and what to do', () => {
   const names = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
   const at = Date.parse('2026-09-27T19:12:00Z');
-  const outlook = { kind: 'hold', text: 'Usually back in 45 to 105 min', advice: { verdict: 'Ride something else' } };
+  const outlook = { kind: 'hold', text: 'Often back in 45 to 105 min', advice: { verdict: 'Ride something else' } };
   const down = incidentDownMessage('hold', names, 'Magic Kingdom', outlook, at, 'America/New_York');
   assert.equal(down.title, 'Park-wide hold: 7 rides closed');
-  assert.equal(down.message, 'Usually back in 45 to 105 min · Ride something else\nA, B, C, D, E and 2 more\nMagic Kingdom · 3:12\u00a0PM');
+  assert.equal(down.message, 'Often back in 45 to 105 min · Ride something else\nA, B, C, D, E and 2 more\nMagic Kingdom · 3:12\u00a0PM');
   assert.equal(incidentDownMessage('hold', names, 'Magic Kingdom', { ...outlook, cause: 'lightning' }, at, 'America/New_York').title, 'Storm hold: 7 rides closed');
   const wave = incidentDownMessage('group', ['A', 'B', 'C'], 'EPCOT', null, at, 'America/New_York');
   assert.equal(wave.title, '3 rides went down');
@@ -100,8 +100,8 @@ test('several late openings at once are one "now open" push', () => {
 });
 
 test('a grouped push speaks for the kind of outage most of its rides share', () => {
-  const hold = { kind: 'hold', text: 'Usually back in 45 to 105 min' };
-  const breakdown = { kind: 'breakdown', text: 'Usually back in 10 to 30 min' };
+  const hold = { kind: 'hold', text: 'Often back in 45 to 105 min' };
+  const breakdown = { kind: 'breakdown', text: 'Often back in 10 to 30 min' };
   assert.equal(groupOutlook([breakdown, hold, hold, hold]), hold);
   assert.equal(groupOutlook([hold, breakdown, breakdown]), breakdown);
   assert.equal(groupOutlook([hold, breakdown, { kind: 'opening' }]), null);

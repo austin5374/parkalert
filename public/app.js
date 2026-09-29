@@ -1101,17 +1101,45 @@ function isFollowing(rideId) {
 }
 
 // Elapsed in red, and the usual reopening window shaded just ahead of it.
+// With no upper end to the range, only its start is marked: an invented
+// "twice that" would claim more than the estimate does.
 function timeline(r) {
   const w = r.outlook?.window;
   if (!w || w.lo == null) return '';
   const spent = (Date.now() - r.downSince) / 60000;
-  const hi = w.hi ?? w.lo * 2;
+  const hi = w.hi ?? w.lo;
   const end = (spent + hi) * 1.12 || 1;
   const pct = (m) => `${Math.min(100, (m / end) * 100).toFixed(1)}%`;
   return `<div class="timeline" aria-hidden="true">
-    <span class="window" style="left:${pct(spent + w.lo)};width:${pct(hi - w.lo)}"></span>
+    <span class="window" style="left:${pct(spent + w.lo)};width:${pct(Math.max(hi - w.lo, end * 0.015))}"></span>
     <span class="spent" style="width:${pct(spent)}"></span>
   </div>`;
+}
+
+// The range as clock times, which is what people plan around, said one way
+// everywhere: "Often back 8:05 to 8:27 AM", or "around 8:05 AM" with no
+// upper end. The start never moves earlier than one already shown for the
+// same outage: a range read later can shift back a little as the curve
+// updates, and "back by 8:38" after "8:40" reads as a mistake.
+const shownFrom = new Map(); // "rideId|downSince" -> epoch ms
+function backClock(r, o) {
+  const w = o?.window;
+  if (!w || w.lo == null) return '';
+  const key = `${r.id}|${r.downSince}`;
+  const lo = Math.max(Date.now() + w.lo * 60000, shownFrom.get(key) ?? 0);
+  shownFrom.set(key, lo);
+  if (shownFrom.size > 200) shownFrom.delete(shownFrom.keys().next().value);
+  const hi = w.hi == null ? null : Math.max(lo, Date.now() + w.hi * 60000);
+  return `Often back ${fmtSpan(lo, hi)}`;
+}
+
+// "8:05 to 8:27 AM", "11:50 AM to 12:10 PM", or "around 8:05 AM".
+function fmtSpan(a, b) {
+  const A = fmtTime(a), B = b == null ? A : fmtTime(b);
+  if (A === B) return `around ${A}`;
+  const [ta, pa] = A.split(/\s(?=[AP]M$)/);
+  const [, pb] = B.split(/\s(?=[AP]M$)/);
+  return `${pa && pa === pb ? ta : A} to ${B}`;
 }
 
 // "7 PM": an hour on the park's clock.
@@ -1147,16 +1175,21 @@ function crowdRowHtml() {
 // nested fills on one track, darkest for soonest: a long dark bar means
 // likely soon. The numbers sit in a legend beneath, so nothing rests on
 // shade alone.
+// A few dozen outages can't make anything certain, so the ends read ">95%"
+// and "<5%", never 100% or 0%. A key for a share that small is drawn hollow,
+// as its fill on the bar is.
 function chanceHtml(o) {
   const c = o?.chance;
   if (!c) return '';
   const pct = (p) => Math.round(p * 100);
+  const say = (p) => (p >= 0.955 ? '>95%' : p < 0.045 ? '<5%' : `${pct(p)}%`);
+  const key = (m, label) => `<span><i class="k${m}${c[m] < 0.045 ? ' none' : ''}"></i>${label} ${say(c[m])}</span>`;
   return `<div class="chance" aria-hidden="true">
       <span class="c60" style="width:${pct(c[60])}%"></span>
       <span class="c30" style="width:${pct(c[30])}%"></span>
       <span class="c15" style="width:${pct(c[15])}%"></span>
     </div>
-    <p class="chance-key"><span class="vh">Chance it's back: </span><span><i class="k15"></i>15 min ${pct(c[15])}%</span><span><i class="k30"></i>30 min ${pct(c[30])}%</span><span><i class="k60"></i>1 hr ${pct(c[60])}%</span></p>`;
+    <p class="chance-key"><span class="chance-label">Chance it's back within</span>${key(15, '15 min')}${key(30, '30 min')}${key(60, '1 hr')}</p>`;
 }
 
 function adviceHtml(o, cls = 'card-advice') {
@@ -1165,13 +1198,6 @@ function adviceHtml(o, cls = 'card-advice') {
   return `<p class="${cls} advice-${a.key}"><strong>${esc(a.verdict)}.</strong> ${esc(a.detail)}</p>`;
 }
 
-// The range as clock times, which is what people plan around.
-function likelyBack(o) {
-  const w = o?.window;
-  if (!w || w.lo == null) return '';
-  const lo = fmtTime(Date.now() + w.lo * 60000), hi = fmtTime(Date.now() + (w.hi ?? w.lo * 2) * 60000);
-  return lo === hi ? `Likely back around ${lo}` : `Likely back ${lo} to ${hi}`;
-}
 
 function downCard(r) {
   const o = r.outlook || {};
@@ -1192,7 +1218,7 @@ function downCard(r) {
       <p class="card-sub">${since}</p>
       ${adviceHtml(o)}
       ${o.chance ? chanceHtml(o) : timeline(r)}
-      ${likelyBack(o) ? `<p class="card-clock">${esc(likelyBack(o))}</p>` : ''}
+      ${backClock(r, o) ? `<p class="card-clock">${esc(backClock(r, o))}</p>` : ''}
       ${foot ? `<p class="card-foot">${esc(foot)}</p>` : ''}
     </article>`;
 }
@@ -1975,6 +2001,7 @@ function statusLine(r) {
 // What a range rests on, in a few words for the card.
 function basisLine(o) {
   if (!o?.basis) return '';
+  if (o.basis.from === 'prior') return 'From typical theme park outages, until ParkAlert knows this park';
   if (o.cause) {
     if (o.basis.from === 'rule') return 'From the 30-minute lightning rule';
     return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
@@ -1996,7 +2023,10 @@ function estimateExplainer(o) {
     const what = o.cause === 'rain' ? 'rain closures' : 'storms';
     return `Timed from when the ${o.cause === 'rain' ? 'rain stopped' : 'storm passed'}, not from when the ride went down: based on ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. The middle half of them reopened within the range above.`;
   }
-  if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past one here, so there is no honest range to give.' : '';
+  if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past outage like it, so there is no honest range to give.' : '';
+  if (o.basis.from === 'prior') {
+    return "ParkAlert hasn't seen enough outages here yet, so this range comes from typical theme park outages: breakdowns often take about 15 minutes, holds closer to an hour. It switches to this park's own record once there is one.";
+  }
   const kind = { hold: 'park-wide holds', opening: 'delayed openings' }[o.kind] || 'breakdowns';
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
   return `Based on ${o.basis.outages} past ${kind} ${where} that lasted at least as long as this one has so far. The middle half of them reopened within the range above.`;
@@ -2099,10 +2129,7 @@ function rideHtml(r, detail, failed) {
   const parts = [`<p class="page-sub ${down ? 'tint-red' : ''}" data-key="status">${esc(statusLine(r))}</p>`];
 
   if (down) {
-    const w = o?.window;
-    const clock = w && w.lo != null
-      ? `Likely back between ${fmtTime(Date.now() + w.lo * 60000)} and ${fmtTime(Date.now() + (w.hi ?? w.lo * 2) * 60000)}`
-      : '';
+    const clock = backClock(r, o);
     parts.push(`
       <div class="group padded outlook-block" data-key="outlook">
         ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · park-wide hold' : ''}</p>`
@@ -2274,7 +2301,7 @@ function parkHtml(info, failed) {
     parts.push(`<h2 class="section-label" data-key="est-label">How the estimates did, last ${info.estimates.days} days</h2>
       <div class="group plain" data-key="est">${info.estimates.groups.map((g) => `
       <div class="row" data-key="${esc(g.label)}"><span class="row-label">${esc(g.label)}<small>${g.n} outage${g.n === 1 ? '' : 's'}${g.closed ? `, ${g.closed} closed for the day` : ''} · ranges about ${g.width} min wide</small></span>
-      <span class="row-detail">${g.inRange}% in range</span></div>`).join('')}</div>
+      <span class="row-detail">${g.inRange == null ? 'Not enough reopenings yet' : `${g.inRange}% in range`}</span></div>`).join('')}</div>
       <p class="footnote" data-key="est-foot">A range is the middle half of past outages like it, so about half should land inside. Ranges after the weather clears are the tight ones; breakdowns are hard to call closely.</p>`);
   }
   if (!info) {

@@ -134,7 +134,7 @@ test('an estimate is written down when a ride goes down and scored when it reope
     assert.equal(parkState[PARK].scores.length, 1);
     // Back almost at once: well short of the range.
     assert.equal(parkState[PARK].scores[0].hit, false);
-    assert.deepEqual(scorecard(parkState[PARK].scores).groups.map((g) => [g.id, g.n, g.inRange]), [['other', 1, 0]]);
+    assert.deepEqual(scorecard(parkState[PARK].scores).groups.map((g) => [g.id, g.n, g.inRange]), [['other', 1, null]], 'too few to give a share');
   } finally {
     history.episodes[PARK] = saved;
   }

@@ -259,7 +259,7 @@ function minutesToClose(parkId, now) {
   return m > 0 ? m : null;
 }
 
-// "Storm passed at 3:12 PM. Usually back in 20 to 35 min", or while it goes
+// "Storm passed at 3:12 PM. Often back in 20 to 35 min", or while it goes
 // on, "Lightning still nearby. ..." with a range if the archive can give one.
 export function describeOutlook(w, est, timezone) {
   const range = describe(est);
