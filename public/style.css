@@ -345,9 +345,10 @@ main {
 
 /* ---- Trip ---- */
 .code-card { padding: 1.1rem var(--gutter) var(--gutter); text-align: center; }
+/* Always all six characters: it is what a guest reads aloud to family. */
 .trip-code {
-  font-size: 2.25rem; font-weight: 700; letter-spacing: 0.22em; margin: 0.15rem 0 0.9rem 0.22em;
-  font-variant-numeric: tabular-nums; font-feature-settings: 'ss01';
+  font-size: min(2.25rem, 11vw); font-weight: 700; letter-spacing: 0.22em; margin: 0.15rem 0 0.9rem 0.22em;
+  font-variant-numeric: tabular-nums; font-feature-settings: 'ss01'; white-space: nowrap;
 }
 .btn-primary, .btn-secondary {
   display: flex; align-items: center; justify-content: center; gap: 0.45rem;
@@ -579,6 +580,14 @@ main { position: relative; transition: none; }
 .ax-type .segmented { flex-wrap: wrap; }
 .ax-type .segmented button { flex-basis: 45%; }
 .ax-type { --tabbar-h: 56px; }
+/* Margins stay phone-sized, as iOS keeps them, so the text gets the width. */
+.ax-type { --gutter: 16px; }
+.ax-type .search-row { flex-wrap: wrap; }
+.ax-type .search-row .search { flex-basis: 100%; }
+.ax-type .trip-code { letter-spacing: 0.12em; margin-left: 0.12em; }
+/* A button whose label wraps keeps its icon above the words, not stranded
+   beside the first line. */
+.ax-type .btn-primary { flex-direction: column; gap: 0.2rem; padding: 0.6rem var(--gutter); }
 .ax-type .tab { font-size: 11px; }
 .ax-type .tab svg { width: 26px; height: 26px; }
 .ax-type .badge { font-size: 11px; min-width: 18px; height: 18px; line-height: 18px; }
@@ -638,7 +647,10 @@ main { position: relative; transition: none; }
 
 /* Search with its sort toggle beside it. */
 .search-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem var(--gutter) 0; }
-.search-row .search { flex: 1; margin: 0; }
+/* min-width 0: a text field's intrinsic width (about 20 characters) must
+   never set the row's, or at large text the page pans sideways. */
+.search-row .search { flex: 1; margin: 0; min-width: 0; }
+.search input { width: 100%; }
 .sort-btn {
   flex: none; display: inline-flex; align-items: center; gap: 0.25rem; min-height: 2.25rem; padding: 0 0.7rem;
   border-radius: 0.65rem; background: var(--fill); color: var(--accent); font-size: 0.9375rem; font-weight: 600;
