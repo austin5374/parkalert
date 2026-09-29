@@ -7,7 +7,7 @@ const VERSION = '__APP_VERSION__';
 const CACHE = `parkalert-${VERSION}`;
 const ASSETS = [
   '/', '/style.css', '/time.js', '/app.js', '/manifest.webmanifest',
-  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon.svg', '/icons/apple-touch-icon.png',
+  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon.svg', '/icons/apple-touch-icon.png', '/icons/badge-96.png',
 ];
 
 self.addEventListener('install', (e) => {
@@ -71,7 +71,9 @@ self.addEventListener('push', (e) => {
     renotify: !!d.tag && !d.quiet,
     silent: !!d.quiet,
     icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    // Android draws the badge from its alpha alone: a full-colour square
+    // came out as a solid white block in the status bar.
+    badge: '/icons/badge-96.png',
     data: { url: d.url || '/', ride: d.ride || null },
   }));
 });

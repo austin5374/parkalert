@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!-- ParkAlert: a coaster loop at dusk (night blue into a sunset orange; no purple), with an alert badge. Source for every
        PNG in this folder; maskable-*.png are the same art pulled in to the
-       Android safe zone. -->
+       Android safe zone, and badge-96.png is the loop alone in white on
+       transparent, for Android's status bar. -->
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#0a1a33"/>
