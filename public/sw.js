@@ -56,6 +56,12 @@ self.addEventListener('fetch', (e) => {
 self.addEventListener('push', (e) => {
   let d;
   try { d = e.data.json(); } catch { d = { title: 'ParkAlert', body: e.data?.text() || '' }; }
+  // The Home Screen badge follows the rides down, even with the app closed.
+  if (Number.isInteger(d.badge)) {
+    try { (d.badge ? self.navigator.setAppBadge?.(d.badge) : self.navigator.clearAppBadge?.())?.catch?.(() => {}); } catch {}
+  }
+  // An open app refreshes at once, so what it shows matches what just arrived.
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then((ws) => ws.forEach((w) => w.postMessage({ type: 'refresh' }))).catch(() => {}));
   e.waitUntil(self.registration.showNotification(d.title || 'ParkAlert', {
     body: d.body || '',
     tag: d.tag || undefined,

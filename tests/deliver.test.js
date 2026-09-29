@@ -78,10 +78,12 @@ test('a subscription the push service says is gone is removed from the trip', as
   assert.deepEqual(trip.devices.map((d) => d.id), ['h']);
 });
 
-test('down and back-up alerts go out with high urgency only for the important ones', async () => {
+test('alerts go out urgent, and quiet updates and routine pushes do not', async () => {
   hits.length = 0;
   const trip = { code: 'EEEEEE', topic: 't', devices: [device('i')] };
   await deliver(trip, { title: 'back up', message: 'm', priority: 4 });
-  await deliver(trip, { title: 'down', message: 'm', priority: 3 });
-  assert.deepEqual(hits.map((h) => h.headers.urgency), ['high', 'normal']);
+  await deliver(trip, { title: 'down', message: 'm', priority: 3, urgency: 'high' });
+  await deliver(trip, { title: 'lines building', message: 'm', priority: 3 });
+  await deliver(trip, { title: '6 of 18 back', message: 'm', priority: 4, quiet: true });
+  assert.deepEqual(hits.map((h) => h.headers.urgency), ['high', 'high', 'normal', 'normal']);
 });

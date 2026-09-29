@@ -191,6 +191,9 @@ function isPastClosing(state, now = Date.now()) {
   return closing ? now > new Date(closing).getTime() : false;
 }
 
+// Whether the trip has alerts on for this ride at all (its switch), pause aside.
+export const followsRide = (trip, rideId) => !trip.rideMutes?.[rideId] && (trip.watched == null || trip.watched.includes(rideId));
+
 export function isTripMuted(trip, rideId, state, now = Date.now()) {
   if (trip.mute && (trip.mute.until === null || trip.mute.until > now)) return true;
   if (trip.rideMutes?.[rideId]) return true;
@@ -409,9 +412,11 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       });
     }
 
+    // The Home Screen badge: this trip's rides down now.
+    const badge = Object.entries(rides).filter(([id, r]) => r.status === 'DOWN' && followsRide(trip, id)).length;
     for (const push of pushes) {
       if (simulated) push.message += ' · SIMULATED TEST';
-      if (await deliver(trip, push, { tag: push.tag })) sent++;
+      if (await deliver(trip, push, { tag: push.tag, badge })) sent++;
     }
   }));
   // Once told, an incident's later rides update its push instead of starting another.

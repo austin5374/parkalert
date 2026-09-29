@@ -41,7 +41,7 @@ export function downMessage(ride, outlook, parkName, timezone) {
   if (outlook?.kind === 'hold') lines.push(`Part of a ${holdTitle(outlook).toLowerCase()}: ${outlook.rides} rides closed`);
   const line = outlookLine(outlook);
   if (line) lines.push(line);
-  return { title: `${ride.name} is down`, message: lines.join('\n'), priority: 3 };
+  return { title: `${ride.name} is down`, message: lines.join('\n'), priority: 3, urgency: 'high' };
 }
 
 // ev: an UP event (downtimeMs, late, reopenedAt).
@@ -75,12 +75,12 @@ export const LONG_OUTAGE_MS = 60 * 60_000;
 
 export function goneMessage(ev, parkName, timezone) {
   const since = ev.ride.downSince ? `Down since ${localTime(ev.ride.downSince, timezone)}. ` : '';
-  return { title: `${ev.ride.name} is no longer listed`, message: `${since}It left the park's ride list while down, and may not reopen today · ${parkName}`, priority: 3 };
+  return { title: `${ev.ride.name} is no longer listed`, message: `${since}It left the park's ride list while down, and may not reopen today · ${parkName}`, priority: 3, urgency: 'high' };
 }
 
 export function closedMessage(ev, parkName, timezone) {
   const since = ev.ride.downSince ? `Down since ${localTime(ev.ride.downSince, timezone)}, now closed` : 'Now closed';
-  return { title: `${ev.ride.name} has closed`, message: `${since}. It may not reopen today · ${parkName}`, priority: 3 };
+  return { title: `${ev.ride.name} has closed`, message: `${since}. It may not reopen today · ${parkName}`, priority: 3, urgency: 'high' };
 }
 
 // ---- Several rides ----
@@ -103,10 +103,10 @@ export function incidentDownMessage(kind, names, parkName, outlook, at, timezone
   const when = `${parkName} · ${after != null ? `between ${localTime(after, timezone)} and ${localTime(at, timezone)}` : localTime(at, timezone)}`;
   if (kind === 'hold') {
     const lines = [outlookLine(outlook), listNames(names), when].filter(Boolean);
-    return { title: `${holdTitle(outlook)}: ${names.length} rides closed`, message: lines.join('\n'), priority: 3 };
+    return { title: `${holdTitle(outlook)}: ${names.length} rides closed`, message: lines.join('\n'), priority: 3, urgency: 'high' };
   }
   const lines = [listNames(names), when, outlookLine(outlook)].filter(Boolean);
-  return { title: `${names.length} rides went down`, message: lines.join('\n'), priority: 3 };
+  return { title: `${names.length} rides went down`, message: lines.join('\n'), priority: 3, urgency: 'high' };
 }
 
 // More rides joining a hold already announced: the same notification,
@@ -131,7 +131,7 @@ export function incidentUpMessage({ names, back, total, closed = [], downtimes =
 // Several unrelated rides in one poll: "back up" or "closed".
 export function groupMessage(type, names, parkName, { late = false, downtimes = [] } = {}) {
   if (type === 'CLOSED') {
-    return { title: `${names.length} rides have closed`, message: `${listNames(names)}\nThey may not reopen today · ${parkName}`, priority: 3 };
+    return { title: `${names.length} rides have closed`, message: `${listNames(names)}\nThey may not reopen today · ${parkName}`, priority: 3, urgency: 'high' };
   }
   const took = groupDowntime(downtimes, late);
   return {
