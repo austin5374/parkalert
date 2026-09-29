@@ -111,6 +111,20 @@ let saveChain = Promise.resolve();
 function confirmTrip(trip) {
   confirmedTrip = structuredClone(trip);
 }
+// Two tabs on one trip (or Safari and the Home Screen app on a computer):
+// a change saved in one shows in the other at once, instead of at its next
+// refresh. A trip joined or left in another tab reloads this one onto it.
+const otherTabs = 'BroadcastChannel' in self ? new BroadcastChannel('parkalert') : null;
+otherTabs?.addEventListener('message', (e) => {
+  if (!e.data || e.data.code !== tripCode || !dash) return;
+  if (e.data.what === 'phone') syncPhone();
+  else refresh();
+});
+const tellOtherTabs = (what = 'trip') => otherTabs?.postMessage({ code: tripCode, what });
+addEventListener('storage', (e) => {
+  if (e.key === 'parkalert.trip' && (e.newValue || null) !== (tripCode || null)) location.reload();
+});
+
 function save(apply, body, afterSave) {
   const before = structuredClone(dash.trip);
   apply(dash.trip);
@@ -120,6 +134,7 @@ function save(apply, body, afterSave) {
     try {
       const { trip } = await patchTrip(body);
       confirmTrip(trip);
+      tellOtherTabs();
       // Later saves still on their way keep their optimistic changes.
       if (savesPending === 1) {
         Object.assign(dash.trip, trip);
@@ -151,7 +166,8 @@ let toastNow = null; // { text, action }
 const toastQueue = [];
 function toast(text, action) {
   const item = { text, action };
-  if (toastNow?.action && !action) {
+  // An offer that can wait (a new version) never replaces an Undo either.
+  if (toastNow?.action && (!action || action.defer)) {
     toastQueue.push(item);
     return;
   }
@@ -170,11 +186,24 @@ function showToast(item) {
 }
 function hideToast() {
   clearTimeout(toastTimer);
-  $('#toast').classList.remove('show');
+  const t = $('#toast');
+  if (t.classList.contains('show')) toastGone = { rect: t.getBoundingClientRect(), at: Date.now() };
+  t.classList.remove('show');
   toastNow = null;
   const next = toastQueue.shift();
   if (next) setTimeout(() => showToast(next), 250);
 }
+// A tap aimed at a toast that faded just as it landed does nothing, rather
+// than hitting whatever was underneath (the Trip tab's park row, say).
+let toastGone = null;
+document.addEventListener('click', (e) => {
+  if (!toastGone || Date.now() - toastGone.at > 400 || e.target.closest('#toast')) return;
+  const r = toastGone.rect;
+  if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);
 
 // iOS Safari only shows :active press states under an element with a touch
 // listener; main has one, sheets and the setup screen didn't. One empty
@@ -908,6 +937,7 @@ async function setPhoneMute(mute, { undo = true } = {}) {
   try {
     const { device } = await api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}`, { method: 'PATCH', body: { mute } });
     phone.mute = device.mute;
+    tellOtherTabs('phone');
     renderAll();
     if (undo) {
       toast(mute ? (mute.until === null ? 'This phone is paused until you turn it back on' : `This phone is paused until ${fmtUntil(mute.until)}`) : 'This phone gets alerts again', {
@@ -1029,7 +1059,9 @@ syncDynamicType();
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   syncDynamicType();
-  if (dash) renderHeader();
+  // Everything, not just the header: an empty state saying "Everything's
+  // running" under "5 min old" is wrong until the refresh lands.
+  if (dash) renderAll();
 });
 
 function syncTypeSize() {
@@ -1837,7 +1869,14 @@ function renderAll() {
 }
 
 /* ---------- Sheets ---------- */
-function openPause() {
+// The sheet opens at once, then redraws from a fresh dashboard, so a pause
+// or resume made on another phone meanwhile shows in its choices.
+function openPause({ fresh = false } = {}) {
+  if (!fresh) {
+    refresh().then(() => {
+      if (sheet.isOpen && $('#sheet-body').firstElementChild?.dataset.sheet === 'pause') openPause({ fresh: true });
+    });
+  }
   const st = alertState();
   // 7am on the park's clock: this morning if it's not 7 yet, else tomorrow.
   // The phone's own midnight would make a 12:30am pause last 30 hours.
@@ -1860,7 +1899,7 @@ function openPause() {
     : perPhone
       ? 'Pause just this phone, or everyone on the trip. The Down now list keeps updating either way.'
       : 'Nobody on this trip gets alerts while paused. The Down now list keeps updating.';
-  const content = el(`<div>${sheetHead('Pause alerts', note)}</div>`);
+  const content = el(`<div data-sheet="pause">${sheetHead('Pause alerts', note)}</div>`);
   const optionRows = (scope) => {
     const g = el('<div class="group plain"></div>');
     for (const [label, until] of options) {
@@ -2288,6 +2327,7 @@ async function setWaitAlert(rideId, max) {
     const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: { max } });
     dash.trip = trip;
     confirmTrip(trip);
+    tellOtherTabs();
     renderAll();
     toast(max == null ? 'Wait alert off' : `Wait alert set for ${max} min or less`);
   } catch {
@@ -2962,7 +3002,7 @@ let reloading = false;
 function offerUpdate(worker) {
   if (!worker || waitingWorker === worker) return;
   waitingWorker = worker;
-  toast('A new version of ParkAlert is ready', { label: 'Reload', run: () => worker.postMessage('activate'), sticky: true });
+  toast('A new version of ParkAlert is ready', { label: 'Reload', run: () => worker.postMessage('activate'), sticky: true, defer: true });
 }
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
@@ -3260,8 +3300,14 @@ $('#btn-share').onclick = async () => {
   const url = `${location.origin}/?join=${tripCode}`;
   const text = `Join my ParkAlert trip${dash ? ` at ${parkLabel(dash.park.name)}` : ''}. Code ${tripCode}`;
   if (navigator.share) {
-    try { await navigator.share({ title: 'ParkAlert', text, url }); } catch {}
-    return;
+    try {
+      await navigator.share({ title: 'ParkAlert', text, url });
+      return;
+    } catch (err) {
+      // Cancelled: nothing to do. Anything else (not allowed here, a
+      // broken share target) falls back to copying the link.
+      if (err?.name === 'AbortError') return;
+    }
   }
   try {
     await navigator.clipboard.writeText(`${text}\n${url}`);
