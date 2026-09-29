@@ -28,6 +28,7 @@
   --red-soft: rgba(255, 59, 48, 0.12);
   --accent-soft: rgba(0, 122, 255, 0.16);
   --chrome: rgba(242, 242, 247, 0.78);
+  --tabbar-bg: rgba(242, 242, 247, 0.94);
   --toast: rgba(255, 255, 255, 0.94);
   --sheet: #f2f2f7;
   --sheet-group: #ffffff;
@@ -60,6 +61,7 @@
     --red-soft: rgba(255, 69, 58, 0.16);
     --accent-soft: rgba(10, 132, 255, 0.22);
     --chrome: rgba(18, 18, 20, 0.74);
+    --tabbar-bg: rgba(18, 18, 20, 0.94);
     --toast: rgba(52, 52, 56, 0.95);
     --sheet: #1c1c1e;
     --sheet-group: #2c2c2e;
@@ -376,7 +378,9 @@ main {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; justify-content: center;
   padding-bottom: env(safe-area-inset-bottom);
-  background: var(--chrome);
+  /* Nearly opaque: its small labels must stay readable over whatever
+     scrolls beneath (a green switch took them under 4.5:1). */
+  background: var(--tabbar-bg);
   -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 -0.5px 0 var(--separator);
 }

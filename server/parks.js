@@ -13,7 +13,7 @@ export const PARKS = [
     weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.4177,
     lng: -81.5812,
-    radiusKm: 1.0,
+    radiusKm: 0.65,
   },
   {
     id: '47f90d2c-e191-4239-a466-5892ef59a88b',
