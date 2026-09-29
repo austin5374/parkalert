@@ -62,12 +62,15 @@ export function saveAtomic(file, obj, indent, { keepBackup = false } = {}) {
   fs.renameSync(tmp, file);
 }
 
-// trips: { [code]: { code, topic, parkId, watched, watchedByPark, mute, rideMutes, createdAt, lastSeenAt } }
+// trips: { [code]: { code, topic, parkId, watched, watchedByPark, mute, rideMutes, createdAt, lastSeenAt, devices, ntfyConfirmedAt, idleWarnedFor } }
 //   watched: null = all rides, or array of ride ids (for the current park)
 //   watchedByPark: { [parkId]: watched } saved when hopping away from a park
 //   mute: null, or { until: epoch-ms | null } (null until = muted indefinitely)
 //   rideMutes: { [rideId]: true }
 //   lastSeenAt: last dashboard load, written at most hourly (see touchTrip)
+//   devices: phones on the app's own notifications ({ id, endpoint, keys, mute, createdAt, seenAt })
+//   ntfyConfirmedAt: when a phone last said an ntfy test arrived
+//   idleWarnedFor: the tripIdleAt its phones were last warned about
 export const trips = load(TRIPS_FILE, {});
 
 // parkState: { [parkId]: { lastPoll, lastError, timezone, schedule, rides, recent, waits, calls, scores } }
@@ -208,9 +211,21 @@ export function getTrip(code) {
 // no longer polled, which is most of what this app costs to run. Opening the
 // app again brings it straight back.
 export const TRIP_IDLE_MS = 21 * 24 * 3600_000;
+// Trips are made months ahead, then left in a pocket on the day waiting for
+// pushes. One with a phone signed up for alerts (the app's own, or ntfy once
+// a test arrived) keeps going for two months, and its phones hear the day
+// before it stops (warnIdleTrips in poller.js).
+export const ALERT_TRIP_IDLE_MS = 60 * 24 * 3600_000;
+
+export const hasAlertPhones = (trip) => !!trip.devices?.length || !!trip.ntfyConfirmedAt;
+
+// When the trip stops being polled unless someone opens it.
+export function tripIdleAt(trip, now = Date.now()) {
+  return (trip.lastSeenAt ?? trip.createdAt ?? now) + (hasAlertPhones(trip) ? ALERT_TRIP_IDLE_MS : TRIP_IDLE_MS);
+}
 
 export function isTripActive(trip, now = Date.now()) {
-  return now - (trip.lastSeenAt ?? trip.createdAt ?? now) < TRIP_IDLE_MS;
+  return now < tripIdleAt(trip, now);
 }
 
 export function activeParkIds(now = Date.now()) {

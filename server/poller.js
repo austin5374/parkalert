@@ -1,7 +1,7 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
 import { deliver, hasReceiver, reachedSomeone } from './deliver.js';
 import { APP_URL } from './config.js';
-import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
+import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive, hasAlertPhones, tripIdleAt } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
 import { estimate, describe, shownWindow, classifyLive, advise } from './predict.js';
@@ -15,7 +15,7 @@ import { recordCalls, scoreCalls } from './scorecard.js';
 import { gateEvents, gateSnapshot, restoreGate, forgetPending, pendingUpFor } from './gate.js';
 import {
   localTime, downMessage, upMessage, closedMessage, groupMessage, groupOutlook,
-  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, LONG_OUTAGE_MS,
+  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, idleMessage, LONG_OUTAGE_MS,
 } from './messages.js';
 import { localDate } from './time.js';
 import { currentSchedule, isParkClosed, hoursDisagree } from './parkstatus.js';
@@ -640,7 +640,32 @@ function trackEstimates(parkId, state, events, now) {
 // or slow alert delivery at one park never delays another's alerts.
 async function pollAll() {
   await Promise.all(activeParkIds().map((parkId) => pollPark(parkId)));
+  await warnIdleTrips().catch((err) => console.error('[poller] idle warnings:', err.message));
 }
+
+export const IDLE_WARN_MS = 24 * 3600_000;
+
+// A trip with phones on it gets one push the day before it stops being
+// polled, sent in the park's daytime, so a family who made it months ahead
+// isn't left waiting for alerts that will never come. Opening the app moves
+// the day, and a later one gets its own warning.
+export async function warnIdleTrips(now = Date.now()) {
+  for (const trip of Object.values(trips)) {
+    if (!hasAlertPhones(trip) || !isTripActive(trip, now)) continue;
+    const idleAt = tripIdleAt(trip, now);
+    if (idleAt - now > IDLE_WARN_MS || trip.idleWarnedFor === idleAt) continue;
+    if (trip.mute && (trip.mute.until === null || trip.mute.until > now)) continue;
+    const hour = localHour(now, zoneOf(trip.parkId));
+    if (hour < 9 || hour >= 20) continue;
+    const result = await deliver(trip, { ...idleMessage(trip.code), click: appLink(trip) }, { tag: 'idle', now });
+    if (!reachedSomeone(trip, result)) continue;
+    trip.idleWarnedFor = idleAt;
+    saveTrips();
+  }
+}
+
+const zoneOf = (parkId) => parkState[parkId]?.timezone || getPark(parkId)?.timezone || 'America/New_York';
+const localHour = (ts, timezone) => Number(new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', hourCycle: 'h23' }).format(new Date(ts)));
 
 let pollTimer = null;
 export function startPolling() {

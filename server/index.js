@@ -346,9 +346,11 @@ async function handleApi(req, res, url) {
     if (req.method === 'POST' && parts.length === 4) {
       const sub = parseSubscription(await readBody(req), isPushEndpoint);
       let device = trip.devices.find((d) => d.endpoint === sub.endpoint);
-      if (device) device.keys = sub.keys;
-      else {
-        device = { id: crypto.randomBytes(9).toString('base64url'), ...sub, mute: null, createdAt: Date.now() };
+      if (device) {
+        device.keys = sub.keys;
+        device.seenAt = Date.now();
+      } else {
+        device = { id: crypto.randomBytes(9).toString('base64url'), ...sub, mute: null, createdAt: Date.now(), seenAt: Date.now() };
         trip.devices.push(device);
         // A phone that reinstalled the app many times leaves old ones behind.
         if (trip.devices.length > MAX_DEVICES) trip.devices.splice(0, trip.devices.length - MAX_DEVICES);

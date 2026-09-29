@@ -149,3 +149,14 @@ export function groupOutlook(outlooks) {
   const [kind, n] = [...counts].sort((a, b) => b[1] - a[1])[0] || [];
   return n * 2 >= outlooks.length ? outlooks.find((o) => o.kind === kind) : null;
 }
+
+// ---- The trip itself ----
+
+// The day before a trip nobody opens stops being polled.
+export function idleMessage(code) {
+  return {
+    title: 'Ride alerts stop tomorrow',
+    message: `Nobody has opened trip ${code} in two months. Open ParkAlert to keep its alerts on.`,
+    priority: 3,
+  };
+}
