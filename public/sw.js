@@ -50,15 +50,17 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// The app's own notifications. The server sends { title, body, url, tag };
-// a newer notification with the same tag (the same ride) replaces the older.
+// The app's own notifications. The server sends { title, body, url, tag,
+// quiet }; a newer notification with the same tag (the same ride, or the
+// same storm) replaces the older. A quiet one replaces it without a sound.
 self.addEventListener('push', (e) => {
   let d;
   try { d = e.data.json(); } catch { d = { title: 'ParkAlert', body: e.data?.text() || '' }; }
   e.waitUntil(self.registration.showNotification(d.title || 'ParkAlert', {
     body: d.body || '',
     tag: d.tag || undefined,
-    renotify: !!d.tag,
+    renotify: !!d.tag && !d.quiet,
+    silent: !!d.quiet,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
     data: { url: d.url || '/' },

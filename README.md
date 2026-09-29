@@ -47,7 +47,8 @@ server/
   index.js        HTTP server: API routes, static files, security headers, rate limits
   config.js       every environment setting, with its default
   poller.js       60s polling, transition detection, alert wording and fan-out
-  gate.js         anti-flicker: which transitions phones hear about, and when
+  gate.js         anti-flicker and incidents: which transitions phones hear about, and when
+  messages.js     what each push says
   waitalerts.js   "tell me when the wait drops to N min" alerts
   deliver.js      sends each alert: the trip's ntfy topic, and every phone on the app's own notifications
   webpush.js      Web Push: VAPID signing and RFC 8291 encryption, no library
@@ -160,14 +161,14 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 ### Notifications
 
 - `Space Mountain is down` on OPERATING → DOWN, with a line like `Usually back in 10 to 40 min`
-- `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING
+- `Space Mountain is back up` with `Was down 47 min` on DOWN → OPERATING, once it has stayed up for a minute. After an outage of an hour or more the title says so: `Peter Pan's Flight is back up after 5 hr 20 min`
 - `Space Mountain has closed` with `Down since 2:10 PM, now closed. It may not reopen today` when a down ride switches to CLOSED in the middle of the day (not before opening or around closing, when that is just the park's hours). If it reopens within 8 hours you get `is back up` with the whole outage.
 - `Space Mountain: 25 min wait` with `You asked for 30 min or less` when a wait alert is met. Once per alert; a pause or the park's close holds it rather than using it up.
-- `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
-- Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are, and a grouped "back up" says how long they were down. A ride still down when the rest of its hold reopens stays in the hold, with the hold's estimate.
+- `Seven Dwarfs Mine Train is now open` with `Opened at 9:40 AM, late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
+- Rides that go down together are one incident: a park-wide hold, or three or more rides in one poll. The incident is one push that leads with the hold, the range and what to do (`Storm hold: 18 rides closed` / `Usually back in 45 min to 1 hr 10 min · Ride something else`). As its rides reopen, their "back up"s are gathered a few minutes at a time into `6 of 18 rides are back up`, which replaces the storm's push on the lock screen without a sound, then `All 18 rides are back up` with a buzz. A ride that joins a hold already announced updates that push quietly. A ride still down when the rest of its hold reopens stays in the hold, with the hold's estimate. Several unrelated rides back up (or closed) in the same poll are one push too.
 - Tapping an alert opens what it is about: the ride's page, the hold, or Down now. The link carries the trip code, so it opens the right trip even where it lands in Safari rather than the home-screen app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else. Pushes carry no emoji tags; the title says what happened.
 - Pausing (1 hour, 3 hours, until 7am on the park's clock, or until turned back on) can be for just this phone, when it uses the app's own notifications, or for everyone on the trip. A phone on ntfy can only pause the whole trip, or mute the subscription in the ntfy app.
-- The app's own notifications for the same ride replace each other on the lock screen ("back up" replaces "is down") instead of piling up.
+- The app's own notifications for the same ride, or the same incident, replace each other on the lock screen ("back up" replaces "is down") instead of piling up.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
 - Anti-flicker: "is down" goes out the moment a ride goes down, unless your phone already thinks it is down. "Back up" waits until the ride has stayed up for a minute (`UP_CONFIRM_MS` in `server/gate.js`). A ride that flickers back and breaks again costs nothing, and the last alert you got stays true: a flapping ride is one "down", then one "back up" once it settles.
 - After a gap in polling (the trip hopped to another park and back, or the server or the API was down for more than 15 minutes), the next poll starts afresh with no alerts, because nobody knows when things changed in between. The dashboard shows the current state straight away.

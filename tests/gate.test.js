@@ -79,3 +79,23 @@ test('a gate saved before this version keeps only what phones were last told', (
   restoreGate('G10', upgradeGate('P', old));
   assert.deepEqual(types(gateEvents('G10', [down('a')], state('a', 'DOWN'), MIN)), [], 'phones already think it is down');
 });
+
+test("an incident's rides coming back are gathered, then told together", async () => {
+  const { INCIDENT_FLUSH_MS } = await import('../server/gate.js');
+  const inc = { I: { rides: ['a', 'b', 'c'] } };
+  const all = (statuses) => Object.fromEntries(['a', 'b', 'c'].map((id, i) => [id, { name: id, status: statuses[i] }]));
+  const upIn = (id) => ({ ...up(id), incident: 'I' });
+  gateEvents('G11', ['a', 'b', 'c'].map(down), all(['DOWN', 'DOWN', 'DOWN']), 0, inc);
+  // a reopens at 1 min, b at 2 min; c is still down.
+  gateEvents('G11', [upIn('a')], all(['OPERATING', 'DOWN', 'DOWN']), MIN, inc);
+  let r = gateEvents('G11', [upIn('b')], all(['OPERATING', 'OPERATING', 'DOWN']), 2 * MIN, inc);
+  assert.deepEqual([r.send, r.updates], [[], []], 'a is confirmed but waits for company');
+  r = gateEvents('G11', [], all(['OPERATING', 'OPERATING', 'DOWN']), 3 * MIN, inc);
+  assert.deepEqual(r.updates, [], 'not yet: the first was confirmed at 2 min');
+  r = gateEvents('G11', [], all(['OPERATING', 'OPERATING', 'DOWN']), 2 * MIN + INCIDENT_FLUSH_MS, inc);
+  assert.deepEqual(r.updates.map((u) => [u.incident, u.ups.map((e) => e.ride.id), u.final]), [['I', ['a', 'b'], false]]);
+  // c reopens: the last one, so it goes as soon as it is confirmed.
+  gateEvents('G11', [upIn('c')], all(['OPERATING', 'OPERATING', 'OPERATING']), 10 * MIN, inc);
+  r = gateEvents('G11', [], all(['OPERATING', 'OPERATING', 'OPERATING']), 11 * MIN, inc);
+  assert.deepEqual(r.updates.map((u) => [u.ups.map((e) => e.ride.id), u.final]), [[['c'], true]]);
+});

@@ -22,7 +22,7 @@ const ntfy = http.createServer((req, res) => {
   });
 });
 
-let trips, parkState, notifyTrips;
+let trips, parkState, notifyTrips, syncIncidents;
 const PARK = '75ea578a-adc8-4116-a54d-dccb60765ef9';
 
 before(async () => {
@@ -31,32 +31,52 @@ before(async () => {
   process.env.PUBLIC_URL = 'https://parkalert.example';
   process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'parkalert-test-'));
   ({ trips, parkState } = await import('../server/store.js'));
-  ({ notifyTrips } = await import('../server/poller.js'));
+  ({ notifyTrips, syncIncidents } = await import('../server/poller.js'));
 });
 after(() => ntfy.close());
 
-function setup({ down = 0, trip = {} } = {}) {
+// down: rides going down now; hold: as one park-wide hold (an incident).
+function setup({ down = 0, trip = {}, hold = false } = {}) {
   received.length = 0;
   for (const k of Object.keys(trips)) delete trips[k];
   trips.AAAAAA = { code: 'AAAAAA', topic: 't-a', parkId: PARK, watched: null, mute: null, rideMutes: {}, ...trip };
   const now = Date.now();
   const rides = {};
   for (let i = 0; i < down; i++) {
-    rides[`r${i}`] = { name: `Ride ${i}`, status: 'DOWN', downSince: now, downFrom: 'OPERATING' };
+    rides[`r${i}`] = { name: `Ride ${i}`, status: 'DOWN', downSince: now, downFrom: 'OPERATING', ...(hold ? { liveKind: 'hold', holdSize: down, incident: 'hold-1' } : { liveKind: 'breakdown' }) };
   }
   parkState[PARK] = { rides, timezone: 'America/New_York', schedule: null };
+  syncIncidents(PARK, parkState[PARK], rides, now);
   return Object.entries(rides).map(([id, r]) => ({ type: 'DOWN', ride: { id, ...r } }));
 }
 
 test('a storm hold is one push naming the rides, and tapping it opens the hold', async () => {
-  const events = setup({ down: 6 });
+  const events = setup({ down: 6, hold: true });
   const { sent } = await notifyTrips(PARK, events, { simulated: true });
   assert.equal(sent, 1);
   assert.equal(received.length, 1);
-  assert.equal(received[0].title, '6 rides just went down');
+  assert.equal(received[0].title, 'Park-wide hold: 6 rides closed');
   assert.match(received[0].message, /Ride 0, Ride 1, Ride 2, Ride 3, Ride 4 and 1 more/);
-  assert.match(received[0].message, /Park-wide hold at Magic Kingdom/);
+  assert.match(received[0].message, /Magic Kingdom · /);
   assert.equal(received[0].click, 'https://parkalert.example/?trip=AAAAAA&view=hold');
+});
+
+test("an incident's rides coming back are one update, then an all-clear", async () => {
+  const events = setup({ down: 4, hold: true });
+  await notifyTrips(PARK, events);
+  received.length = 0;
+  const rides = parkState[PARK].rides;
+  const up = (id) => ({ type: 'UP', ride: { id, ...rides[id], status: 'OPERATING' }, downtimeMs: 40 * 60_000, incident: 'hold-1' });
+  rides.r0.status = 'OPERATING';
+  rides.r1.status = 'OPERATING';
+  await notifyTrips(PARK, [], { updates: [{ incident: 'hold-1', ups: [up('r0'), up('r1')], final: false }] });
+  assert.deepEqual(received.map((m) => m.title), ['2 of 4 rides are back up']);
+  assert.equal(received[0].priority, 2, 'a quiet update');
+  rides.r2.status = 'OPERATING';
+  rides.r3.status = 'CLOSED';
+  await notifyTrips(PARK, [], { updates: [{ incident: 'hold-1', ups: [up('r2')], final: true }] });
+  assert.equal(received[1].title, '3 of 4 rides are back up');
+  assert.match(received[1].message, /Closed for now: Ride 3$/);
 });
 
 test("tapping a one-ride push opens that ride's sheet, on the right trip", async () => {
@@ -90,7 +110,7 @@ test('a delayed opening says the ride is now open, and how late', async () => {
   const ev = { type: 'UP', ride: { id: 'x', name: 'Seven Dwarfs Mine Train', status: 'OPERATING' }, downtimeMs: 40 * 60_000, late: true };
   await notifyTrips(PARK, [ev], { simulated: true });
   assert.equal(received[0].title, 'Seven Dwarfs Mine Train is now open');
-  assert.match(received[0].message, /^Opened 40 min late · Magic Kingdom/);
+  assert.match(received[0].message, /^Opened at \d+:\d\d\u00a0[AP]M, late · Magic Kingdom/);
 });
 
 test('a trip nobody has opened in three weeks gets no pushes', async () => {
