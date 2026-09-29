@@ -15,7 +15,8 @@ import { linesBuilding } from './crowds.js';
 import { recordCalls, scoreCalls } from './scorecard.js';
 import { localDate } from './time.js';
 
-const POLL_INTERVAL_MS = 60_000;
+// POLL_MS exists for the stress lab (npm run lab); real use keeps 60s.
+const POLL_INTERVAL_MS = Number(process.env.POLL_MS) || 60_000;
 // A ride missing from a response keeps its last state this many polls before
 // it is dropped, so one patchy response can't restart its outage clock.
 export const MISSING_POLLS = 5;
@@ -296,7 +297,9 @@ function downMessage(parkId, ev, parkName, timezone) {
   const outlook = downOutlook(parkId, ev.ride.id, (Date.now() - since) / 60_000);
   const lines = [`Went down at ${localTime(since, timezone)} · ${parkName}`];
   if (outlook.kind === 'hold') lines.push(`Park-wide hold: ${outlook.rides} rides closed at once`);
-  if (outlook.text) lines.push(outlook.text);
+  // The range, then what to do about it: the question the alert raises.
+  if (outlook.text) lines.push(outlook.advice ? `${outlook.text} · ${outlook.advice.verdict}` : outlook.text);
+  else if (outlook.advice) lines.push(outlook.advice.verdict);
   // No ntfy tags: apps draw them as emoji in front of the title, and the
   // title already says down, back up or closed.
   return { title: `${ev.ride.name} is down`, message: lines.join('\n'), priority: 3 };
