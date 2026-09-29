@@ -118,7 +118,9 @@ test('a grouped "back up" says how long the rides were down, like a single one',
   assert.equal(m([40, 42, 43].map((x) => x * 60_000)), 'A, B, C\nDown about 42 min · EPCOT');
   assert.equal(m([8, 30, 65].map((x) => x * 60_000)), 'A, B, C\nDown 8 min to 1 hr 5 min · EPCOT');
   assert.equal(m([null, null, null]), 'A, B, C\nEPCOT');
-  assert.equal(m([20, 21, 22].map((x) => x * 60_000), { late: true }), 'A, B, C\nOpened about 21 min late · EPCOT');
+  // A late opening's time runs from when the ride was noticed down, not from
+  // when it should have opened, so no "21 min late" is claimed.
+  assert.equal(m([20, 21, 22].map((x) => x * 60_000), { late: true }), 'A, B, C\nEPCOT');
 });
 
 test('a push says what is known about when: exact, between two polls, or only "before"', () => {

@@ -1231,20 +1231,38 @@ function adviceHtml(o, cls = 'card-advice') {
 }
 
 
+// How long a ride has been down, as far as anyone knows: exact, or at
+// least this long when it went down unseen (in a gap in the feed, or before
+// ParkAlert first looked), or nothing claimed under a minute of that.
+function downFor(r) {
+  const ms = Date.now() - r.downSince;
+  if (r.downExact !== false) return fmtDuration(ms);
+  return ms >= 60_000 ? `${fmtDuration(ms)}+` : '';
+}
+
+// When it went down, as far as anyone knows. A late opening is when it was
+// noticed: nobody knows it "went down", it just never opened.
+function downWhen(r) {
+  if (r.outlook?.kind === 'opening') return `Late to open · noticed ${fmtTime(r.downSince)}`;
+  if (r.downExact !== false) return `Down since ${fmtTime(r.downSince)}`;
+  if (r.downAfter != null) return `Went down between ${fmtTime(r.downAfter)} and ${fmtTime(r.downSince)}`;
+  return `Down since before ${fmtTime(r.downSince)}`;
+}
+
 function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
-  const since = o.kind === 'opening' ? `Hasn't opened yet · down since ${fmtTime(r.downSince)}` : `Down since ${fmtTime(r.downSince)}`;
+  const since = downWhen(r);
   const foot = [
     basisLine(o),
     following ? '' : 'Alerts off',
   ].filter(Boolean).join(' · ');
   return `
     <article class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="button" tabindex="0"
-             aria-label="${esc(r.name)}, down ${fmtDuration(Date.now() - r.downSince)}. Show details">
+             aria-label="${esc(r.name)}, ${esc(since)}${downFor(r) ? `, ${esc(downFor(r))}` : ''}. Show details">
       <div class="card-top">
         <h3 class="card-title">${esc(r.name)}</h3>
-        <span class="elapsed">${fmtDuration(Date.now() - r.downSince)}</span>
+        <span class="elapsed">${downFor(r)}</span>
         ${icon('chevron', 'chevron')}
       </div>
       <p class="card-sub">${since}</p>
@@ -1314,7 +1332,7 @@ function downHtml() {
       parts.push(`
         <div class="cards" data-key="hold"><div class="card hold-card">
           <button class="hold-header pressable" type="button" data-act="open-hold">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
-          <p class="card-sub">Since ${fmtTime(first.downSince)} · ${fmtDuration(Date.now() - first.downSince)}</p>
+          <p class="card-sub">${esc([downWhen(first).replace(/^Down s/, 'S'), downFor(first)].filter(Boolean).join(' · '))}</p>
           ${adviceHtml(o)}
           ${o.chance ? chanceHtml(o) : timeline(first)}
           ${o.text && o.advice ? `<p class="card-clock">${esc(o.text)}</p>` : ''}
@@ -1322,7 +1340,7 @@ function downHtml() {
           <div class="hold-rides">${holds.map((r) => `
             <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
               <span class="row-label">${esc(r.name)}</span>
-              <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
+              <span class="row-detail">${downFor(r)}</span>
               ${icon('chevron', 'chevron')}
             </button>`).join('')}</div>
         </div></div>`);
@@ -1384,7 +1402,7 @@ function renderRecent(downIds) {
       <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
         ${icon('arrow-up', 'row-icon tint-green')}
         <span class="row-label">${esc(e.name)}<small>${e.late
-          ? `Opened at ${fmtTime(e.at)}${e.downtimeMs ? `, ${fmtDuration(e.downtimeMs)} late` : ''}`
+          ? `Opened at ${fmtTime(e.at)}`
           : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
         ${icon('chevron', 'chevron')}
       </button>`).join('')}</div>`);
@@ -1448,7 +1466,7 @@ function trendHtml(r) {
 
 function rideMeta(r) {
   if (r.status === 'OPERATING') return `Open · ${r.waitTime != null ? `${r.waitTime} min wait` : 'no posted wait'}`;
-  if (r.status === 'DOWN') return `Down ${r.downSince ? fmtDuration(Date.now() - r.downSince) : ''}`.trim();
+  if (r.status === 'DOWN') return `Down ${r.downSince ? downFor(r) : ''}`.trim();
   if (r.status === 'REFURBISHMENT') return 'Refurbishment';
   return 'Closed';
 }
@@ -2024,7 +2042,10 @@ const KIND_NOTE = {
 };
 
 function statusLine(r) {
-  if (r.status === 'DOWN' && r.downSince) return `Down ${fmtDuration(Date.now() - r.downSince)} · since ${fmtTime(r.downSince)}`;
+  if (r.status === 'DOWN' && r.downSince) {
+    const when = downWhen(r);
+    return r.downExact !== false && r.outlook?.kind !== 'opening' ? `Down ${downFor(r)} · since ${fmtTime(r.downSince)}` : [when, downFor(r)].filter(Boolean).join(' · ');
+  }
   const t = r.status === 'OPERATING' && r.trend;
   const trend = t ? `${t.direction === 'up' ? 'up' : 'down'} ${Math.abs(t.change)} min in the last half hour` : '';
   return [rideMeta(r) + (trend ? `, ${trend}` : ''), ...queueTags(r)].join(' · ');
@@ -2056,12 +2077,13 @@ function estimateExplainer(o) {
     return `Timed from when the ${o.cause === 'rain' ? 'rain stopped' : 'storm passed'}, not from when the ride went down: based on ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. The middle half of them reopened within the range above.`;
   }
   if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past outage like it, so there is no honest range to give.' : '';
+  const unseen = o.startUnknown ? " It was already down when ParkAlert first saw it, so it may have been down longer, and take longer, than this assumes." : '';
   if (o.basis.from === 'prior') {
     return "ParkAlert hasn't seen enough outages here yet, so this range comes from typical theme park outages: breakdowns often take about 15 minutes, holds closer to an hour. It switches to this park's own record once there is one.";
   }
   const kind = { hold: 'park-wide holds', opening: 'delayed openings' }[o.kind] || 'breakdowns';
   const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
-  return `Based on ${o.basis.outages} past ${kind} ${where} that lasted at least as long as this one has so far. The middle half of them reopened within the range above.`;
+  return `Based on ${o.basis.outages} past ${kind} ${where} that lasted at least as long as this one has so far. The middle half of them reopened within the range above.${unseen}`;
 }
 
 const liveRide = (id) => dash?.rides.find((r) => r.id === id) || null;
@@ -2242,7 +2264,7 @@ function rideHtml(r, detail, failed) {
       <div class="row" data-key="${e.type}-${e.at}">
         ${e.type === 'CLOSED' ? icon('moon', 'row-icon tint-orange') : icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
         <span class="row-label">${e.type === 'CLOSED' ? 'Closed' : e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${
-          e.type === 'UP' && e.downtimeMs ? `<small>${e.late ? `${fmtDuration(e.downtimeMs)} late` : `after ${fmtDuration(e.downtimeMs)}`}</small>`
+          e.type === 'UP' && e.downtimeMs && !e.late ? `<small>after ${fmtDuration(e.downtimeMs)}</small>`
           : e.type === 'CLOSED' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)} down</small>` : ''}</span>
         <span class="row-detail">${fmtTime(e.at)}</span>
       </div>`).join('')}</div>`
@@ -2386,8 +2408,8 @@ function holdHtml() {
   parts.push(`<h2 class="section-label" data-key="count">${holds.length} ride${holds.length === 1 ? '' : 's'} still in this hold</h2>
     <div class="group plain" data-key="rides">${holds.map((r) => `
     <button class="row pressable" type="button" data-ride="${esc(r.id)}">
-      <span class="row-label">${esc(r.name)}<small>Down since ${fmtTime(r.downSince)}</small></span>
-      <span class="row-detail">${fmtDuration(Date.now() - r.downSince)}</span>
+      <span class="row-label">${esc(r.name)}<small>${esc(downWhen(r))}</small></span>
+      <span class="row-detail">${downFor(r)}</span>
       ${icon('chevron', 'chevron')}
     </button>`).join('')}</div>`);
   return parts.join('');

@@ -225,6 +225,8 @@ function rideOutlook(parkId, rideId, elapsedMin, now, { shared = false } = {}) {
   return {
     ...live,
     ...(w ? { cause: w.cause, weather: w.weather, clearedAt: w.clearedAt ?? null } : {}),
+    // Already down when first seen: the range is timed from then, a floor.
+    ...(rides[rideId]?.downExact === false && rides[rideId]?.downAfter == null ? { startUnknown: true } : {}),
     text: describeOutlook(w, est, parkState[parkId]?.timezone),
     basis: est && !est.longerThanUsual ? { from: est.basis, outages: est.n } : null,
     // Minutes from now, rounded exactly as the text is: the text is the promise.

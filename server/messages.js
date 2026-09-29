@@ -89,10 +89,12 @@ export function closedMessage(ev, parkName, timezone) {
 // ---- Several rides ----
 
 // How long a group of rides was out: "Down about 12 min" when they agree to
-// within a few minutes (a hold always does), else the spread.
+// within a few minutes (a hold always does), else the spread. Nothing for
+// late openings: that time runs from when the ride was noticed down, not
+// from when it should have opened, so "12 min late" would be a guess.
 export function groupDowntime(ms, late = false) {
   const known = ms.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
-  if (!known.length) return null;
+  if (!known.length || late) return null;
   const lo = known[0];
   const hi = known[known.length - 1];
   const span = hi - lo <= 5 * 60_000 ? `about ${formatDuration(known[known.length >> 1])}` : `${formatDuration(lo)} to ${formatDuration(hi)}`;
