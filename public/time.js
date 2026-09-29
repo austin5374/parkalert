@@ -1,6 +1,7 @@
 /* Park-clock helpers. A classic script like app.js and loaded before it, so
-   these are plain globals; nothing here touches the DOM, so tests can run it. */
-/* exported localDay, nextLocalHour, fmtDuration, matchesSearch, extractTripCode */
+   these are plain globals; nothing here touches the DOM, so tests can run it,
+   and the service worker loads it too. */
+/* exported localDay, nextLocalHour, fmtDuration, matchesSearch, extractTripCode, localClock */
 
 // "<1 min", "47 min", "1 hr 5 min". server/notify.js says it the same way,
 // so a push and the app never describe one outage differently.
@@ -102,4 +103,24 @@ function extractTripCode(text) {
   if (/^[A-Za-z0-9]{6}$/.test(bare)) return bare.toUpperCase();
   const runs = s.match(/\b[A-Z0-9]{6}\b/g);
   return runs ? runs[runs.length - 1] : null;
+}
+
+// Times written the park's way in a push ("9:44 AM", "8:05 to 8:27 AM",
+// "4 PM"), in the phone's own format instead ("09:44", "16 Uhr"...). The
+// wall-clock time stays the park's: only how it is written changes. The
+// service worker applies it to each push, so a push and the app it opens
+// read the same.
+function localClock(text, locale) {
+  if (!text) return text;
+  const clock = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
+  const hourOnly = new Intl.DateTimeFormat(locale, { hour: 'numeric', timeZone: 'UTC' });
+  const at = (h, m, ap) => Date.UTC(2000, 0, 1, (Number(h) % 12) + (ap === 'PM' ? 12 : 0), Number(m));
+  const tidy = (t) => t.replace(/\s(?=[AP]M\b)/, '\u00a0');
+  // Written the park's way already: leave it exactly as sent.
+  if (tidy(clock.format(at(9, 44, 'AM'))) === '9:44\u00a0AM') return text;
+  const S = '[\\s\\u00a0\\u202f]';
+  return String(text)
+    .replace(new RegExp(`\\b(\\d{1,2}):(\\d{2}) to (\\d{1,2}):(\\d{2})${S}(AM|PM)\\b`, 'g'), (_, h1, m1, h2, m2, ap) => `${tidy(clock.format(at(h1, m1, ap)))} to ${tidy(clock.format(at(h2, m2, ap)))}`)
+    .replace(new RegExp(`\\b(\\d{1,2}):(\\d{2})${S}(AM|PM)\\b`, 'g'), (_, h, m, ap) => tidy(clock.format(at(h, m, ap))))
+    .replace(new RegExp(`\\b(\\d{1,2})${S}(AM|PM)\\b`, 'g'), (_, h, ap) => tidy(hourOnly.format(at(h, 0, ap))));
 }

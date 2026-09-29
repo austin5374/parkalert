@@ -264,7 +264,7 @@ Bad input is a 400 that says why, an oversized body a 413, and too many requests
 - **Adding parks**: append to `server/parks.js` with the park's timezone and the resort to list it under (entity IDs from `https://api.themeparks.wiki/v1/destinations`).
 - Only transitions involving DOWN alert: down, back up, opened late, and closed while down. Other status changes (a ride opening on time, going to REFURBISHMENT) don't.
 - Trips nobody has opened in three weeks stop being polled and stop getting alerts, which is most of what hosting costs. A trip with a phone signed up for alerts (the app's own notifications, or ntfy once a test arrived) keeps going for two months instead, since trips are often made months ahead, and its phones get `Ride alerts stop tomorrow` in the park's daytime the day before. Opening the app again resumes a trip. Trips are never deleted.
-- Times are shown in the park's own time zone, so planning from home still reads like the park clock.
+- Times are shown in the park's own time zone, so planning from home still reads like the park clock, and written the phone's way (12 or 24 hours). The service worker rewrites the park-clock times in the app's own pushes the same way; ntfy pushes, shared by every phone on the topic, stay as sent.
 - Weather reports come from airports 5 to 20 miles from the parks. A storm can sit over the park and miss the airport, or the reverse; the 15-minute lead and the two stations per resort soften that, but it will sometimes be off.
 - Estimates are only as good as the history behind them. The first week after a fresh deploy runs on 7 days (30 with a key), and the archive grows by a day each night from there.
 

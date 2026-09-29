@@ -49,10 +49,12 @@ function el(html) {
   return t.content.firstElementChild;
 }
 
-// Times are shown in the park's own zone: planning from home should still say 3:30 PM for 3:30 PM at the park.
-// And in the same format as the pushes (server/poller.js), so an alert and
-// the card it opens never read "2:10 PM" and "14:10" for one moment.
-const LOCALE = 'en-US';
+// Times are shown in the park's own zone: planning from home should still say
+// 3:30 PM for 3:30 PM at the park. They are written the phone's way (12 or
+// 24 hours, its language), and the service worker writes pushes' times the
+// same way (localClock in time.js), so an alert and the card it opens never
+// read "2:10 PM" and "14:10" for one moment. ntfy pushes stay as sent.
+const LOCALE = navigator.language || 'en-US';
 // The space before AM or PM never breaks: "5:53 AM" stays on one line.
 function fmtTime(ts) {
   if (ts == null) return '';
@@ -1257,7 +1259,7 @@ function bestLeftToday(typical) {
 
 // "7 PM": an hour on the park's clock.
 function fmtHour(h) {
-  return `${h % 12 || 12}\u00a0${h < 12 ? 'AM' : 'PM'}`;
+  return new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 1, h)).replace(/\s(?=[AP]M\b)/, '\u00a0');
 }
 
 // How busy the park is right now: the big rides' waits against their usual
@@ -2876,7 +2878,7 @@ function hourBars(box, { typical }) {
   });
   const every = hours.length > 12 ? 3 : 2;
   const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${hours.length},1fr)">${hours.map(([h], i) =>
-    `<span>${i % every === 0 ? esc(fmtHour(h).replace(' ', '')) : ''}</span>`).join('')}</div>`);
+    `<span>${i % every === 0 ? esc(fmtHour(h).replace(/\s/g, '')) : ''}</span>`).join('')}</div>`);
   box.append(readout, svg, labels);
 }
 

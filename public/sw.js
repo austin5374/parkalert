@@ -3,6 +3,9 @@
 // run a script from another, which a per-file network/cache race allowed on
 // slow park Wi-Fi. The server stamps the version in, so each deploy is a
 // changed worker the browser picks up on its own.
+// localClock, to write pushes' times the phone's way, as the app does.
+importScripts('/time.js');
+
 const VERSION = '__APP_VERSION__';
 const CACHE = `parkalert-${VERSION}`;
 const ASSETS = [
@@ -66,8 +69,8 @@ self.addEventListener('push', (e) => {
   // An open app refreshes at once, so what it shows matches what just
   // arrived, and patches the ride the push is about straight away.
   e.waitUntil(self.clients.matchAll({ type: 'window' }).then((ws) => ws.forEach((w) => w.postMessage({ type: 'refresh', ride: d.ride || null }))).catch(() => {}));
-  e.waitUntil(self.registration.showNotification(d.title || 'ParkAlert', {
-    body: d.body || '',
+  e.waitUntil(self.registration.showNotification(localClock(d.title) || 'ParkAlert', {
+    body: localClock(d.body) || '',
     tag: d.tag || undefined,
     renotify: !!d.tag && !d.quiet,
     silent: !!d.quiet,
