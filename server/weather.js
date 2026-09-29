@@ -45,9 +45,20 @@ export function addObservations(station, list, now = Date.now()) {
     byTime.set(o.at, o);
   }
   weather.obs[station] = [...byTime.values()].filter((o) => now - o.at < KEEP_MS).sort((a, b) => a.at - b.at);
-  if (added) timelineCache.clear();
+  if (added) {
+    // Only the parks this station reports for have new timelines; the rest
+    // keep theirs (and the models built on them).
+    const parks = PARKS.filter((p) => (p.weather || []).includes(station)).map((p) => p.id);
+    for (const id of parks) timelineCache.delete(id);
+    for (const fn of reportListeners) fn(parks);
+  }
   return added;
 }
+
+// Told which parks a batch of new reports touches (weatheroutlook.js
+// rebuilds their models then, rather than in the next request).
+const reportListeners = [];
+export const onNewReports = (fn) => reportListeners.push(fn);
 
 async function get(url, timeout = 20_000) {
   const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(timeout) });
