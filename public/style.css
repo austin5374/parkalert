@@ -667,3 +667,47 @@ main { position: relative; transition: none; }
 .card-clock { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
 .segmented .count { color: var(--label-2); font-weight: 500; font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
 .page .ptr { top: calc(env(safe-area-inset-top) + 2.9rem); z-index: 2; }
+
+/* ---- Crowd level: one quiet row, a ten-step meter ---- */
+.crowd-group { margin-bottom: 0.9rem; }
+.crowd-row .row-label small { margin-top: 0.3rem; }
+.crowd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.crowd-word { font-weight: 600; }
+.crowd-num { font-size: 0.875rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.crowd-meter { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; margin-top: 0.45rem; }
+.crowd-meter span { height: 0.35rem; background: var(--fill); }
+.crowd-meter span:first-child { border-radius: 999px 0 0 999px; }
+.crowd-meter span:last-child { border-radius: 0 999px 999px 0; }
+.crowd-meter span.on { background: var(--accent); }
+
+/* ---- Wait or go: the verdict, and the chance it's back soon ---- */
+.card-advice, .advice-detail { font-size: 0.9375rem; margin-top: 0.5rem; line-height: 1.35; }
+.card-advice strong { font-weight: 600; }
+.advice-detail { color: var(--label-2); margin-top: 0.2rem; }
+.card-advice.advice-long strong, .card-advice.advice-closed strong, .card-advice.advice-closing strong { color: var(--orange); }
+.chance {
+  position: relative; height: 0.4rem; border-radius: 999px; background: var(--fill);
+  margin-top: 0.6rem; overflow: hidden;
+}
+.chance span { position: absolute; inset: 0 auto 0 0; } /* square steps; the track rounds the ends */
+/* One hue in three steps, darkest for soonest, with a 2px surface gap between steps. */
+.chance .c60 { background: var(--accent); opacity: 0.25; }
+.chance .c30 { background: var(--accent); opacity: 0.55; box-shadow: 2px 0 0 var(--surface); }
+.chance .c15 { background: var(--accent); box-shadow: 2px 0 0 var(--surface); }
+.chance-key { display: flex; flex-wrap: wrap; gap: 0.25rem 0.8rem; margin-top: 0.4rem; font-size: 0.8125rem; color: var(--label-2); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.chance-key span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.chance-key i { width: 0.55rem; height: 0.55rem; border-radius: 2px; background: var(--accent); display: inline-block; }
+.chance-key .k30 { opacity: 0.55; }
+.chance-key .k60 { opacity: 0.25; }
+.outlook-block .chance { margin-top: 0.8rem; }
+
+/* ---- Best time to ride, and the crowd chart ---- */
+.best-line { font-size: 0.9375rem; line-height: 1.4; margin-bottom: 0.7rem; }
+.chart .bar.soft { opacity: 0.45; }
+.chart .line.usual { stroke: var(--label-3); stroke-width: 2; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; margin-top: 0.45rem; font-size: 0.8125rem; color: var(--label-2); letter-spacing: 0; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.chart-legend i { width: 0.9rem; height: 2px; border-radius: 1px; display: inline-block; }
+.lg-today { background: var(--accent); }
+.lg-usual { background: var(--label-3); }
+.lg-max { margin-left: auto; }

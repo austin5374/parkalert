@@ -4,6 +4,7 @@
 import { PARKS } from './parks.js';
 import { fetchParkHistory } from './themeparks.js';
 import { extractEpisodes } from './episodes.js';
+import { extractWaitProfile } from './crowds.js';
 import { history, saveHistory } from './store.js';
 import { HISTORY_DAYS as WINDOW_DAYS } from './config.js';
 import { localDate } from './time.js';
@@ -37,7 +38,20 @@ export function daysToFetch(timezone, now, windowDays, fetched = []) {
   return days;
 }
 
+// Hourly wait profiles (see crowds.js) are kept for this many days: plenty
+// for "usual for this hour", and a year of them would be most of the file.
+const KEEP_WAIT_DAYS = 60;
+
+function storeProfile(parkId, date, envelope) {
+  history.waits ??= {};
+  (history.waits[parkId] ??= {})[date] = extractWaitProfile(envelope);
+}
+
 function prune(now) {
+  const waitCutoff = new Date(now - KEEP_WAIT_DAYS * DAY_MS).toISOString().slice(0, 10);
+  for (const days of Object.values(history.waits || {})) {
+    for (const date of Object.keys(days)) if (date < waitCutoff) delete days[date];
+  }
   const cutoff = now - KEEP_DAYS * DAY_MS;
   const cutoffDate = new Date(cutoff).toISOString().slice(0, 10);
   for (const parkId of Object.keys(history.episodes)) {
@@ -74,6 +88,7 @@ export async function syncHistory(now = Date.now()) {
         }
         const episodes = extractEpisodes(result.envelope).map((ep) => ({ ...ep, date }));
         (history.episodes[park.id] ??= []).push(...episodes);
+        storeProfile(park.id, date, result.envelope);
         fetched.push(date);
         added += episodes.length;
         days++;
@@ -82,6 +97,26 @@ export async function syncHistory(now = Date.now()) {
           console.log('[history] hourly budget nearly spent, resuming next sync');
           return;
         }
+      }
+    }
+    // Days archived before wait profiles were kept are fetched once more,
+    // for their waits only, as far back as the key allows.
+    for (const park of PARKS) {
+      const have = history.waits?.[park.id] || {};
+      const recent = daysToFetch(park.timezone, now, WINDOW_DAYS, []);
+      for (const date of recent.filter((d) => (history.fetched[park.id] || []).includes(d) && !have[d])) {
+        let result;
+        try {
+          result = await fetchParkHistory(park.id, date);
+        } catch (err) {
+          if (err.code === 'BUDGET') return;
+          if (err.code === 'WINDOW') break;
+          continue;
+        }
+        storeProfile(park.id, date, result.envelope);
+        days++;
+        saveHistory();
+        if (result.remaining !== null && result.remaining <= BUDGET_FLOOR) return;
       }
     }
   } finally {

@@ -203,3 +203,31 @@ test('the window is the range as the text states it', async () => {
   assert.deepEqual(shownWindow({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), { lo: 30, hi: null });
   assert.equal(shownWindow({ longerThanUsual: true }), null);
 });
+
+test('the chance of reopening within 15, 30 and 60 minutes comes off the same curve', async () => {
+  const { remaining } = await import('../server/predict.js');
+  const eps = [5, 10, 12, 20, 25, 40, 50, 90, 120, 200].map((minutes) => ({ minutes, endedAs: 'OPERATING', kind: 'breakdown' }));
+  const r = remaining(eps, 0);
+  const pct = (x) => Math.round(x * 100);
+  assert.equal(pct(r.chance[15]), 30);
+  assert.equal(pct(r.chance[30]), 50);
+  assert.equal(pct(r.chance[60]), 70);
+  // Already down 20 min: only the six that lasted longer are left.
+  const later = remaining(eps, 20);
+  assert.equal(later.chance[15].toFixed(3), (1 / 6).toFixed(3));
+});
+
+test('the advice follows the chance, closing time and closed-for-the-day share', async () => {
+  const { advise } = await import('../server/predict.js');
+  const est = (chance, extra = {}) => ({ p25: 5, p50: 12, p75: 30, chance, stayedDownShare: 0, ...extra });
+  assert.equal(advise(est({ 15: 0.7, 30: 0.8, 60: 0.9 })).key, 'wait');
+  assert.equal(advise(est({ 15: 0.4, 30: 0.55, 60: 0.8 })).key, 'soon');
+  assert.equal(advise(est({ 15: 0.2, 30: 0.3, 60: 0.6 })).key, 'nearby');
+  assert.equal(advise(est({ 15: 0.1, 30: 0.2, 60: 0.3 })).key, 'go');
+  assert.equal(advise(est({ 15: 0.7, 30: 0.8, 60: 0.9 }, { stayedDownShare: 0.35 })).key, 'closed');
+  assert.equal(advise(est({ 15: 0.1, 30: 0.2, 60: 0.3 }), { minutesToClose: 8 }).key, 'closing');
+  assert.equal(advise({ longerThanUsual: true }).key, 'long');
+  assert.equal(advise({ p25: 30, p50: 35, p75: 45, basis: 'rule' }).key, 'nearby', 'the lightning rule has no curve');
+  assert.equal(advise(null), null);
+  assert.equal(advise(est({ 15: 0.7, 30: 0.8, 60: 0.9 })).detail, '70% of outages like this are over within 15 min.');
+});

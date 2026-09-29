@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, waitTrend } from './insights.js';
+import { parkCrowd, crowdToday, rideBestTimes } from './crowdstate.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
@@ -117,7 +118,7 @@ const parkToday = (parkId, now = Date.now()) => localDate(now, zoneOf(parkId));
 
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
-  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0 };
+  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts };
 }
 
 
@@ -143,6 +144,7 @@ async function dashboard(trip) {
     lastPoll: state.lastPoll || null,
     lastError: state.lastError || null,
     now: Date.now(),
+    crowd: parkCrowd(trip.parkId),
     rides: Object.entries(state.rides || {}).map(([id, r]) => ({
       id,
       ...r,
@@ -255,6 +257,7 @@ async function handleApi(req, res, url) {
       today: rideToday(state.recent, parts[4], dayStart),
       waits: (state.waits?.[parts[4]] || []).filter(([t]) => t >= dayStart),
       history: rideHistory(history.episodes[trip.parkId] || [], parts[4], history.fetched[trip.parkId] || []),
+      bestTimes: rideBestTimes(trip.parkId, parts[4]),
       now,
     });
   }
@@ -271,6 +274,7 @@ async function handleApi(req, res, url) {
       },
       week: parkSummary(history.episodes[trip.parkId] || [], history.fetched[trip.parkId] || [], names),
       estimates: scorecard(state.scores),
+      crowd: crowdToday(trip.parkId),
     });
   }
 
@@ -292,6 +296,7 @@ async function handleApi(req, res, url) {
     if (patch.watched !== undefined) trip.watched = patch.watched;
     if (patch.mute !== undefined) trip.mute = patch.mute;
     if (patch.rideMutes !== undefined) trip.rideMutes = patch.rideMutes;
+    if (patch.crowdAlerts !== undefined) trip.crowdAlerts = patch.crowdAlerts;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });
   }

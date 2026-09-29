@@ -6,6 +6,9 @@
 // single "back at 3:40" would be wrong most of the time.
 import { isResolved, stayedDown, isLateOpening, CLUSTER_WINDOW_MS, CLUSTER_MIN_RIDES } from './episodes.js';
 
+// Minutes from now at which the chance of reopening is read off the curve.
+export const CHANCE_AT = [15, 30, 60];
+
 // Below this many comparable past outages we say nothing rather than guess.
 export const MIN_SAMPLES = 5;
 // A ride needs this many of its own outages before its history is trusted over
@@ -44,6 +47,9 @@ function remainingSorted(all, elapsedMin) {
   if (sorted.length < MIN_SAMPLES) return null;
   const quantiles = { p25: null, p50: null, p75: null };
   const targets = [['p25', 0.25], ['p50', 0.5], ['p75', 0.75]];
+  // The chance it's back within 15, 30 and 60 minutes from now: the same
+  // curve read at fixed times instead of fixed shares.
+  const chance = Object.fromEntries(CHANCE_AT.map((h) => [h, 0]));
   let survival = 1;
   for (let i = 0; i < sorted.length; ) {
     const t = sorted[i].minutes;
@@ -55,9 +61,11 @@ function remainingSorted(all, elapsedMin) {
     for (const [key, q] of targets) {
       if (quantiles[key] === null && 1 - survival >= q) quantiles[key] = t - elapsedMin;
     }
+    for (const h of CHANCE_AT) if (t - elapsedMin <= h) chance[h] = 1 - survival;
   }
   return {
     ...quantiles,
+    chance,
     n: sorted.length,
     stayedDownShare: sorted.filter(stayedDown).length / sorted.length,
   };
@@ -239,4 +247,46 @@ export function describe(est) {
   const pct = Math.round(est.stayedDownShare * 100);
   if (pct >= 10) text += `. About ${pct}% stay closed for the day`;
   return text;
+}
+
+// Wait nearby, or go ride something else? The question a guest actually has
+// at a down ride, answered from the same curve as the range. The rules, in
+// order, each with the reason it wins:
+//   1. Past nearly every outage like it: nothing to go on but "long".
+//   2. Often closed for the day (3 in 10 or more): that dominates.
+//   3. The park closes before half of these reopen: say so.
+//   4. The chance it's back soon decides:
+//        6 in 10 or more within 15 min  -> worth waiting nearby
+//        half or more within 30 min      -> check back soon
+//        half or more within the hour    -> ride something nearby
+//        otherwise                        -> ride something else
+// A weather estimate from the 30-minute rule has no curve; its range stands in.
+//   est: from estimate()/afterClearing(); minutesToClose: or null
+export function advise(est, { minutesToClose = null } = {}) {
+  if (!est) return null;
+  if (est.longerThanUsual) {
+    return { key: 'long', verdict: 'Running long', detail: 'Down longer than nearly every past outage like it.' };
+  }
+  const stayed = Math.round((est.stayedDownShare || 0) * 10);
+  if (stayed >= 3) {
+    return { key: 'closed', verdict: 'Often closed for the day', detail: `${stayed} in 10 outages like this didn't reopen that day.` };
+  }
+  const p50 = est.p50 ?? est.p25;
+  if (minutesToClose != null && p50 != null && p50 > minutesToClose) {
+    return { key: 'closing', verdict: 'May not reopen before close', detail: `The park closes in ${spoken(Math.max(1, Math.round(minutesToClose)))}, and half of these take longer.` };
+  }
+  const c = est.chance;
+  // Percentages, the same numbers the card's legend shows beneath.
+  const pct = (p) => `${Math.round(p * 100)}%`;
+  if (c) {
+    if (c[15] >= 0.6) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `${pct(c[15])} of outages like this are over within 15 min.` };
+    if (c[30] >= 0.5) return { key: 'soon', verdict: 'Check back soon', detail: `${pct(c[30])} of outages like this are over within 30 min.` };
+    if (c[60] >= 0.5) return { key: 'nearby', verdict: 'Ride something nearby', detail: `${pct(c[60])} of outages like this are over within the hour.` };
+    return { key: 'go', verdict: 'Ride something else', detail: c[60] > 0 ? `Only ${pct(c[60])} of outages like this are over within the hour.` : 'These usually take over an hour.' };
+  }
+  if (p50 == null) return null;
+  if (p50 <= 12) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `Usually back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 30) return { key: 'soon', verdict: 'Check back soon', detail: `Usually back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 60) return { key: 'nearby', verdict: 'Ride something nearby', detail: `Usually back within ${spoken(Math.round(p50))}.` };
+  return { key: 'go', verdict: 'Ride something else', detail: 'These usually take over an hour.' };
 }
