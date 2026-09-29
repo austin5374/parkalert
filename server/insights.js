@@ -91,3 +91,24 @@ export function parkSummary(episodes, fetchedDates, names, days = 7) {
       .map((r) => ({ ...r, minutes: Math.round(r.minutes) })),
   };
 }
+
+// Is the line growing or shrinking? The posted wait now against the one in
+// effect half an hour ago. Posted waits step in fives and wobble a step
+// either way all day, so a trend takes at least two steps (10 min); less
+// reads as steady (null). No trend without both readings, or while the ride
+// isn't posting one.
+export const TREND_WINDOW_MS = 30 * 60_000;
+export const TREND_MIN_CHANGE = 10;
+export function waitTrend(series = [], now = Date.now()) {
+  const last = series[series.length - 1];
+  if (!last || last[1] == null) return null;
+  let then = null;
+  for (const [t, v] of series) {
+    if (t > now - TREND_WINDOW_MS) break;
+    then = v;
+  }
+  if (then == null) return null;
+  const change = last[1] - then;
+  if (Math.abs(change) < TREND_MIN_CHANGE) return null;
+  return { direction: change > 0 ? 'up' : 'down', change };
+}

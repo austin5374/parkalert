@@ -5,7 +5,7 @@ Mobile-first PWA that pings your phone the moment a Disney ride goes down or com
 ## How it works
 
 ```
-ThemeParks.wiki API ──(poll every 60s)──▶ Node server ──(on status transition)──▶ ntfy.sh ──▶ your phones
+ThemeParks.wiki API ──(poll every 60s)──▶ Node server ──(on status transition)──▶ Web Push / ntfy.sh ──▶ your phones
         │                                    │
         └──(history, once a day)─────────────┤
 Airport weather reports ──(every 5 min)─────▶│
@@ -15,7 +15,7 @@ Weather report archive ──(hourly backfill)──▶┤
 
 - **No runtime dependencies.** Plain Node 22+. Deploys to Railway in minutes; runs anywhere Node runs. ESLint is the only dev dependency, for `npm run lint`.
 - **Storage**: flat JSON files (trips, last-known ride state, past outages). Locally in `data/`; on Railway on an attached volume so it survives restarts *and* redeploys.
-- **Push**: each trip gets a unique [ntfy.sh](https://ntfy.sh) topic (`parkalert-<code>-<random>`). The server POSTs to it on transitions; phones subscribe via the ntfy app (or ntfy web). No accounts anywhere.
+- **Push**: the app sends its own notifications with Web Push (VAPID and RFC 8291 encryption, done with Node's crypto, no library): Android and desktop browsers anywhere, iPhone once ParkAlert is on the Home Screen (iOS 16.4 and later). Each phone registers on the trip, so each can be paused on its own. Every trip also keeps its [ntfy.sh](https://ntfy.sh) topic (`parkalert-<code>-<random>`) for phones that use the ntfy app instead. No accounts anywhere.
 
 ## Getting started
 
@@ -48,6 +48,8 @@ server/
   config.js       every environment setting, with its default
   poller.js       60s polling, transition detection, anti-flicker, alert wording and fan-out
   waitalerts.js   "tell me when the wait drops to N min" alerts
+  deliver.js      sends each alert: the trip's ntfy topic, and every phone on the app's own notifications
+  webpush.js      Web Push: VAPID signing and RFC 8291 encryption, no library
   notify.js       ntfy publishing
   themeparks.js   ThemeParks.wiki client and schedule parsing
   history.js      nightly backfill of the outage archive
@@ -59,7 +61,7 @@ server/
   weatheroutlook.js  ties the above to a live down ride
   scorecard.js    scores each estimate when its ride reopens
   backtest.js     scores the method against the archive (npm run backtest)
-  insights.js     numbers for the ride and park detail pages
+  insights.js     numbers for the ride and park detail pages, and wait trends
   store.js        JSON persistence, trip codes
   validate.js     request validation
   ratelimit.js    per-client token buckets
@@ -68,9 +70,9 @@ server/
 scripts/
   backtest.js     the npm run backtest command
 public/
-  index.html, style.css, app.js   the PWA (no framework, no build step)
+  index.html, style.css, app.js   the PWA (no framework, no build step; screens patch in place)
   time.js         DOM-free helpers (dates, durations), loaded before app.js and unit-tested
-  sw.js           service worker: the app shell works offline
+  sw.js           service worker: one cache per version, offline shell, and the app's notifications
   manifest.webmanifest   install metadata and icons
   icons/          icon.svg is the source; the PNGs are rendered from it
 tests/            node:test suites; fakes.js stands in for ThemeParks.wiki, ntfy and both weather feeds
@@ -113,6 +115,7 @@ No environment variables are required.
 | `WEATHER_BASE` | `https://aviationweather.gov/api/data` | Live airport weather reports (NOAA's Aviation Weather Center). |
 | `WEATHER_ARCHIVE` | `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py` | Past airport weather reports (Iowa State's ASOS archive). |
 | `HEALTH_TOKEN` | none | Unlocks the per-park detail in `/api/health`. |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | made on first start | The Web Push key pair (base64url). Normally created once and kept in `vapid.json` on the volume; changing it would cut off every phone's notifications until it re-subscribes. |
 | `PORT` | `3000` | Set by Railway. |
 
 **Cost**: the server uses about 80 to 90 MB of RAM (measured on Node 22 and 24 in September 2026, with a week of archive), a little more as the outage archive fills toward a year (roughly 15 MB on disk), and near-zero CPU. Railway bills mostly by memory, so expect around $1/month of usage at their rates as of this writing. The $5 trial covers a vacation easily. After the trial you drop to the Free plan's $1/month credit, which is tight; for a trip you care about, the $5/mo Hobby plan for that month is the safe option (volumes on trial accounts are deleted 30 days after trial credits expire, so upgrade before then if you want to keep trip data).
@@ -131,11 +134,11 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 ## Using it
 
 1. Open the app and pick your park, or tap **Use my location**. Location is only asked for when you tap it.
-2. A short setup sheet opens: install the free **ntfy** app, subscribe to your trip (one tap on Android; copy and paste on iPhone), then send a test and confirm it arrived. Until you do, the header says **Set up alerts** instead of **Alerts on**, so a phone that will never be pinged is obvious.
+2. A short setup sheet opens: tap **Turn on notifications**, allow them, and a test arrives. On iPhone this needs ParkAlert on the Home Screen first, and the sheet says so and shows how. The free **ntfy** app is the fallback, one tap away under "Or use the ntfy app instead". Until a phone is set up, the header says **Set up alerts** instead of **Alerts on**, so a phone that will never be pinged is obvious. A phone that already allows notifications joins a new trip's alerts on its own.
 3. Add it to your home screen for the full-screen experience: Trip tab → **Add to Home Screen** (Chrome offers its own install prompt; on iPhone the sheet shows where Safari's menu item is).
 4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip asks first, and an invite opened with no signal is kept until the phone reconnects.
 
-The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort toggle beside the search field (A–Z, or shortest posted wait first). A ride with a single rider line or Lightning Lane says so, with the next return time. **Trip** holds the code, alert setup, pause, park and leave.
+The app has three tabs. **Down now** shows what is down, how long, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense, and the four shortest posted waits right now. The Home Screen icon carries a badge with the number of rides with alerts on that are down, where the phone allows it. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort toggle beside the search field (A–Z, or shortest posted wait first). A ride with a single rider line or Lightning Lane says so, with the next return time. An arrow beside a wait shows the line growing or shrinking: at least 10 minutes' change over the last half hour. **Trip** holds the code, alert setup, pause, park and leave.
 
 Almost everything opens something:
 
@@ -156,7 +159,8 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 - `Seven Dwarfs Mine Train is now open` with `Opened 40 min late` when a ride that missed its opening time finally opens (it went DOWN without having run first, so there was no "down" alert)
 - Three or more alerts of one kind in the same minute become one push (`6 rides just went down`), so a storm hold is one buzz rather than eleven. It says "park-wide hold" when most of the rides in it are, and a grouped "back up" says how long they were down. A ride still down when the rest of its hold reopens stays in the hold, with the hold's estimate.
 - Tapping an alert opens what it is about: the ride's page, the hold, or Down now. The link carries the trip code, so it opens the right trip even where it lands in Safari rather than the home-screen app. The link comes from `RAILWAY_PUBLIC_DOMAIN`, or `PUBLIC_URL` anywhere else. Pushes carry no emoji tags; the title says what happened.
-- Pausing (1 hour, 3 hours, until 7am on the park's clock) applies to everyone on the trip; the app says so, and points to muting the subscription in ntfy to quiet one phone only.
+- Pausing (1 hour, 3 hours, until 7am on the park's clock, or until turned back on) can be for just this phone, when it uses the app's own notifications, or for everyone on the trip. A phone on ntfy can only pause the whole trip, or mute the subscription in the ntfy app.
+- The app's own notifications for the same ride replace each other on the lock screen ("back up" replaces "is down") instead of piling up.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
 - Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
 - After a gap in polling (the trip hopped to another park and back, or the server or the API was down for more than 15 minutes), the next poll starts afresh with no alerts, because nobody knows when things changed in between. The dashboard shows the current state straight away.
@@ -209,6 +213,10 @@ Everything the app uses, all JSON. A trip code is the only credential.
 | `GET /api/trips/:code/park` | Today's counts, the week's least reliable rides, and how the reopen estimates scored over the last 14 days. |
 | `PUT /api/trips/:code/wait-alerts/:rideId` `{max}` | Push once today when the ride's wait is `max` minutes (5 to 240) or less. `DELETE` removes it. |
 | `POST /api/trips/:code/test` | A test push to this trip. |
+| `GET /api/push-key` | The server's VAPID public key, for subscribing. |
+| `POST /api/trips/:code/devices` `{subscription}` | Register this phone for the app's own notifications (idempotent by endpoint). Only known push services are accepted. |
+| `PATCH /api/trips/:code/devices/:id` `{mute}` | Pause this phone alone (`null` or `{until}`). `GET` reads it; `DELETE` takes the phone off the trip. |
+| `POST /api/trips/:code/devices/:id/test` | A test notification to this phone only. |
 | `POST /api/trips/:code/simulate` `{type: "up" \| "down"}` | See above. |
 
 Bad input is a 400 that says why, an oversized body a 413, and too many requests a 429 with `Retry-After`.

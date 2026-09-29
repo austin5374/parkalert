@@ -79,7 +79,7 @@ function sortKey(name) {
 }
 
 const alertsReadyKey = () => `parkalert.alertsReady.${tripCode}`;
-const alertsReady = () => localStorage.getItem(alertsReadyKey()) === '1';
+const alertsReady = () => !!phone.id || localStorage.getItem(alertsReadyKey()) === '1';
 
 /* ---------- API ---------- */
 // Park signal can stall a request indefinitely; give up and say so instead.
@@ -561,6 +561,13 @@ const pages = (() => {
         <div class="page-body"></div>
       </section>`);
     p.body = p.el.querySelector('.page-body');
+    // Pull down on a page to refresh it too, as on the tabs.
+    const ptr = el('<div class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>');
+    p.el.insertBefore(ptr, p.body);
+    pullToRefresh(p.body, ptr, async () => { await refresh(); await p.load?.(); }, {
+      scrollTop: () => p.body.scrollTop,
+      blocked: () => sheet.isOpen || pages.top !== p,
+    });
     p.body.addEventListener('scroll', () => p.el.classList.toggle('titled', p.body.scrollTop > 36), { passive: true });
     host.appendChild(p.el);
     stack.push(p);
@@ -785,6 +792,7 @@ async function startTrip(parkId, row = null) {
 
 function setTrip(code, { firstRun = false } = {}) {
   pages.clear();
+  if (tripCode && code.toUpperCase() !== tripCode) forgetPhone(tripCode);
   if (code.toUpperCase() !== tripCode) {
     // Never show one trip's rides under another trip's code.
     dash = null;
@@ -801,6 +809,7 @@ function setTrip(code, { firstRun = false } = {}) {
 function leaveTrip({ undoable = false } = {}) {
   pages.clear();
   const code = tripCode;
+  if (code) forgetPhone(code);
   try {
     localStorage.removeItem('parkalert.trip');
     localStorage.removeItem(dashKey(code));
@@ -823,10 +832,109 @@ function leaveTrip({ undoable = false } = {}) {
   }
 }
 
+/* ---------- This phone's notifications ---------- */
+// ParkAlert's own notifications, no second app: Android and desktop
+// browsers anywhere, iPhone once ParkAlert is on the Home Screen (iOS 16.4+).
+// Each phone registers itself on the trip, so it can also be paused alone.
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const needsInstallForPush = () => platform === 'ios' && !installed();
+const deviceKey = (code = tripCode) => `parkalert.device.${code}`;
+const phone = {
+  get id() { try { return localStorage.getItem(deviceKey()); } catch { return null; } },
+  mute: null, // this phone's own pause, as the server last confirmed it
+};
+const phoneMuted = () => !!phone.mute && (phone.mute.until === null || phone.mute.until > Date.now());
+
+const bytesOf = (b64u) => Uint8Array.from(atob(b64u.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+const sameKey = (buf, b64u) => {
+  if (!buf) return false;
+  const a = new Uint8Array(buf), b = bytesOf(b64u);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+};
+
+// Asks for permission (only ever from a tap), subscribes and registers this
+// phone on the trip. Resolves 'on', 'denied', 'dismissed' or 'failed'.
+async function subscribePhone({ ask = true } = {}) {
+  if (!pushSupported()) return 'failed';
+  const permission = ask ? await Notification.requestPermission() : Notification.permission;
+  if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'dismissed';
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const { publicKey } = await api('/push-key');
+    let sub = await reg.pushManager.getSubscription();
+    // A subscription made for another server key can't carry this one's pushes.
+    if (sub && !sameKey(sub.options.applicationServerKey, publicKey)) {
+      await sub.unsubscribe();
+      sub = null;
+    }
+    sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesOf(publicKey) });
+    const code = tripCode;
+    const { device } = await api(`/trips/${code}/devices`, { method: 'POST', body: { subscription: sub.toJSON() } });
+    if (code !== tripCode) return 'failed';
+    localStorage.setItem(deviceKey(code), device.id);
+    phone.mute = device.mute;
+    return 'on';
+  } catch {
+    return 'failed';
+  }
+}
+
+// On each open: re-register quietly (the browser may have renewed the
+// subscription) and learn this phone's own pause. A phone that already allows
+// notifications joins a new trip's alerts without being asked again.
+async function syncPhone() {
+  if (!tripCode || !pushSupported() || Notification.permission !== 'granted') {
+    phone.mute = null;
+    return;
+  }
+  if (phone.id || !localStorage.getItem(`parkalert.phoneOff.${tripCode}`)) await subscribePhone({ ask: false });
+  if (dash) renderAll();
+}
+
+// Leaving a trip takes this phone off its alerts.
+async function forgetPhone(code) {
+  let id = null;
+  try { id = localStorage.getItem(deviceKey(code)); localStorage.removeItem(deviceKey(code)); } catch {}
+  phone.mute = null;
+  if (id) await api(`/trips/${code}/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+}
+
+async function setPhoneMute(mute, { undo = true } = {}) {
+  const before = phone.mute;
+  phone.mute = mute;
+  renderAll();
+  try {
+    const { device } = await api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}`, { method: 'PATCH', body: { mute } });
+    phone.mute = device.mute;
+    renderAll();
+    if (undo) {
+      toast(mute ? (mute.until === null ? 'This phone is paused until you turn it back on' : `This phone is paused until ${fmtUntil(mute.until)}`) : 'This phone gets alerts again', {
+        label: 'Undo',
+        run: () => setPhoneMute(before, { undo: false }),
+      });
+    }
+  } catch {
+    phone.mute = before;
+    renderAll();
+    toast("Couldn't save that. Check your connection and try again.");
+  }
+}
+
+// A tapped notification with the app already open: go where it points.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type !== 'open') return;
+  const url = new URL(e.data.url, location.origin);
+  const code = url.searchParams.get('trip')?.toUpperCase();
+  pendingOpen = { ride: url.searchParams.get('ride'), view: url.searchParams.get('view') };
+  if (code && code !== tripCode) setTrip(code);
+  else openPending();
+});
+
 /* ---------- Header ---------- */
 function alertState() {
   const m = dash.trip.mute;
-  if (m && (m.until === null || m.until > Date.now())) return { kind: 'paused', until: m.until };
+  if (m && (m.until === null || m.until > Date.now())) return { kind: 'paused', until: m.until, scope: 'trip' };
+  if (phoneMuted()) return { kind: 'paused', until: phone.mute.until, scope: 'phone' };
   // The same rule the server mutes by: the day's last close, events included.
   const close = dash.park.lastCloseTime || dash.park.lateEvent?.closingTime || dash.park.closingTime;
   if (close && Date.now() > Date.parse(close)) return { kind: 'closed' };
@@ -921,6 +1029,7 @@ function fitTitle() {
 addEventListener('resize', () => { lastFit = null; if (dash) renderHeader(); });
 
 let lastFit = null;
+let lastBadge = null;
 function renderHeader() {
   $('#park-name').textContent = parkLabel(dash.park.name);
   document.title = `${parkLabel(dash.park.name)} · ParkAlert`;
@@ -959,6 +1068,11 @@ function renderHeader() {
   const badge = $('#down-badge');
   badge.textContent = down;
   badge.classList.toggle('hidden', !down);
+  // The same count on the Home Screen icon, where the platform allows it.
+  if (down !== lastBadge) {
+    lastBadge = down;
+    (down ? navigator.setAppBadge?.(down) : navigator.clearAppBadge?.())?.catch?.(() => {});
+  }
 }
 
 /* ---------- Down now ---------- */
@@ -981,6 +1095,14 @@ function timeline(r) {
   </div>`;
 }
 
+// The range as clock times, which is what people plan around.
+function likelyBack(o) {
+  const w = o?.window;
+  if (!w || w.lo == null) return '';
+  const lo = fmtTime(Date.now() + w.lo * 60000), hi = fmtTime(Date.now() + (w.hi ?? w.lo * 2) * 60000);
+  return lo === hi ? `Likely back around ${lo}` : `Likely back ${lo} to ${hi}`;
+}
+
 function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
@@ -1000,6 +1122,7 @@ function downCard(r) {
       <p class="card-sub">${since}</p>
       ${timeline(r)}
       ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
+      ${likelyBack(o) ? `<p class="card-clock">${esc(likelyBack(o))}</p>` : ''}
       ${foot ? `<p class="card-foot">${esc(foot)}</p>` : ''}
     </article>`;
 }
@@ -1111,7 +1234,29 @@ function renderRecent(downIds) {
         ${icon('chevron', 'chevron')}
       </button>`).join('')}</div>`);
   }
+  parts.push(shortWaitsHtml());
   morph($('#recent-block'), parts.join(''));
+}
+
+// What's quick to ride right now: the shortest posted waits, only while the
+// park is open and the data is fresh. Walk-throughs that post no wait aren't
+// "short waits", so they're left out.
+function shortWaitsHtml() {
+  const st = alertState();
+  const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
+  if (st.kind === 'closed' || stale) return '';
+  const quick = dash.rides
+    .filter((r) => r.status === 'OPERATING' && r.waitTime != null)
+    .sort((a, b) => a.waitTime - b.waitTime || sortKey(a.name).localeCompare(sortKey(b.name)))
+    .slice(0, 4);
+  if (quick.length < 2) return '';
+  return `<h2 class="section-label" data-key="short-label">Shortest waits right now</h2>
+    <div class="group" data-key="short">${quick.map((r) => `
+    <button class="row recent-row pressable" type="button" data-ride="${esc(r.id)}">
+      <span class="row-label">${esc(r.name)}${queueTags(r).length ? `<small>${esc(queueTags(r).join(' · '))}</small>` : ''}</span>
+      <span class="row-detail">${r.waitTime} min${trendHtml(r)}</span>
+      ${icon('chevron', 'chevron')}
+    </button>`).join('')}</div>`;
 }
 
 /* ---------- Rides ---------- */
@@ -1134,6 +1279,15 @@ function queueTags(r) {
     else if (ll.state === 'TEMP_FULL' || ll.state === 'FINISHED') tags.push(`${name} full`);
   }
   return tags;
+}
+
+// A growing or shrinking line, in the list: an arrow with words for
+// screen readers. Waits that barely moved show nothing.
+function trendHtml(r) {
+  const t = r.status === 'OPERATING' && r.trend;
+  if (!t) return '';
+  const words = t.direction === 'up' ? `up ${t.change} min in the last half hour` : `down ${-t.change} min in the last half hour`;
+  return `<span class="trend ${t.direction}" title="${words}"><span class="vh">, ${words}</span>${icon(`trend-${t.direction}`)}</span>`;
 }
 
 function rideMeta(r) {
@@ -1205,6 +1359,14 @@ function drawRides() {
   const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
   const following = all.filter((r) => isFollowing(r.id)).length;
 
+  // Counts on the filter, as Mail shows unread: how many are open or down
+  // before you tap.
+  for (const b of document.querySelectorAll('[data-filter]')) {
+    const f = b.dataset.filter;
+    const n = f === 'all' ? null : all.filter(FILTERS[f]).length;
+    const label = { all: 'All', open: 'Open', down: 'Down', following: 'With alerts' }[f];
+    morph(b, n == null ? label : `${label} <span class="count">${n}</span>`);
+  }
   $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length}` : `Alerts on for ${following} of ${all.length}`;
   const btn = $('#btn-follow-all');
   btn.textContent = following === all.length ? 'Turn all off' : 'Turn all on';
@@ -1224,7 +1386,7 @@ function drawRides() {
       <div class="row ride-row" data-key="${esc(r.id)}">
         <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
           <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${waitBadge(r)}</span>
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${trendHtml(r)}${waitBadge(r)}</span>
             ${queueTags(r).length ? `<span class="tags">${queueTags(r).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}
           </span>
         </button>
@@ -1315,12 +1477,14 @@ function renderTrip() {
   $('#trip-code').textContent = tripCode;
   const ready = alertsReady();
   const d = $('#setup-detail');
-  d.textContent = ready ? 'Working' : 'Not set up';
+  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Via ntfy' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
   // Nothing when not paused, as Settings shows no value for an unset row;
   // "Off" read as "alerts are off".
-  $('#pause-detail').textContent = st.kind === 'paused' ? (st.until ? `Until ${fmtUntil(st.until)}` : 'Until you resume') : '';
+  const until = st.until ? `until ${fmtUntil(st.until)}` : 'until you resume';
+  $('#pause-detail').textContent = st.kind !== 'paused' ? ''
+    : st.scope === 'phone' ? `This phone, ${until}` : `Everyone, ${until}`;
   $('#park-detail').textContent = parkLabel(dash.park.name);
 }
 
@@ -1389,23 +1553,44 @@ function openPause() {
     [thisMorning ? 'Until this morning' : 'Until tomorrow morning', morning],
     ['Until I turn them back on', null],
   ];
+  const tripPaused = st.kind === 'paused' && st.scope === 'trip';
+  // With the app's own notifications, this phone can be paused alone; a
+  // shared ntfy topic can only be paused for everyone.
+  const perPhone = !!phone.id;
   const note = st.kind === 'closed'
     ? 'The park is closed, so alerts are already off until it opens.'
-    : 'Nobody on this trip gets alerts while paused. The Down now list keeps updating.';
+    : perPhone
+      ? 'Pause just this phone, or everyone on the trip. The Down now list keeps updating either way.'
+      : 'Nobody on this trip gets alerts while paused. The Down now list keeps updating.';
   const content = el(`<div>${sheetHead('Pause alerts', note)}</div>`);
-  if (st.kind === 'paused') {
-    const g = el(`<div class="group plain"><button class="row pressable" type="button">${icon('bell', 'row-icon tint-accent')}<span class="row-label">Resume alerts now</span></button></div>`);
-    g.querySelector('button').onclick = () => { sheet.close(); setMute(null); };
-    content.appendChild(g);
-    content.appendChild(el('<div style="height:1.2rem"></div>'));
+  const optionRows = (scope) => {
+    const g = el('<div class="group plain"></div>');
+    for (const [label, until] of options) {
+      const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(until === morning ? fmtTime(until) : `Until ${fmtTime(until)}`)}</span>` : ''}</button>`);
+      row.onclick = () => { sheet.close(); if (scope === 'phone') setPhoneMute({ until }); else setMute({ until }); };
+      g.appendChild(row);
+    }
+    return g;
+  };
+  const resumeRow = (label, run) => {
+    const g = el(`<div class="group plain"><button class="row pressable" type="button">${icon('bell', 'row-icon tint-accent')}<span class="row-label">${label}</span></button></div>`);
+    g.querySelector('button').onclick = () => { sheet.close(); run(); };
+    return g;
+  };
+  if (tripPaused) {
+    content.appendChild(resumeRow('Resume for everyone', () => setMute(null)));
+    content.appendChild(el('<div style="height:1rem"></div>'));
   }
-  const g = el('<div class="group plain"></div>');
-  for (const [label, until] of options) {
-    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(until === morning ? fmtTime(until) : `Until ${fmtTime(until)}`)}</span>` : ''}</button>`);
-    row.onclick = () => { sheet.close(); setMute({ until }); };
-    g.appendChild(row);
+  if (perPhone && phoneMuted()) {
+    content.appendChild(resumeRow('Resume on this phone', () => setPhoneMute(null)));
+    content.appendChild(el('<div style="height:1rem"></div>'));
   }
-  content.appendChild(g);
+  if (perPhone) {
+    content.appendChild(el('<h2 class="section-label">Just this phone</h2>'));
+    content.appendChild(optionRows('phone'));
+    content.appendChild(el('<h2 class="section-label">Everyone on this trip</h2>'));
+  }
+  content.appendChild(optionRows('trip'));
   const cancel = el('<div class="btn-stack"><button class="btn-secondary pressable" type="button">Cancel</button></div>');
   cancel.querySelector('button').onclick = () => sheet.close();
   content.appendChild(cancel);
@@ -1478,13 +1663,108 @@ function openLeave() {
 
 // The whole point of the app lives in this sheet, so it opens on its own the
 // first time a trip is created or joined, and stays one tap away after that.
+// The app's own notifications come first: one tap and a system prompt, no
+// second app. ntfy stays as the way for phones that can't.
 function openAlertSetup() {
+  sheet.open(alertSetupContent());
+}
+
+function alertSetupContent() {
+  const denied = pushSupported() && Notification.permission === 'denied';
+  const content = el(`<div>${sheetHead('Get alerts on this phone', '')}</div>`);
+  const head = content.querySelector('.sheet-head');
+  const ntfy = ntfyStepsContent();
+
+  if (phone.id) {
+    head.appendChild(el('<p>Notifications are on for this phone. You get an alert when a ride with alerts on goes down, comes back up, or closes.</p>'));
+    content.appendChild(el(`<div class="btn-stack">
+      <button class="btn-primary pressable" type="button" data-act="phone-test">${icon('send')}<span>Send this phone a test</span></button>
+      <button class="btn-secondary pressable" type="button" data-act="phone-off">Turn off for this phone</button>
+      <button class="btn-secondary pressable" type="button" data-act="done">Done</button>
+    </div>`));
+  } else if (pushSupported() && !needsInstallForPush()) {
+    head.appendChild(el(`<p>${denied
+      ? 'Notifications are blocked for ParkAlert on this phone. Turn them on in your phone\'s Settings (on iPhone: Settings, Notifications, ParkAlert), then come back here.'
+      : 'ParkAlert can notify this phone itself. One tap, nothing else to install.'}</p>`));
+    content.appendChild(el(`<div class="btn-stack">
+      <button class="btn-primary pressable" type="button" data-act="push-on" ${denied ? 'disabled' : ''}>${icon('bell')}<span>Turn on notifications</span></button>
+      <p class="footnote center hidden" data-note></p>
+    </div>`));
+    const more = el('<details class="more"><summary>Or use the ntfy app instead</summary></details>');
+    more.appendChild(ntfy);
+    content.appendChild(more);
+    content.appendChild(el('<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Set up later</button></div>'));
+  } else if (needsInstallForPush()) {
+    head.appendChild(el('<p>On iPhone, ParkAlert can notify you itself once it is on your Home Screen. Add it there, open it from its icon, and turn notifications on from this screen.</p>'));
+    content.appendChild(el(`<div class="btn-stack">
+      <button class="btn-primary pressable" type="button" data-act="install">${icon('share')}<span>Add to Home Screen</span></button>
+    </div>`));
+    const more = el('<details class="more"><summary>Or use the ntfy app instead</summary></details>');
+    more.appendChild(ntfy);
+    content.appendChild(more);
+    content.appendChild(el('<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Set up later</button></div>'));
+  } else {
+    head.appendChild(el('<p>Alerts arrive through ntfy, a free notification app. No account needed, and it takes about a minute.</p>'));
+    content.appendChild(ntfy);
+    content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
+  }
+
+  const q = (a) => content.querySelector(`[data-act=${a}]`);
+  q('done')?.addEventListener('click', () => sheet.close());
+  q('install')?.addEventListener('click', () => $('#row-install').click());
+  q('push-on')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const note = content.querySelector('[data-note]');
+    btn.disabled = true;
+    btn.querySelector('span').textContent = 'Turning on…';
+    const result = await subscribePhone();
+    if (result === 'on') {
+      try { localStorage.removeItem(`parkalert.phoneOff.${tripCode}`); } catch {}
+      api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' }).catch(() => {});
+      haptic();
+      renderAll();
+      sheet.open(alertSetupContent());
+      toast('Notifications are on. A test is on its way.');
+      return;
+    }
+    btn.disabled = result === 'denied';
+    btn.querySelector('span').textContent = 'Turn on notifications';
+    note.classList.remove('hidden');
+    note.textContent = result === 'denied'
+      ? "Notifications are blocked. Turn them on for ParkAlert in your phone's Settings, then try again."
+      : result === 'dismissed'
+        ? 'Tap Allow when your phone asks, so alerts can reach you.'
+        : "Couldn't turn notifications on. Check your connection and try again, or use ntfy below.";
+  });
+  q('phone-test')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' });
+      toast('Test sent to this phone');
+    } catch (err) {
+      toast(err.status === 429 ? 'That was a lot of tests. Try again in a few minutes.' : "Couldn't send the test. Try again in a moment.");
+    }
+    btn.disabled = false;
+  });
+  q('phone-off')?.addEventListener('click', async () => {
+    const code = tripCode;
+    try { localStorage.setItem(`parkalert.phoneOff.${code}`, '1'); } catch {}
+    await forgetPhone(code);
+    renderAll();
+    sheet.open(alertSetupContent());
+    toast('This phone no longer gets alerts');
+  });
+  return content;
+}
+
+// Subscribing to the trip's ntfy topic: install, subscribe, test.
+function ntfyStepsContent() {
   const topic = dash.trip.topic;
   const base = dash.ntfyBase || 'https://ntfy.sh';
   const host = base.replace(/^https?:\/\//, '');
   const deepLink = `ntfy://${host}/${topic}?display=${encodeURIComponent(`ParkAlert ${tripCode}`)}${base.startsWith('https') ? '' : '&secure=false'}`;
-  const ready = alertsReady();
-
+  const ready = localStorage.getItem(alertsReadyKey()) === '1';
   const install = platform === 'ios'
     ? `<a class="btn-secondary pressable" href="${APP_STORE}" target="_blank" rel="noopener">Get ntfy on the App Store</a>`
     : platform === 'android'
@@ -1498,15 +1778,13 @@ function openAlertSetup() {
     : platform === 'ios'
       ? `<p>Copy this, then in ntfy tap <strong>+</strong>, paste it and tap Subscribe.</p>${topicChip}`
       : `<p>In the ntfy app on your phone, tap <strong>+</strong> and subscribe to this topic. Or get alerts in this browser with <a href="${esc(base)}/${esc(topic)}" target="_blank" rel="noopener">ntfy web</a>.</p>${topicChip}`;
-
   const content = el(`<div>
-    ${sheetHead('Get alerts on this phone', 'Alerts arrive through ntfy, a free notification app. No account needed, and it takes about a minute.')}
     <ol class="steps">
       <li class="step"><h3>Install ntfy</h3><p>Already have it? Skip ahead.</p>${install}</li>
       <li class="step"><h3>Subscribe to this trip</h3>${subscribe}</li>
       <li class="step ${ready ? 'done' : ''}"><h3>Send a test</h3>
         <p>${ready ? 'Alerts are working on this phone.' : 'Make sure it shows up as a notification.'}</p>
-        <button class="btn-primary pressable" type="button" data-act="test">${icon('send')}<span>Send test alert</span></button>
+        <button class="btn-secondary pressable" type="button" data-act="test">${icon('send')}<span>Send test alert</span></button>
         <div class="confirm hidden" style="margin-top:0.9rem">
           <p>Did it arrive?</p>
           <div class="btn-row">
@@ -1517,28 +1795,24 @@ function openAlertSetup() {
         </div>
       </li>
     </ol>
-    <div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="later">${ready ? 'Done' : 'Set up later'}</button></div>
   </div>`);
-
   const q = (a) => content.querySelector(`[data-act=${a}]`);
-  if (q('copy')) {
-    q('copy').onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(topic);
-        q('copy').textContent = 'Copied';
-        haptic();
-        setTimeout(() => { if (q('copy')) q('copy').textContent = 'Copy'; }, 2000);
-      } catch {
-        // Select it for them, so the system's Copy is one tap away.
-        const range = document.createRange();
-        range.selectNodeContents(content.querySelector('.topic code'));
-        getSelection().removeAllRanges();
-        getSelection().addRange(range);
-        toast('Tap Copy on the selected topic');
-      }
-    };
-  }
-  q('test').onclick = async () => {
+  q('copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(topic);
+      q('copy').textContent = 'Copied';
+      haptic();
+      setTimeout(() => { if (q('copy')) q('copy').textContent = 'Copy'; }, 2000);
+    } catch {
+      // Select it for them, so the system's Copy is one tap away.
+      const range = document.createRange();
+      range.selectNodeContents(content.querySelector('.topic code'));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      toast('Tap Copy on the selected topic');
+    }
+  });
+  q('test').addEventListener('click', async () => {
     const btn = q('test');
     btn.disabled = true;
     btn.querySelector('span').textContent = 'Sending…';
@@ -1550,16 +1824,15 @@ function openAlertSetup() {
       btn.querySelector('span').textContent = "Couldn't send. Try again";
     }
     btn.disabled = false;
-  };
-  q('yes').onclick = () => {
+  });
+  q('yes').addEventListener('click', () => {
     localStorage.setItem(alertsReadyKey(), '1');
     sheet.close();
     renderAll();
     toast('Alerts are working on this phone');
-  };
-  q('no').onclick = () => content.querySelector('.tip').classList.remove('hidden');
-  q('later').onclick = () => sheet.close();
-  sheet.open(content);
+  });
+  q('no').addEventListener('click', () => content.querySelector('.tip').classList.remove('hidden'));
+  return content;
 }
 
 /* ---------- Detail pages ---------- */
@@ -1574,7 +1847,9 @@ const KIND_NOTE = {
 
 function statusLine(r) {
   if (r.status === 'DOWN' && r.downSince) return `Down ${fmtDuration(Date.now() - r.downSince)} · since ${fmtTime(r.downSince)}`;
-  return [rideMeta(r), ...queueTags(r)].join(' · ');
+  const t = r.status === 'OPERATING' && r.trend;
+  const trend = t ? `${t.direction === 'up' ? 'up' : 'down'} ${Math.abs(t.change)} min in the last half hour` : '';
+  return [rideMeta(r) + (trend ? `, ${trend}` : ''), ...queueTags(r)].join(' · ');
 }
 
 // What a range rests on, in a few words for the card.
@@ -2123,7 +2398,9 @@ const fmtShort = (d) => new Intl.DateTimeFormat(LOCALE, { month: 'short', day: '
 // Afterwards it says how it went, as Mail does under its title: "Updated
 // just now", or that it couldn't. Works on the setup screen too, where it
 // retries the park list.
-function pullToRefresh(area, ptr, onRefresh) {
+// scrollTop: how far the area is scrolled (the window, or a page's body).
+// blocked: when not to start (a sheet or a page is over it).
+function pullToRefresh(area, ptr, onRefresh, { scrollTop = () => scrollY, blocked = () => sheet.isOpen || pages.depth } = {}) {
   const THRESHOLD = 64, HOLD = 52;
   let start = null, pull = 0, busy = false, anim = null, armed = false;
   const paint = (v) => {
@@ -2141,7 +2418,7 @@ function pullToRefresh(area, ptr, onRefresh) {
     anim = spring({ from: pull, to, damping: 1, response: 0.3, onUpdate: paint, onDone: done });
   };
   area.addEventListener('touchstart', (e) => {
-    if (busy || sheet.isOpen || pages.depth || scrollY > 0 || e.touches.length > 1) return;
+    if (busy || blocked() || scrollTop() > 0 || e.touches.length > 1) return;
     anim?.stop();
     start = e.touches[0].clientY;
   }, { passive: true });
@@ -2322,6 +2599,7 @@ async function showApp({ firstRun = false } = {}) {
   renderAll();
   await refresh();
   scheduleRefresh();
+  syncPhone();
   if (pendingOpen) openPending();
   else if (firstRun && dash && !alertsReady()) openAlertSetup();
 }

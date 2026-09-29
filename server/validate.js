@@ -75,3 +75,27 @@ export function parseTripPatch(body, isPark) {
   }
   return out;
 }
+
+// POST /api/trips/:code/devices: a browser push subscription, as
+// PushSubscription.toJSON() gives it. The endpoint must be a known push
+// service (see webpush.js); the keys must be the sizes P-256 and the spec use.
+export function parseSubscription(body, isPushEndpoint) {
+  requireObject(body);
+  const sub = body.subscription;
+  if (!isPlainObject(sub) || typeof sub.endpoint !== 'string' || !isPushEndpoint(sub.endpoint)) bad('bad push subscription');
+  const { p256dh, auth } = isPlainObject(sub.keys) ? sub.keys : {};
+  const b64 = /^[A-Za-z0-9_-]+={0,2}$/;
+  if (typeof p256dh !== 'string' || !b64.test(p256dh) || Buffer.from(p256dh, 'base64url').length !== 65) bad('bad push key');
+  if (typeof auth !== 'string' || !b64.test(auth) || Buffer.from(auth, 'base64url').length !== 16) bad('bad push secret');
+  return { endpoint: sub.endpoint, keys: { p256dh, auth } };
+}
+
+// PATCH /api/trips/:code/devices/:id: { mute: null | { until: epoch ms | null } }.
+export function parseDeviceMute(body) {
+  requireObject(body);
+  if (body.mute === null) return null;
+  if (!isPlainObject(body.mute)) bad('mute must be null or { until }');
+  const { until } = body.mute;
+  if (until !== null && (!Number.isFinite(until) || until < 0)) bad('until must be epoch milliseconds or null');
+  return { until };
+}

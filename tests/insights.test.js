@@ -85,3 +85,14 @@ test('"last 7 days" figures come from those 7 days only', () => {
   assert.equal(h.typicalMinutes, 15);
   assert.equal(h.archivedDays, 8);
 });
+
+test('a wait trend compares now with half an hour ago and ignores small moves', async () => {
+  const { waitTrend } = await import('../server/insights.js');
+  const m = 60_000, now = 100 * m;
+  assert.deepEqual(waitTrend([[40 * m, 20], [65 * m, 30], [90 * m, 45]], now), { direction: 'up', change: 15 });
+  assert.deepEqual(waitTrend([[40 * m, 60], [90 * m, 40]], now), { direction: 'down', change: -20 });
+  assert.equal(waitTrend([[40 * m, 30], [90 * m, 35]], now), null, 'one 5-minute step is steady');
+  assert.equal(waitTrend([[80 * m, 20], [90 * m, 45]], now), null, 'no reading from 30 min ago');
+  assert.equal(waitTrend([[40 * m, 20], [90 * m, null]], now), null, 'not posting a wait now');
+  assert.equal(waitTrend([[40 * m, null], [90 * m, 30]], now), null, 'was down 30 min ago');
+});
