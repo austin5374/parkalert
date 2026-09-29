@@ -71,6 +71,14 @@ test('a test goes to the one phone that asked for it', async () => {
   assert.deepEqual(hits.map((h) => h.path), ['/f']);
 });
 
+test("the ntfy setup's test goes to the topic alone, not every phone", async () => {
+  hits.length = 0;
+  const trip = { code: 'NNNNNN', topic: 't', devices: [device('n1'), device('n2')] };
+  const result = await deliver(trip, { title: 'ParkAlert test', message: 'Hello', priority: 3 }, { tag: 'test', ntfyOnly: true });
+  assert.deepEqual(result, { ok: true, ntfy: true, devices: 0 });
+  assert.equal(hits.length, 0);
+});
+
 test('a subscription the push service says is gone is removed from the trip', async () => {
   goneIds.add('/g');
   const trip = { code: 'DDDDDD', topic: 't', devices: [device('g'), device('h')] };

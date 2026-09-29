@@ -1791,9 +1791,11 @@ function alertSetupContent() {
     content.appendChild(ntfy);
     content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
   }
+  content.appendChild(el('<div class="btn-stack"><button class="btn-inline pressable" type="button" data-act="test-all">Test every phone on this trip</button></div>'));
 
   const q = (a) => content.querySelector(`[data-act=${a}]`);
   q('done')?.addEventListener('click', () => sheet.close());
+  q('test-all').addEventListener('click', openTestEveryone);
   q('install')?.addEventListener('click', () => $('#row-install').click());
   q('push-on')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
@@ -1826,7 +1828,7 @@ function alertSetupContent() {
       await api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' });
       toast('Test sent to this phone');
     } catch (err) {
-      toast(err.status === 429 ? 'That was a lot of tests. Try again in a few minutes.' : "Couldn't send the test. Try again in a moment.");
+      toast(testError(err));
     }
     btn.disabled = false;
   });
@@ -1900,7 +1902,7 @@ function ntfyStepsContent() {
     btn.disabled = true;
     btn.querySelector('span').textContent = 'Sending…';
     try {
-      await api(`/trips/${tripCode}/test`, { method: 'POST' });
+      await api(`/trips/${tripCode}/test`, { method: 'POST', body: { to: 'ntfy' } });
       btn.querySelector('span').textContent = 'Send again';
       content.querySelector('.confirm').classList.remove('hidden');
     } catch {
@@ -2912,17 +2914,48 @@ $('#switch-crowd').onclick = withDash(() => {
   const on = !dash.trip.crowdAlerts;
   save((t) => { t.crowdAlerts = on; }, { crowdAlerts: on }, () => toast(on ? "You'll get an alert when lines are building" : 'Lines-building alerts off'));
 });
+// Tests this phone: its own notifications, or the trip's ntfy topic. Testing
+// every phone on the trip is in the setup sheet, behind a confirm.
 $('#row-test').onclick = async () => {
+  if (!alertsReady()) {
+    toast("Alerts aren't set up on this phone yet", { label: 'Set up', run: withDash(openAlertSetup) });
+    return;
+  }
   const d = $('#test-detail');
   d.textContent = 'Sending…';
   try {
-    await api(`/trips/${tripCode}/test`, { method: 'POST' });
-    toast('Test alert sent. Check your notifications.');
+    if (phone.id) await api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' });
+    else await api(`/trips/${tripCode}/test`, { method: 'POST', body: { to: 'ntfy' } });
+    toast(phone.id ? 'Test sent to this phone' : 'Test sent through ntfy');
   } catch (err) {
-    toast(err.status === 429 ? 'That was a lot of tests. Try again in a few minutes.' : "Couldn't send the test. Try again in a moment.");
+    toast(testError(err));
   }
   d.textContent = '';
 };
+function testError(err) {
+  return err.status === 429 ? 'That was a lot of tests. Try again in a few minutes.' : "Couldn't send the test. Try again in a moment.";
+}
+
+function openTestEveryone() {
+  const content = el(`<div>
+    ${sheetHead('Test every phone?', `Every phone that gets alerts for trip <strong>${esc(tripCode)}</strong> gets a test notification now.`)}
+    <div class="btn-stack">
+      <button class="btn-primary pressable" type="button" data-act="send">${icon('send')}<span>Send to every phone</span></button>
+      <button class="btn-secondary pressable" type="button" data-act="cancel">Cancel</button>
+    </div>
+  </div>`);
+  content.querySelector('[data-act=send]').onclick = async () => {
+    sheet.close();
+    try {
+      await api(`/trips/${tripCode}/test`, { method: 'POST' });
+      toast('Test sent to every phone on this trip');
+    } catch (err) {
+      toast(testError(err));
+    }
+  };
+  content.querySelector('[data-act=cancel]').onclick = () => sheet.close();
+  sheet.open(content);
+}
 
 $('#btn-share').onclick = async () => {
   const url = `${location.origin}/?join=${tripCode}`;

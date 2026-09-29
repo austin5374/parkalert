@@ -160,6 +160,7 @@ a, a:visited { color: var(--accent); }
 .join input::placeholder { text-transform: none; letter-spacing: -0.01em; color: var(--label-2); }
 .btn-inline { color: var(--accent); font-weight: 600; padding: 0.5rem 0.75rem; }
 .btn-inline:disabled { color: var(--label-3); }
+.btn-stack .btn-inline { align-self: center; }
 
 /* ---- Navigation header: a translucent layer content scrolls beneath ---- */
 .nav {

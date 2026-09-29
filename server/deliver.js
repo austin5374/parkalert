@@ -19,11 +19,12 @@ export const deviceMuted = (device, now = Date.now()) =>
 // urgency: 'high' asks the push service to wake a sleeping phone at once
 // (Android holds 'normal' ones while dozing); "is down" needs that as much as
 // "back up" does. badge: how many of this trip's rides are down, for the
-// Home Screen icon while the app is closed.
-export async function deliver(trip, push, { tag = null, device = null, now = Date.now(), badge = null } = {}) {
+// Home Screen icon while the app is closed. ntfyOnly: the topic alone (the
+// ntfy setup's test).
+export async function deliver(trip, push, { tag = null, device = null, ntfyOnly = false, now = Date.now(), badge = null } = {}) {
   const jobs = [];
   if (!device) jobs.push(publish(trip.topic, push.quiet ? { ...push, priority: 2 } : push));
-  const targets = (trip.devices || []).filter((d) => (device ? d.id === device : !deviceMuted(d, now)));
+  const targets = ntfyOnly ? [] : (trip.devices || []).filter((d) => (device ? d.id === device : !deviceMuted(d, now)));
   const data = {
     title: push.title, body: push.message, url: push.click || '/', tag,
     ...(push.quiet ? { quiet: true } : {}),

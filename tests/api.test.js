@@ -136,6 +136,15 @@ test('the test alert reaches the trip topic with a tap-to-open link', async () =
   assert.equal(fakes.pushes[0].topic, trip.topic);
 });
 
+test("a test from the ntfy setup says so, and an odd body still means everyone", async () => {
+  const trip = await newTrip();
+  fakes.pushes.length = 0;
+  assert.equal((await call('POST', `/api/trips/${trip.code}/test`, { to: 'ntfy' })).status, 200);
+  assert.match(fakes.pushes[0].message, /ntfy setup/);
+  assert.equal((await call('POST', `/api/trips/${trip.code}/test`, 'null')).status, 200);
+  assert.match(fakes.pushes[1].message, /Someone on your trip/);
+});
+
 test('unknown routes are 404', async () => {
   assert.equal((await call('GET', '/api/nope')).status, 404);
   assert.equal((await call('DELETE', '/api/parks')).status, 404);

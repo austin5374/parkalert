@@ -385,13 +385,19 @@ async function handleApi(req, res, url) {
   }
 
   if (trip && req.method === 'POST' && parts[3] === 'test') {
-    // It goes to every phone on the trip, not just the one that asked, so it
-    // says what it is rather than "this phone".
+    // { to: 'ntfy' } from the ntfy setup: the trip's topic only, since the
+    // phone being set up is the one checking. Otherwise every phone on the
+    // trip, asked for behind a confirm, so it says what it is rather than
+    // "this phone".
+    const body = await readBody(req);
+    const ntfyOnly = body?.to === 'ntfy';
     const { ok } = await deliver(trip, {
       title: `ParkAlert test for trip ${trip.code}`,
-      message: 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
+      message: ntfyOnly
+        ? 'Sent from the ntfy setup. If you can read this, ntfy alerts reach this phone.'
+        : 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
       click: appLink(trip),
-    }, { tag: 'test' });
+    }, { tag: 'test', ntfyOnly });
     return json(res, ok ? 200 : 502, { ok });
   }
 
