@@ -470,6 +470,16 @@ function serveStatic(req, res, url) {
     res.writeHead(403);
     return res.end();
   }
+  // A trip's own manifest: installed from a trip, the Home Screen app opens
+  // on that trip. On iPhone it has storage of its own, apart from Safari's,
+  // so without this it opened to the first-run screen with no trip.
+  const tripParam = url.searchParams.get('trip');
+  if (url.pathname === '/manifest.webmanifest' && /^[A-Za-z0-9]{6}$/.test(tripParam || '')) {
+    const manifest = JSON.parse(loadStatic('manifest.webmanifest').raw.toString('utf8'));
+    manifest.start_url = `/?trip=${tripParam.toUpperCase()}`;
+    res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify(manifest));
+  }
   // Any path that isn't a file is a screen of the app (/, /ride/<id>, a
   // tapped push's link), and gets the page, which routes itself.
   if (url.pathname === '/' || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {

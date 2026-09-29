@@ -42,7 +42,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   const key = e.request.mode === 'navigate' ? '/' : url.pathname;
-  if (key !== '/' && !ASSETS.includes(key)) return;
+  // A file asked for with a query (a trip's own manifest) is not the cached one.
+  if (key !== '/' && (!ASSETS.includes(key) || url.search)) return;
   e.respondWith(
     caches.open(CACHE)
       .then((c) => c.match(key))

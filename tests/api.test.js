@@ -382,3 +382,14 @@ test('bad input at the edges is a 400 or 404, never a 500 or a silent accept', a
   }
   assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { mute: { until: Date.now() + 3600_000 } })).status, 200);
 });
+
+test("a trip's own manifest opens the installed app on that trip", async () => {
+  const plain = await (await fetch(`${base}/manifest.webmanifest`)).json();
+  assert.equal(plain.start_url, '/');
+  const res = await fetch(`${base}/manifest.webmanifest?trip=mklabs`);
+  assert.match(res.headers.get('content-type'), /manifest\+json/);
+  const own = await res.json();
+  assert.equal(own.start_url, '/?trip=MKLABS');
+  assert.equal(own.id, plain.id, 'still the same app');
+  assert.equal((await (await fetch(`${base}/manifest.webmanifest?trip=<script>`)).json()).start_url, '/', 'only a code');
+});

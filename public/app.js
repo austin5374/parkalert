@@ -827,6 +827,11 @@ async function startTrip(parkId, row = null) {
   return starting;
 }
 
+// The page's manifest names the trip, so installing from here opens on it.
+function syncManifest() {
+  $('link[rel=manifest]').href = tripCode ? `/manifest.webmanifest?trip=${tripCode}` : '/manifest.webmanifest';
+}
+
 function setTrip(code, { firstRun = false } = {}) {
   pages.clear();
   if (tripCode && code.toUpperCase() !== tripCode) forgetPhone(tripCode);
@@ -3109,6 +3114,7 @@ async function fetchDashboard() {
 
 /* ---------- Screens & navigation ---------- */
 function showSetup() {
+  syncManifest();
   $('#app').classList.add('hidden');
   $('#setup').classList.remove('hidden');
   document.body.classList.add('no-tabbar');
@@ -3119,6 +3125,7 @@ function showSetup() {
 const onSetup = () => !$('#setup').classList.contains('hidden');
 
 async function showApp({ firstRun = false } = {}) {
+  syncManifest();
   $('#setup').classList.add('hidden');
   $('#app').classList.remove('hidden');
   document.body.classList.remove('no-tabbar');
@@ -3360,14 +3367,19 @@ $('#row-install').onclick = async () => {
     syncInstall();
     return;
   }
+  // The Home Screen app keeps its own storage, apart from Safari's, so it
+  // starts from this address: the trip rides along in it while this is open.
+  const code = tripCode;
+  if (code) history.replaceState(history.state, '', `/?trip=${code}`);
   sheet.open(el(`<div>
-    ${sheetHead('Add to Home Screen', 'ParkAlert then opens full screen from its own icon, without Safari around it.')}
+    ${sheetHead('Add to Home Screen', `Needed for alerts on iPhone: ParkAlert can only notify you from its own Home Screen icon.${code ? ` It opens on trip <strong>${esc(code)}</strong>.` : ''}`)}
     <ol class="steps">
-      <li class="step"><h3>Tap Share</h3><p>The ${icon('share', 'inline-icon')} button in Safari's toolbar.</p></li>
+      <li class="step"><h3>Tap Share</h3><p>The ${icon('share', 'inline-icon')} button in Safari's toolbar. With Safari's compact tab bar, tap the ··· button first, then Share.</p></li>
       <li class="step"><h3>Tap Add to Home Screen</h3><p>Scroll down the list if you don't see it, then tap Add.</p></li>
+      <li class="step"><h3>Open ParkAlert from its icon</h3><p>Then turn on notifications there.</p></li>
     </ol>
     <div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Done</button></div>
-  </div>`));
+  </div>`), { onClose: () => { if (location.search) history.replaceState(history.state, '', '/'); } });
   $('#sheet-body [data-act=done]').onclick = () => sheet.close();
 };
 syncInstall();
@@ -3518,7 +3530,14 @@ function confirmInvite(code, trip) {
   // exists is caught by the first refresh, which says so and leaves it.
   if (!shown) {
     if (tripCode) showApp();
-    else showSetup();
+    else {
+      showSetup();
+      // The Home Screen app on iPhone doesn't see a trip started in Safari.
+      if (platform === 'ios' && installed() && !joinParam && !pendingInvite()) {
+        setupStatus("A trip started in Safari doesn't carry over to the Home Screen app. Enter its code below to open it here.");
+        $('#join-code').focus();
+      }
+    }
   }
   // An invite opened offline earlier, still waiting.
   if (!joinParam && pendingInvite()) {
