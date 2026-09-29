@@ -2211,8 +2211,8 @@ function rideHtml(r, detail, failed) {
       <div class="group padded" data-key="hist">
         <div class="stats">
           <div><p class="stat-label">Outages</p><p class="stat-value">${h.days.reduce((n, d) => n + d.outages, 0)}</p></div>
-          <div><p class="stat-label">Typical</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'n/a'}</p></div>
-          <div><p class="stat-label">Longest</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'n/a'}</p></div>
+          <div><p class="stat-label">Typical breakdown</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'n/a'}</p></div>
+          <div><p class="stat-label">Longest breakdown</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'n/a'}</p></div>
         </div>
         <div data-chart="days" data-key="days-chart" data-sig="${sigOf(h.days)}"></div>
       </div>`);

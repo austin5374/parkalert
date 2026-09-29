@@ -46,11 +46,15 @@ export function outageDays(episodes, rideId, fetchedDates, days = 7) {
 export function rideHistory(episodes, rideId, fetchedDates, days = 7) {
   const recent = new Set([...new Set(fetchedDates)].sort().slice(-days));
   const mine = episodes.filter((ep) => ep.rideId === rideId && real(ep) && recent.has(ep.date));
-  const resolved = mine.filter(isResolved).map((ep) => ep.minutes);
+  // Typical and longest are for breakdowns: a storm hold or a late opening
+  // runs to a different clock, and mixing two hour-long holds with a
+  // 16-minute breakdown read "Typical 1 hr 1 min".
+  const resolved = mine.filter((ep) => ep.kind === 'breakdown' && isResolved(ep)).map((ep) => ep.minutes);
   return {
     days: outageDays(episodes, rideId, fetchedDates, days),
     archivedDays: new Set(fetchedDates).size,
     outages: mine.length,
+    holds: mine.filter((ep) => ep.kind === 'hold').length,
     typicalMinutes: resolved.length ? Math.round(median(resolved)) : null,
     // Only outages seen reopening: one that never did is censored at the end
     // of the park day, so its "length" can be a night spent closed.
@@ -58,6 +62,23 @@ export function rideHistory(episodes, rideId, fetchedDates, days = 7) {
     last: [...mine].sort((a, b) => b.start - a.start).slice(0, 6)
       .map(({ start, minutes, kind, endedAs }) => ({ start, minutes: Math.round(minutes), kind, reopened: endedAs === 'OPERATING' })),
   };
+}
+
+// Outages that began today (park-local): each one seen going down, plus
+// rides down now whose outage began today but was never seen starting
+// (already down at the first poll after a restart, or before the app
+// looked). A ride seen going down during its current outage counts once.
+export function outagesToday(recent = [], rides = {}, dayStart) {
+  const downs = recent.filter((e) => e.type === 'DOWN' && e.at >= dayStart);
+  let count = downs.length;
+  const ids = new Set(downs.map((e) => e.id));
+  for (const [id, r] of Object.entries(rides)) {
+    if (r.status !== 'DOWN' || !(r.downSince >= dayStart)) continue;
+    if (downs.some((e) => e.id === id && e.at >= r.downSince - 60_000)) continue;
+    count++;
+    ids.add(id);
+  }
+  return { downs: count, rides: ids.size };
 }
 
 // Today's transitions for one ride, oldest first.
@@ -94,11 +115,13 @@ export function parkSummary(episodes, fetchedDates, names, days = 7) {
 
 // Is the line growing or shrinking? The posted wait now against the one in
 // effect half an hour ago. Posted waits step in fives and wobble a step
-// either way all day, so a trend takes at least two steps (10 min); less
-// reads as steady (null). No trend without both readings, or while the ride
-// isn't posting one.
+// either way all day, so a trend takes at least two steps (10 min), and a
+// quarter of the wait: 110 to 120 is a long line wobbling, 20 to 30 is one
+// growing by half. Less reads as steady (null). No trend without both
+// readings, or while the ride isn't posting one.
 export const TREND_WINDOW_MS = 30 * 60_000;
 export const TREND_MIN_CHANGE = 10;
+export const TREND_MIN_SHARE = 0.25;
 export function waitTrend(series = [], now = Date.now()) {
   const last = series[series.length - 1];
   if (!last || last[1] == null) return null;
@@ -109,6 +132,6 @@ export function waitTrend(series = [], now = Date.now()) {
   }
   if (then == null) return null;
   const change = last[1] - then;
-  if (Math.abs(change) < TREND_MIN_CHANGE) return null;
+  if (Math.abs(change) < Math.max(TREND_MIN_CHANGE, then * TREND_MIN_SHARE)) return null;
   return { direction: change > 0 ? 'up' : 'down', change };
 }

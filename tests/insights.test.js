@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recordWaits, outageDays, rideHistory, rideToday, parkSummary, WAIT_KEEP_MS } from '../server/insights.js';
+import { recordWaits, outageDays, rideHistory, rideToday, parkSummary, outagesToday, WAIT_KEEP_MS } from '../server/insights.js';
 import { parkDayStart } from '../server/time.js';
 
 test('wait samples are recorded only when the value changes, and down means no wait', () => {
@@ -95,4 +95,35 @@ test('a wait trend compares now with half an hour ago and ignores small moves', 
   assert.equal(waitTrend([[80 * m, 20], [90 * m, 45]], now), null, 'no reading from 30 min ago');
   assert.equal(waitTrend([[40 * m, 20], [90 * m, null]], now), null, 'not posting a wait now');
   assert.equal(waitTrend([[40 * m, null], [90 * m, 30]], now), null, 'was down 30 min ago');
+  // Relative as well: a long line wobbling isn't a trend; a short one growing by half is.
+  assert.equal(waitTrend([[40 * m, 110], [90 * m, 120]], now), null, '110 to 120 is a wobble');
+  assert.deepEqual(waitTrend([[40 * m, 20], [90 * m, 30]], now), { direction: 'up', change: 10 });
+  assert.deepEqual(waitTrend([[40 * m, 120], [90 * m, 150]], now), { direction: 'up', change: 30 });
+});
+
+test('typical and longest on the ride page are breakdowns, not storm holds', () => {
+  const dates = ['2026-09-21', '2026-09-22', '2026-09-23'];
+  const h = rideHistory([ep('2026-09-21', 16), ep('2026-09-22', 70, { kind: 'hold' }), ep('2026-09-23', 75, { kind: 'hold' })], 'a', dates);
+  assert.equal(h.outages, 3);
+  assert.equal(h.holds, 2);
+  assert.equal(h.typicalMinutes, 16);
+  assert.equal(h.longestMinutes, 16);
+});
+
+test("outages today include rides down since before ParkAlert saw them go down", () => {
+  const dayStart = Date.parse('2026-09-29T04:00:00Z');
+  const at = (h) => dayStart + h * 3600_000;
+  const recent = [
+    { type: 'DOWN', id: 'a', at: at(10) },
+    { type: 'UP', id: 'a', at: at(10.5) },
+    { type: 'DOWN', id: 'b', at: at(11) },
+    { type: 'DOWN', id: 'old', at: dayStart - 3600_000 },
+  ];
+  const rides = {
+    b: { status: 'DOWN', downSince: at(11) }, // seen going down: counted once
+    p: { status: 'DOWN', downSince: at(2.9) }, // down since 2:53 AM, never seen starting
+    y: { status: 'DOWN', downSince: dayStart - 5 * 3600_000 }, // began yesterday
+    c: { status: 'OPERATING' },
+  };
+  assert.deepEqual(outagesToday(recent, rides, dayStart), { downs: 3, rides: 3 });
 });

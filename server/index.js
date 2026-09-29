@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
-import { rideHistory, rideToday, parkSummary, waitTrend } from './insights.js';
+import { rideHistory, rideToday, parkSummary, waitTrend, outagesToday } from './insights.js';
 import { parkCrowd, crowdToday, rideBestTimes, usualWaits, isOtherAttraction, defaultFollows } from './crowdstate.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
@@ -300,12 +300,8 @@ async function handleApi(req, res, url) {
     const state = parkState[trip.parkId] || {};
     const names = Object.fromEntries(Object.entries(state.rides || {}).map(([id, r]) => [id, r.name]));
     const dayStart = parkDayStart(zoneOf(trip.parkId));
-    const today = (state.recent || []).filter((e) => e.at >= dayStart);
     return json(res, 200, {
-      today: {
-        downs: today.filter((e) => e.type === 'DOWN').length,
-        rides: new Set(today.filter((e) => e.type === 'DOWN').map((e) => e.id)).size,
-      },
+      today: outagesToday(state.recent, state.rides, dayStart),
       week: parkSummary(history.episodes[trip.parkId] || [], history.fetched[trip.parkId] || [], names),
       estimates: scorecard(state.scores),
       crowd: crowdToday(trip.parkId),
