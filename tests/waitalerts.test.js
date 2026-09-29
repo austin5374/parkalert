@@ -36,5 +36,5 @@ test("yesterday's alerts are gone, so rope drop doesn't set them all off", () =>
 test('the push says the wait and the limit asked for', () => {
   const m = waitAlertMessage(running(20), { max: 30 }, 'Magic Kingdom');
   assert.equal(m.title, 'Seven Dwarfs Mine Train: 20 min wait');
-  assert.equal(m.message, 'You asked for 30 min or less · Magic Kingdom');
+  assert.equal(m.message, 'Alert set for 30 min or less · Magic Kingdom');
 });

@@ -1176,6 +1176,23 @@ function fmtSpan(a, b) {
   return `${pa && pa === pb ? ta : A} to ${B}`;
 }
 
+// The hour on the park's clock now.
+const parkHour = (t = Date.now()) => Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: dash?.park.timezone || undefined }).format(new Date(t)));
+
+// The hour with the shortest usual wait from now until today's close, or
+// null once the park is closed or none is left.
+function bestLeftToday(typical) {
+  if (parkClosed()) return null;
+  const from = parkHour();
+  const close = dash.park.closingTime ? Date.parse(dash.park.closingTime) : null;
+  const to = close && close > Date.now() ? parkHour(close - 1) : 23;
+  let best = null;
+  for (let h = from; h <= to && h < 24; h++) {
+    if (typical[h] != null && (!best || typical[h] < best.wait)) best = { hour: h, wait: typical[h] };
+  }
+  return best;
+}
+
 // "7 PM": an hour on the park's clock.
 function fmtHour(h) {
   return `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
@@ -2211,17 +2228,24 @@ function freshestRide(live, detail) {
   return r;
 }
 
-// Wait alert: "tell me when the wait is at most N". Only limits under the
-// current posted wait are offered, since one at or over it would go off at
-// once; a ride that isn't posting a wait can take any of them.
-const WAIT_CHOICES = [10, 15, 20, 30, 45, 60];
+// Wait alert: "alert me when the wait is at or under N". The limits offered
+// step down from the current posted wait (at 120: 45, 60, 75, 90, 100), since
+// one at or over it would go off at once; a ride that isn't posting a wait
+// steps down from its usual wait at this hour.
+const WAIT_LADDER = [10, 15, 20, 30, 45, 60, 75, 90, 100, 120, 150, 180];
+function waitChoices(r, posted) {
+  const below = posted != null
+    ? WAIT_LADDER.filter((m) => m < posted)
+    : WAIT_LADDER.filter((m) => m <= Math.max(r.usual ?? 60, 30));
+  return below.slice(-5);
+}
 
 function waitAlertHtml(r) {
   if (r.other) return '';
   const alert = dash.trip.waitAlerts?.[r.id];
   const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
   const armed = alert && !alert.sentAt;
-  let choices = WAIT_CHOICES.filter((m) => posted == null || m < posted);
+  let choices = waitChoices(r, posted);
   if (armed && !choices.includes(alert.max)) choices = [...choices, alert.max].sort((a, b) => a - b);
   const state = armed
     ? `You'll get an alert when the wait is ${alert.max} min or less.`
@@ -2230,8 +2254,8 @@ function waitAlertHtml(r) {
       : posted != null && !choices.length
         ? `The wait is only ${posted} min right now.`
         : posted != null
-          ? `Now ${posted} min. Tell me when the wait is at most (minutes):`
-          : 'When it reopens, tell me if the wait is at most (minutes):';
+          ? `Now ${posted} min. Alert me when the wait is at or under:`
+          : 'When it reopens, alert me if the wait is at or under:';
   return `
     <h2 class="section-label" data-key="wait-label">Wait alert</h2>
     <div class="group padded wait-alert" data-key="wait-alert">
@@ -2320,12 +2344,17 @@ function rideHtml(r, detail, failed) {
       <p class="footnote" data-key="waits-foot">Drag across the chart to see the wait at any time. Gaps are when it was down or closed.</p>`);
   }
 
-  // When the line is usually shortest.
+  // When the line is usually shortest: in what is left of today, which is
+  // the choice a guest still has; on a usual day once today is over.
   const bt = detail.bestTimes;
   if (bt) {
-    parts.push(`<h2 class="section-label" data-key="best-label">Best time to ride</h2>
+    const left = bestLeftToday(bt.typical);
+    parts.push(`<h2 class="section-label" data-key="best-label">${left ? 'Best time left today' : 'Best time to ride'}</h2>
       <div class="group padded" data-key="best">
-        <p class="best-line">Usually shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait} min), longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait} min).</p>
+        <p class="best-line">${left
+    ? left.hour === parkHour() ? `Now is about as short as it gets today (usually ${left.wait} min).`
+      : `Usually shortest around <strong>${fmtHour(left.hour)}</strong> (${left.wait} min) for the rest of today.`
+    : `On a usual day, shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait} min), longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait} min).`}</p>
         <div data-chart="hours" data-key="hours-chart" data-sig="${sigOf(bt.typical)}"></div>
       </div>
       <p class="footnote" data-key="best-foot">Typical posted wait each hour, from ${bt.days} day${bt.days === 1 ? '' : 's'} of history. Tap an hour.</p>`);
