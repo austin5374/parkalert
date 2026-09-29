@@ -1095,6 +1095,50 @@ function timeline(r) {
   </div>`;
 }
 
+// "7 PM": an hour on the park's clock.
+function fmtHour(h) {
+  return `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+// How busy the park is right now, against the same hour on past days.
+// Quiet on purpose: one row, a ten-step meter, a line of evidence.
+function crowdRowHtml() {
+  const c = dash.crowd;
+  if (!c || alertState().kind === 'closed') return '';
+  const cells = Array.from({ length: 10 }, (_, i) => `<span class="${i < c.level ? 'on' : ''}"></span>`).join('');
+  return `<div class="group crowd-group" data-key="crowd"><button class="row crowd-row pressable" type="button" data-act="open-park"
+      aria-label="Crowds: ${esc(c.label)}, ${c.level} out of 10. Show park">
+    <span class="row-label">
+      <span class="crowd-top"><span class="crowd-word">${esc(c.label)}</span><span class="crowd-num">${c.level}/10</span></span>
+      <span class="crowd-meter" aria-hidden="true">${cells}</span>
+      <small>Big rides average ${c.index} min, usually ${c.typical} at ${fmtHour(c.hour)}</small>
+    </span>
+    ${icon('chevron', 'chevron')}
+  </button></div>`;
+}
+
+// The chance a ride is back within 15, 30 and 60 minutes, drawn as three
+// nested fills on one track, darkest for soonest: a long dark bar means
+// likely soon. The numbers sit in a legend beneath, so nothing rests on
+// shade alone.
+function chanceHtml(o) {
+  const c = o?.chance;
+  if (!c) return '';
+  const pct = (p) => Math.round(p * 100);
+  return `<div class="chance" aria-hidden="true">
+      <span class="c60" style="width:${pct(c[60])}%"></span>
+      <span class="c30" style="width:${pct(c[30])}%"></span>
+      <span class="c15" style="width:${pct(c[15])}%"></span>
+    </div>
+    <p class="chance-key"><span class="vh">Chance it's back: </span><span><i class="k15"></i>15 min ${pct(c[15])}%</span><span><i class="k30"></i>30 min ${pct(c[30])}%</span><span><i class="k60"></i>1 hr ${pct(c[60])}%</span></p>`;
+}
+
+function adviceHtml(o, cls = 'card-advice') {
+  const a = o?.advice;
+  if (!a) return o?.text ? `<p class="card-outlook">${esc(o.text)}</p>` : '';
+  return `<p class="${cls} advice-${a.key}"><strong>${esc(a.verdict)}.</strong> ${esc(a.detail)}</p>`;
+}
+
 // The range as clock times, which is what people plan around.
 function likelyBack(o) {
   const w = o?.window;
@@ -1120,8 +1164,8 @@ function downCard(r) {
         ${icon('chevron', 'chevron')}
       </div>
       <p class="card-sub">${since}</p>
-      ${timeline(r)}
-      ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
+      ${adviceHtml(o)}
+      ${o.chance ? chanceHtml(o) : timeline(r)}
       ${likelyBack(o) ? `<p class="card-clock">${esc(likelyBack(o))}</p>` : ''}
       ${foot ? `<p class="card-foot">${esc(foot)}</p>` : ''}
     </article>`;
@@ -1143,7 +1187,7 @@ function downHtml() {
   const down = dash.rides
     .filter((r) => r.status === 'DOWN' && r.downSince)
     .sort((a, b) => (isFollowing(b.id) - isFollowing(a.id)) || b.downSince - a.downSince);
-  const parts = [];
+  const parts = [crowdRowHtml()];
   if (!dash.lastPoll) {
     // No ride data yet is not the same as nothing being down.
     parts.push(`
@@ -1181,8 +1225,9 @@ function downHtml() {
         <div class="cards" data-key="hold"><div class="card hold-card">
           <button class="hold-header pressable" type="button" data-act="open-hold">${icon('bolt')}<span>Park-wide hold · ${holds.length} ride${holds.length === 1 ? '' : 's'}</span>${icon('chevron', 'chevron')}</button>
           <p class="card-sub">Since ${fmtTime(first.downSince)} · ${fmtDuration(Date.now() - first.downSince)}</p>
-          ${timeline(first)}
-          ${o.text ? `<p class="card-outlook">${esc(o.text)}</p>` : ''}
+          ${adviceHtml(o)}
+          ${o.chance ? chanceHtml(o) : timeline(first)}
+          ${o.text && o.advice ? `<p class="card-clock">${esc(o.text)}</p>` : ''}
           ${basisLine(o) ? `<p class="card-foot">${esc(basisLine(o))}</p>` : ''}
           <div class="hold-rides">${holds.map((r) => `
             <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
@@ -1486,6 +1531,7 @@ function renderTrip() {
   $('#pause-detail').textContent = st.kind !== 'paused' ? ''
     : st.scope === 'phone' ? `This phone, ${until}` : `Everyone, ${until}`;
   $('#park-detail').textContent = parkLabel(dash.park.name);
+  $('#switch-crowd').setAttribute('aria-checked', String(!!dash.trip.crowdAlerts));
 }
 
 // Before the first dashboard arrives there is nothing to show but where that
@@ -1524,6 +1570,7 @@ $('#app').addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'setup-alerts') openAlertSetup();
   else if (act === 'open-hold') openHold();
+  else if (act === 'open-park') openParkInfo();
   else if (act === 'retry-dash') { offline = false; renderAll(); refresh(); }
 });
 
@@ -1968,6 +2015,7 @@ function rideCharts(detail) {
   return {
     wait: { waits: detail.waits, now: detail.now },
     days: detail.history?.archivedDays ? { days: detail.history.days } : null,
+    hours: detail.bestTimes ? { typical: detail.bestTimes.typical, unit: 'wait' } : null,
   };
 }
 
@@ -1986,9 +2034,11 @@ function rideHtml(r, detail, failed) {
         ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · park-wide hold' : ''}</p>`
           : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('bolt')}Park-wide hold</p>` : ''}
         ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
-        <p class="big-outlook">${esc(o?.text || 'Not enough history to estimate yet')}</p>
+        <p class="big-outlook">${esc(o?.advice?.verdict || o?.text || 'Not enough history to estimate yet')}</p>
+        ${o?.advice ? `<p class="advice-detail">${esc(o.advice.detail)}${o.advice && isFollowing(r.id) && alertsReady() ? " You'll get an alert when it's back." : ''}</p>` : ''}
+        ${o?.chance ? chanceHtml(o) : timeline({ ...r, outlook: o })}
+        ${o?.advice && o?.text ? `<p class="clock">${esc(o.text)}</p>` : ''}
         ${clock ? `<p class="clock">${esc(clock)}</p>` : ''}
-        ${timeline({ ...r, outlook: o })}
         ${o?.text ? `<p class="explain">${esc(estimateExplainer(o))}</p>` : ''}
         ${o?.cause ? `<p class="explain">${esc(WEATHER_NOTE[o.cause])}</p>` : KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
       </div>`);
@@ -2015,6 +2065,17 @@ function rideHtml(r, detail, failed) {
     parts.push(`<h2 class="section-label" data-key="waits-label">Wait times today</h2>
       <div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
       <p class="footnote" data-key="waits-foot">Drag across the chart to see the wait at any time. Gaps are when it was down or closed.</p>`);
+  }
+
+  // When the line is usually shortest.
+  const bt = detail.bestTimes;
+  if (bt) {
+    parts.push(`<h2 class="section-label" data-key="best-label">Best time to ride</h2>
+      <div class="group padded" data-key="best">
+        <p class="best-line">Usually shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait} min), longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait} min).</p>
+        <div data-chart="hours" data-key="hours-chart" data-sig="${sigOf(bt.typical)}"></div>
+      </div>
+      <p class="footnote" data-key="best-foot">Typical posted wait each hour, from ${bt.days} day${bt.days === 1 ? '' : 's'} of history. Tap an hour.</p>`);
   }
 
   // Today. If the ride went down before today's log begins, the live
@@ -2079,6 +2140,7 @@ function openParkInfo() {
     failed: false,
     title: () => parkLabel(dash.park.name),
     render() { return parkHtml(this.info, this.failed); },
+    charts() { return this.info?.crowd ? { crowd: this.info.crowd } : null; },
     async load() {
       try {
         this.info = await api(`/trips/${tripCode}/park`);
@@ -2101,6 +2163,15 @@ function parkHtml(info, failed) {
       ${close ? `<div class="row" data-key="closes"><span class="row-label">Closes</span><span class="row-detail">${fmtTime(Date.parse(close))}</span></div>` : ''}
       ${lateEvent ? `<div class="row" data-key="event"><span class="row-label">${esc(lateEvent.name)}<small>Alerts keep going until it ends</small></span><span class="row-detail">until ${fmtTime(Date.parse(lateEvent.closingTime))}</span></div>` : ''}
     </div>`);
+  }
+  const cr = info?.crowd;
+  if (cr?.now || cr?.today.some((v) => v != null)) {
+    parts.push(`<h2 class="section-label" data-key="crowd-label">Crowds</h2>
+      <div class="group padded" data-key="crowd">
+        ${cr.now ? `<p class="best-line"><strong>${esc(cr.now.label)}</strong> · ${cr.now.level}/10. The big rides average ${cr.now.index} min; usually ${cr.now.typical} at ${fmtHour(cr.now.hour)}.</p>` : ''}
+        <div data-chart="crowd" data-key="crowd-chart" data-sig="${sigOf([cr.today, cr.typical])}"></div>
+      </div>
+      <p class="footnote" data-key="crowd-foot">Average posted wait on this park's busiest rides, today against a usual day (from ${cr.days} day${cr.days === 1 ? '' : 's'}). Drag across the chart.</p>`);
   }
   parts.push(`<div class="group padded spaced-sm" data-key="stats"><div class="stats">
     <div><p class="stat-label">Down now</p><p class="stat-value">${downNow}</p></div>
@@ -2237,6 +2308,8 @@ function mountCharts(root, data) {
     box._drawn = box.dataset.sig;
     if (box.dataset.chart === 'wait') waitChart(box, d);
     if (box.dataset.chart === 'days') dayBars(box, d);
+    if (box.dataset.chart === 'hours') hourBars(box, d);
+    if (box.dataset.chart === 'crowd') crowdChart(box, d);
   }
 }
 
@@ -2386,6 +2459,107 @@ function dayBars(box, { days }) {
   const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${days.length},1fr)">${days.map((d) =>
     `<span>${esc(!many ? fmtWeekday(d.date) : fmtWeekday(d.date) === 'Mon' ? fmtShort(d.date) : '')}</span>`).join('')}</div>`);
   box.append(readout, svg, labels);
+}
+
+// Typical wait by hour of the day: one column per hour the ride usually
+// runs, the current hour in full color. Tap a column for its number.
+function hourBars(box, { typical }) {
+  const hours = typical.map((w, h) => [h, w]).filter(([, w]) => w != null);
+  const W = Math.max(160, contentWidth(box)), H = 90, base = H - 2;
+  const max = niceMax(Math.max(10, ...hours.map(([, w]) => w)));
+  const slot = W / hours.length, bw = Math.min(24, slot * 0.62);
+  const nowHour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: dash?.park.timezone }).format(new Date()));
+  const readout = el('<p class="chart-readout" aria-live="polite"></p>');
+  const summary = () => {
+    const cur = hours.find(([h]) => h === nowHour);
+    return cur ? `Now (${fmtHour(nowHour)}) · usually ${cur[1]} min` : `Up to ${max} min · tap an hour`;
+  };
+  readout.textContent = summary();
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', role: 'group', 'aria-label': 'Typical wait by hour' });
+  svg.append(svgEl('line', { x1: 0, x2: W, y1: base + 0.5, y2: base + 0.5, class: 'axis' }));
+  const bars = [];
+  let selected = -1;
+  const select = (i) => {
+    selected = selected === i ? -1 : i;
+    bars.forEach((b, j) => b.classList.toggle('dim', selected !== -1 && j !== selected));
+    readout.textContent = selected === -1 ? summary() : `${fmtHour(hours[i][0])} · usually ${hours[i][1]} min`;
+  };
+  hours.forEach(([h, w], i) => {
+    const x0 = slot * i + (slot - bw) / 2;
+    const hgt = Math.max(3, (w / max) * (H - 10));
+    const r = Math.min(4, hgt / 2, bw / 2);
+    const bar = svgEl('path', { class: `bar ${h === nowHour ? '' : 'soft'}`, d: `M${x0},${base} V${base - hgt + r} Q${x0},${base - hgt} ${x0 + r},${base - hgt} H${x0 + bw - r} Q${x0 + bw},${base - hgt} ${x0 + bw},${base - hgt + r} V${base} Z` });
+    bars.push(bar);
+    const hit = svgEl('rect', { x: slot * i, y: 0, width: slot, height: H, class: 'hit', tabindex: '0', role: 'button', 'aria-label': `${fmtHour(h)}: usually ${w} minutes` });
+    hit.addEventListener('click', () => select(i));
+    hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(i); } });
+    svg.append(bar, hit);
+  });
+  const every = hours.length > 12 ? 3 : 2;
+  const labels = el(`<div class="chart-days" style="grid-template-columns:repeat(${hours.length},1fr)">${hours.map(([h], i) =>
+    `<span>${i % every === 0 ? esc(fmtHour(h).replace(' ', '')) : ''}</span>`).join('')}</div>`);
+  box.append(readout, svg, labels);
+}
+
+// Today's crowd against a usual day, hour by hour: today in the accent, the
+// usual day in gray, a legend naming both. Drag to read any hour.
+function crowdChart(box, { today, typical, hour }) {
+  const hrs = [];
+  for (let h = 0; h < 24; h++) if (today[h] != null || typical[h] != null) hrs.push(h);
+  if (hrs.length < 2) return;
+  const h0 = hrs[0], h1 = hrs[hrs.length - 1];
+  const W = Math.max(160, contentWidth(box)), H = 120, top = 6, bottom = 2, base = H - bottom;
+  const max = niceMax(Math.max(10, ...hrs.map((h) => Math.max(today[h] ?? 0, typical[h] ?? 0))));
+  const x = (h) => ((h - h0) / Math.max(1, h1 - h0)) * W;
+  const y = (v) => top + (1 - v / max) * (H - top - bottom);
+  const path = (vals) => {
+    let d = '', pen = false;
+    for (const h of hrs) {
+      const v = vals[h];
+      if (v == null) { pen = false; continue; }
+      d += `${pen ? 'L' : 'M'}${x(h).toFixed(1)},${y(v).toFixed(1)} `;
+      pen = true;
+    }
+    return d;
+  };
+  const readout = el('<p class="chart-readout" aria-live="polite"></p>');
+  const say = (h, user) => {
+    const t = today[h], u = typical[h];
+    readout.textContent = `${user ? fmtHour(h) : `Now (${fmtHour(h)})`} · ${t != null ? `today ${t} min` : 'no reading today'}${u != null ? `, usually ${u}` : ''}`;
+  };
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img',
+    'aria-label': `Average big-ride wait by hour, today against a usual day` });
+  svg.append(
+    svgEl('line', { x1: 0, x2: W, y1: y(max), y2: y(max), class: 'grid' }),
+    svgEl('line', { x1: 0, x2: W, y1: base, y2: base, class: 'axis' }),
+    svgEl('path', { d: path(typical), class: 'line usual' }),
+    svgEl('path', { d: path(today), class: 'line' }),
+  );
+  const cross = svgEl('line', { y1: top, y2: base, class: 'crosshair', visibility: 'hidden' });
+  const dot = svgEl('circle', { r: 4, class: 'dot-mark', visibility: 'hidden' });
+  svg.append(cross, dot);
+  const show = (h, user) => {
+    say(h, user);
+    cross.setAttribute('x1', x(h)); cross.setAttribute('x2', x(h));
+    cross.setAttribute('visibility', user ? 'visible' : 'hidden');
+    if (today[h] != null) { dot.setAttribute('cx', x(h)); dot.setAttribute('cy', y(today[h])); dot.setAttribute('visibility', 'visible'); }
+    else dot.setAttribute('visibility', 'hidden');
+  };
+  const nowH = Math.min(h1, Math.max(h0, hour));
+  show(nowH, false);
+  const hourAt = (e) => {
+    const r = svg.getBoundingClientRect();
+    return Math.round(h0 + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (h1 - h0));
+  };
+  let last = null;
+  const scrub = (e) => { const h = hourAt(e); if (h !== last) { if (last !== null) haptic(); last = h; show(h, true); } };
+  svg.addEventListener('pointerdown', (e) => { svg.setPointerCapture(e.pointerId); scrub(e); });
+  svg.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) scrub(e); });
+  for (const t of ['pointerup', 'pointercancel']) svg.addEventListener(t, (e) => { if (e.pointerType !== 'mouse') { last = null; show(nowH, false); } });
+  svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { last = null; show(nowH, false); } });
+  const legend = el(`<p class="chart-legend"><span><i class="lg-today"></i>Today</span><span><i class="lg-usual"></i>Usual day</span><span class="lg-max">up to ${max} min</span></p>`);
+  const axis = el(`<div class="chart-x"><span>${fmtHour(h0)}</span><span>${fmtHour(h1)}</span></div>`);
+  box.append(readout, svg, axis, legend);
 }
 
 const dateOnly = (d) => new Date(`${d}T12:00:00Z`);
@@ -2695,6 +2869,11 @@ $('#row-setup').onclick = withDash(openAlertSetup);
 $('#row-pause').onclick = withDash(openPause);
 $('#row-park').onclick = withDash(openPark);
 $('#row-leave').onclick = openLeave;
+$('#switch-crowd').onclick = withDash(() => {
+  haptic();
+  const on = !dash.trip.crowdAlerts;
+  save((t) => { t.crowdAlerts = on; }, { crowdAlerts: on }, () => toast(on ? "You'll get an alert when lines are building" : 'Lines-building alerts off'));
+});
 $('#row-test').onclick = async () => {
   const d = $('#test-detail');
   d.textContent = 'Sending…';

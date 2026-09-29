@@ -5,11 +5,13 @@ import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
 import { getPark } from './parks.js';
-import { estimate, describe, shownWindow, classifyLive, clusterLive } from './predict.js';
+import { estimate, describe, shownWindow, classifyLive, clusterLive, advise } from './predict.js';
 import { weatherOutlook, modelHistory } from './weatheroutlook.js';
 import { refreshWeather } from './weather.js';
 import { isLateOpening } from './episodes.js';
 import { recordWaits } from './insights.js';
+import { liveIndex, parkCrowd } from './crowdstate.js';
+import { linesBuilding } from './crowds.js';
 import { recordCalls, scoreCalls } from './scorecard.js';
 import { localDate } from './time.js';
 
@@ -241,7 +243,18 @@ export function downOutlook(parkId, rideId, elapsedMin, now = Date.now()) {
     basis: est && !est.longerThanUsual ? { from: est.basis, outages: est.n } : null,
     // Minutes from now, rounded exactly as the text is: the text is the promise.
     window: shownWindow(est),
+    chance: est && !est.longerThanUsual && est.chance ? est.chance : null,
+    advice: advise(est, { minutesToClose: minutesToClose(parkId, now) }),
   };
+}
+
+// Minutes until the park's last close today (events included), or null.
+function minutesToClose(parkId, now) {
+  const s = parkState[parkId]?.schedule;
+  const close = s?.lastCloseTime ?? s?.closingTime;
+  if (!close) return null;
+  const m = (Date.parse(close) - now) / 60_000;
+  return m > 0 ? m : null;
 }
 
 // "Storm passed at 3:12 PM. Usually back in 20 to 35 min", or while it goes
@@ -582,6 +595,7 @@ async function doPollPark(parkId) {
     await Promise.all([
       toSend.length ? notifyTrips(parkId, toSend) : null,
       notifyWaitAlerts(parkId, rides, now),
+      notifyCrowds(parkId, now),
     ]);
   } catch (err) {
     state.lastError = err.message;
@@ -627,4 +641,38 @@ export async function stopPolling(waitMs = 5000) {
     Promise.allSettled([...inFlight.values()]),
     new Promise((r) => setTimeout(r, waitMs).unref()),
   ]);
+}
+
+// "Lines are building": the headliner waits up by a third (and at least 10
+// minutes) in half an hour, at a busier-than-usual time. Once per park every
+// two hours, only to trips that asked, never while paused or after close.
+// The index is recorded every poll, so the park page can show today's curve.
+const CROWD_KEEP_MS = 3 * 3600_000;
+const CROWD_ALERT_GAP_MS = 2 * 3600_000;
+export async function notifyCrowds(parkId, now = Date.now()) {
+  const state = parkState[parkId];
+  const index = liveIndex(parkId);
+  state.crowd = (state.crowd || []).filter(([t]) => now - t < CROWD_KEEP_MS);
+  if (index != null) state.crowd.push([now, index]);
+  const building = linesBuilding(state.crowd, now, parkCrowd(parkId, now));
+  if (!building || now - (state.crowdAlertAt || 0) < CROWD_ALERT_GAP_MS || isPastClosing(state, now)) return 0;
+  state.crowdAlertAt = now;
+  const parkName = getPark(parkId)?.name || 'the park';
+  const quick = Object.values(state.rides || {})
+    .filter((r) => r.status === 'OPERATING' && r.waitTime != null)
+    .sort((a, b) => a.waitTime - b.waitTime)
+    .slice(0, 2)
+    .map((r) => `${r.name} (${r.waitTime} min)`);
+  const targets = Object.values(trips).filter((t) => t.parkId === parkId && t.crowdAlerts && isTripActive(t, now)
+    && !(t.mute && (t.mute.until === null || t.mute.until > now)));
+  let sent = 0;
+  await Promise.all(targets.map(async (trip) => {
+    if (await deliver(trip, {
+      title: `Lines are building at ${parkName}`,
+      message: `The big rides average ${building.to} min, up from ${building.from} half an hour ago.${quick.length ? ` Shortest now: ${quick.join(', ')}.` : ''}`,
+      click: appLink(trip, { view: 'park' }),
+      priority: 3,
+    }, { tag: 'crowd', now })) sent++;
+  }));
+  return sent;
 }
