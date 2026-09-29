@@ -10,6 +10,9 @@ export function localTime(ts, timezone) {
     .replace(/\s(?=[AP]M$)/, ' ');
 }
 
+// "2 PM": an hour on the park's clock.
+export const hourLabel = (h) => `${h % 12 || 12}\u00a0${h < 12 ? 'AM' : 'PM'}`;
+
 export function listNames(names, max = 5) {
   if (names.length <= max) return names.join(', ');
   return `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
@@ -148,6 +151,20 @@ export function groupOutlook(outlooks) {
   for (const o of outlooks) counts.set(o.kind, (counts.get(o.kind) || 0) + 1);
   const [kind, n] = [...counts].sort((a, b) => b[1] - a[1])[0] || [];
   return n * 2 >= outlooks.length ? outlooks.find((o) => o.kind === kind) : null;
+}
+
+// ---- Crowds ----
+
+// building: { from, to } minutes, from linesBuilding. crowd: parkCrowd now.
+// shorter: rides this trip follows that are well under their usual.
+export function linesMessage(building, crowd, parkName, shorter = []) {
+  const usual = crowd?.typical != null ? ` Usually ${crowd.typical} at ${hourLabel(crowd.hour)}.` : '';
+  const tip = shorter.length ? ` Shorter than usual now: ${shorter.map((r) => `${r.name} ${r.wait} min (usually ${r.usual})`).join(', ')}.` : '';
+  return {
+    title: `Lines are building at ${parkName}`,
+    message: `The big rides average about ${building.to} min, up from ${building.from} half an hour ago.${usual}${tip}`,
+    priority: 3,
+  };
 }
 
 // ---- The trip itself ----

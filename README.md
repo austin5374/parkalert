@@ -64,7 +64,7 @@ server/
   scorecard.js    scores each estimate when its ride reopens
   backtest.js     scores the method against the archive (npm run backtest)
   insights.js     numbers for the ride and park detail pages, and wait trends
-  crowds.js       wait profiles, headliners, crowd level, best times, lines building (pure)
+  crowds.js       wait profiles, headliners, typical waits, crowd reading, best times, lines building (pure)
   crowdstate.js   those applied to the archive and the live park
   store.js        JSON persistence, trip codes
   validate.js     request validation
@@ -146,7 +146,7 @@ Response tells you what happened: `{"ride":"Astro Orbiter","sent":2,"skipped":0}
 3. Add it to your home screen for the full-screen experience: Trip tab → **Add to Home Screen** (Chrome offers its own install prompt; on iPhone the sheet shows where Safari's menu item is).
 4. **Second phone**: Trip tab → **Invite someone**, or read them the 6-letter code to type on the setup screen. Tapping an invite while already on another trip asks first, and an invite opened with no signal is kept until the phone reconnects.
 
-The app has three tabs. **Down now** opens with how crowded the park is, then shows what is down, how long, whether it's worth waiting, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense, and the four shortest posted waits right now. The Home Screen icon carries a badge with the number of rides with alerts on that are down, where the phone allows it. **Rides** lists every ride with its wait and one switch for whether you get alerts about it, plus search, a filter (all, open, down, with alerts) and a sort toggle beside the search field (A–Z, or shortest posted wait first). A ride with a single rider line or Lightning Lane says so, with the next return time. An arrow beside a wait shows the line growing or shrinking: at least 10 minutes' change over the last half hour. **Trip** holds the code, alert setup, pause, park and leave.
+The app has three tabs. **Down now** opens with how crowded the park is, then shows what is down, how long, whether it's worth waiting, and the reopen range, with "Back up recently" and "Closed after an outage" lists below so an alert opened late still makes sense, and up to four rides whose wait is well under their usual for this hour ("Shorter than usual right now"). The Home Screen icon carries a badge with the number of rides with alerts on that are down, where the phone allows it. **Rides** lists every ride with its wait and one switch for whether you get alerts about it (attractions that never post a wait, such as a castle, a gallery or a play area, are listed apart under "Other attractions" and never alert), plus search, a filter (all, open, down, with alerts) and a sort toggle beside the search field (A–Z, or shortest posted wait first). A ride with a single rider line or Lightning Lane says so, with the next return time. An arrow beside a wait shows the line growing or shrinking: at least 10 minutes' change over the last half hour. **Trip** holds the code, alert setup, pause, park and leave.
 
 Almost everything opens something:
 
@@ -173,17 +173,17 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 - Anti-flicker: "is down" goes out the moment a ride goes down, unless your phone already thinks it is down. "Back up" waits until the ride has stayed up for a minute (`UP_CONFIRM_MS` in `server/gate.js`). A ride that flickers back and breaks again costs nothing, and the last alert you got stays true: a flapping ride is one "down", then one "back up" once it settles.
 - After a gap in polling (the trip hopped to another park and back, or the server or the API was down for more than 15 minutes), the next poll starts afresh with no alerts, because nobody knows when things changed in between. The dashboard shows the current state straight away, and a ride already down then says "down since before" the time it was first seen. After a shorter gap, alerts still go out but say what is known: `Went down between 9:40 and 9:44 AM`, `Was down 2 to 6 min`.
 - A ride that is down when it drops out of the ride feed is kept for half an hour, so its return is still "back up". If it stays gone, phones hear `... is no longer listed` instead of being left with "is down".
-- Ride alerts: on for every ride by default. They are shared across the trip, and each park keeps its own, so hopping parks and back restores them.
+- Ride alerts: on for the park's ten headliners by default (every ride while the park's archive has under three days), so a first-time guest hears about rides they'd plausibly ride. The rest are one switch away. They are shared across the trip, and each park keeps its own, so hopping parks and back restores them. Attractions that have never posted a wait in the archive never alert.
 
 ## Crowds, wait or go, and best times
 
-**Crowd level.** Each park's headliners are the ten rides with the longest typical waits in the archive. The crowd index is their average posted wait right now, and the level (1 to 10) is where that falls among the same hour on past days: relative to what is usual here at this time, never an absolute number. The words follow the level: quieter than usual, about usual, busier than usual, much busier than usual. It needs three archived days before it says anything. The park page draws today against a usual day, hour by hour.
+**Crowd level.** Each park's headliners are the ten rides with the longest typical waits in the archive, and each ride has a typical wait for every hour (the median across archived days). The crowd reading compares the headliners posting a wait now with those same rides' typical waits at this hour, so a ride that closes drops out of both sides and a storm never reads as a quiet park. It needs half of the headliners (at least three) posting. Readings are averaged over 15 minutes, and the words (quieter than usual under 0.85 of usual, about usual, busier than usual from 1.15, much busier than usual from 1.4) change only when two readings in a row agree. During a hold, and for half an hour after it ends, the level pauses: reopening rides post waits that say more about the hold than the crowd. The row reads, for example, `Busier than usual` over `Big rides average about 62 min, usually 50 at 2 PM`, and the park page draws today against a usual day, hour by hour, read the same way. It needs three archived days before it says anything.
 
 **Wait or go.** Each down ride says what to do, not just a range. The same Kaplan-Meier curve behind the range gives the chance it's back within 15, 30 and 60 minutes, drawn as three nested fills on the bar (darkest is soonest) with the percentages beneath. The verdict follows fixed rules, in order: past nearly every outage like it is "Running long"; if 3 in 10 like it didn't reopen that day, "Often closed for the day"; if the park closes before half of these reopen, "May not reopen before close"; otherwise 60% or more within 15 minutes is "Worth waiting nearby", half within 30 is "Check back soon", half within the hour is "Ride something nearby", and anything less is "Ride something else". A weather estimate from the 30-minute rule has no curve, so its range decides.
 
 **Best time to ride.** Every archived day is also kept as an hourly wait profile per ride (60 days of them). A ride's page shows its typical wait for each hour and says when it is usually shortest and longest.
 
-**Lines building.** With the Trip tab switch on, the trip gets one alert when the headliner waits rise by a third (and at least 10 minutes) in half an hour at a busier-than-usual time, naming the two shortest waits. At most once every two hours per park, never while paused or after close.
+**Lines building.** With the Trip tab switch on, the trip gets one alert when the big rides run at least a fifth further over their usual than half an hour ago (and at least 10 minutes longer) at a busier-than-usual time. Waits that rise the way they do every morning don't count, and nothing is compared across a hold. It names up to two rides the trip follows that are well under their usual wait right now. At most once every two hours per trip, counted from when it reached a phone, never while paused or after close.
 
 ## Reopen estimates
 
@@ -227,7 +227,7 @@ Everything the app uses, all JSON. A trip code is the only credential.
 | `POST /api/trips` `{parkId}` | Create a trip. Returns its code and ntfy topic. |
 | `GET /api/trips/:code` | The trip. |
 | `PATCH /api/trips/:code` | Any of `parkId`, `watched` (null or ride ids), `mute` (null or `{until}`), `rideMutes`. Validated as a whole: one bad field rejects the request. |
-| `GET /api/trips/:code/dashboard` | Park, hours, every ride with status, wait and (if down) reopen outlook, and recent transitions. |
+| `GET /api/trips/:code/dashboard` | Park, hours, every ride with status, wait, usual wait at this hour, whether it is an attraction that never posts a wait (`other`), and (if down) reopen outlook, and recent transitions. |
 | `GET /api/trips/:code/rides/:id` | One ride's detail: outlook, today's changes and waits, archive history. |
 | `GET /api/trips/:code/park` | Today's counts, the week's least reliable rides, and how the reopen estimates scored over the last 14 days. |
 | `PUT /api/trips/:code/wait-alerts/:rideId` `{max}` | Push once today when the ride's wait is `max` minutes (5 to 240) or less. `DELETE` removes it. |

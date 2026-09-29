@@ -1086,9 +1086,18 @@ function renderHeader() {
 }
 
 /* ---------- Down now ---------- */
+// Attractions that never post a wait (a castle, a gallery, a play area) are
+// listed apart and never alert, so they never count as followed or down.
+const otherSets = new WeakMap();
+function isOther(rideId) {
+  let set = otherSets.get(dash.rides);
+  if (!set) otherSets.set(dash.rides, (set = new Set(dash.rides.filter((r) => r.other).map((r) => r.id))));
+  return set.has(rideId);
+}
+
 function isFollowing(rideId) {
   const t = dash.trip;
-  return (t.watched === null || t.watched.includes(rideId)) && !t.rideMutes?.[rideId];
+  return !isOther(rideId) && (t.watched === null || t.watched.includes(rideId)) && !t.rideMutes?.[rideId];
 }
 
 // Elapsed in red, and the usual reopening window shaded just ahead of it.
@@ -1110,18 +1119,25 @@ function fmtHour(h) {
   return `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
-// How busy the park is right now, against the same hour on past days.
-// Quiet on purpose: one row, a ten-step meter, a line of evidence.
+// How busy the park is right now: the big rides' waits against their usual
+// for this hour, as a sentence and the numbers behind it. Paused during a
+// hold and just after, when waits say more about the hold than the crowd.
+// Old data is greyed and dated, like the rest of the screen.
 function crowdRowHtml() {
   const c = dash.crowd;
   if (!c || alertState().kind === 'closed') return '';
-  const cells = Array.from({ length: 10 }, (_, i) => `<span class="${i < c.level ? 'on' : ''}"></span>`).join('');
-  return `<div class="group crowd-group" data-key="crowd"><button class="row crowd-row pressable" type="button" data-act="open-park"
-      aria-label="Crowds: ${esc(c.label)}, ${c.level} out of 10. Show park">
+  const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
+  const [title, detail] = c.paused === 'hold'
+    ? ['Crowd level paused', "Waits during a hold and just after it don't show how busy the park is"]
+    : c.paused
+      ? ['Crowd level paused', 'Too few of the big rides are posting waits right now']
+      : [c.label, `Big rides average about ${c.index} min, usually ${c.typical} at ${fmtHour(c.hour)}`];
+  const asOf = stale && dash.lastPoll ? ` · as of ${fmtTime(dash.lastPoll)}` : '';
+  return `<div class="group crowd-group" data-key="crowd"><button class="row crowd-row pressable${stale ? ' stale' : ''}" type="button" data-act="open-park"
+      aria-label="Crowds: ${esc(title)}. ${esc(detail + asOf)}. Show park">
     <span class="row-label">
-      <span class="crowd-top"><span class="crowd-word">${esc(c.label)}</span><span class="crowd-num">${c.level}/10</span></span>
-      <span class="crowd-meter" aria-hidden="true">${cells}</span>
-      <small>Big rides average ${c.index} min, usually ${c.typical} at ${fmtHour(c.hour)}</small>
+      <span class="crowd-word">${esc(title)}</span>
+      <small>${esc(detail + asOf)}</small>
     </span>
     ${icon('chevron', 'chevron')}
   </button></div>`;
@@ -1195,7 +1211,7 @@ function renderDown() {
 
 function downHtml() {
   const down = dash.rides
-    .filter((r) => r.status === 'DOWN' && r.downSince)
+    .filter((r) => r.status === 'DOWN' && r.downSince && !r.other)
     .sort((a, b) => (isFollowing(b.id) - isFollowing(a.id)) || b.downSince - a.downSince);
   const parts = [crowdRowHtml()];
   if (!dash.lastPoll) {
@@ -1288,7 +1304,7 @@ function renderRecent(downIds) {
   const status = new Map(dash.rides.map((r) => [r.id, r.status]));
   const seen = new Set();
   const latest = (dash.recent || []).filter((e) => {
-    if ((e.type !== 'UP' && e.type !== 'CLOSED') || downIds.has(e.id) || seen.has(e.id)) return false;
+    if ((e.type !== 'UP' && e.type !== 'CLOSED') || downIds.has(e.id) || seen.has(e.id) || isOther(e.id)) return false;
     seen.add(e.id);
     return e.type === 'UP' || status.get(e.id) === 'CLOSED';
   });
@@ -1319,22 +1335,23 @@ function renderRecent(downIds) {
   morph($('#recent-block'), parts.join(''));
 }
 
-// What's quick to ride right now: the shortest posted waits, only while the
-// park is open and the data is fresh. Walk-throughs that post no wait aren't
-// "short waits", so they're left out.
+// Rides worth heading for right now: running with a wait well under their
+// usual for this hour, best first (as the lines-building alert picks them).
+// A carousel's 5 minutes isn't news; a headliner at half its usual is. Only
+// while the park is open and the data is fresh.
 function shortWaitsHtml() {
   const st = alertState();
   const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
   if (st.kind === 'closed' || stale) return '';
   const quick = dash.rides
-    .filter((r) => r.status === 'OPERATING' && r.waitTime != null)
-    .sort((a, b) => a.waitTime - b.waitTime || sortKey(a.name).localeCompare(sortKey(b.name)))
+    .filter((r) => !r.other && r.status === 'OPERATING' && r.waitTime != null && r.usual >= 15 && r.waitTime <= r.usual * 0.7)
+    .sort((a, b) => a.waitTime / a.usual - b.waitTime / b.usual || b.usual - a.usual)
     .slice(0, 4);
-  if (quick.length < 2) return '';
-  return `<h2 class="section-label" data-key="short-label">Shortest waits right now</h2>
+  if (!quick.length) return '';
+  return `<h2 class="section-label" data-key="short-label">Shorter than usual right now</h2>
     <div class="group" data-key="short">${quick.map((r) => `
     <button class="row recent-row pressable" type="button" data-ride="${esc(r.id)}">
-      <span class="row-label">${esc(r.name)}${queueTags(r).length ? `<small>${esc(queueTags(r).join(' · '))}</small>` : ''}</span>
+      <span class="row-label">${esc(r.name)}<small>Usually ${r.usual} min at this time${queueTags(r).length ? ` · ${esc(queueTags(r).join(' · '))}` : ''}</small></span>
       <span class="row-detail">${r.waitTime} min${trendHtml(r)}</span>
       ${icon('chevron', 'chevron')}
     </button>`).join('')}</div>`;
@@ -1436,7 +1453,7 @@ function renderRides() {
 
 function drawRides() {
   const q = $('#ride-search').value.trim();
-  const all = [...dash.rides].sort(rideOrder);
+  const all = dash.rides.filter((r) => !r.other).sort(rideOrder);
   const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
   const following = all.filter((r) => isFollowing(r.id)).length;
 
@@ -1454,6 +1471,22 @@ function drawRides() {
   btn.onclick = following === all.length ? unfollowAll : followAll;
   // While searching it would be unclear whether this acts on the matches or on everything.
   btn.classList.toggle('hidden', !!q);
+
+  // Shows, exhibits and play areas: under All only, with their status and
+  // no switch, since they never alert.
+  const others = rideFilter === 'all'
+    ? dash.rides.filter((r) => r.other && (!q || matchesSearch(r.name, q))).sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)))
+    : [];
+  morph($('#other-block'), others.length ? `<h2 class="section-label" data-key="other-label">Other attractions</h2>
+    <div class="group rides" data-key="other">${others.map((r) => `
+      <div class="row ride-row" data-key="${esc(r.id)}">
+        <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
+          <span class="row-label">${esc(r.name)}
+            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}</span>
+          </span>
+        </button>
+      </div>`).join('')}</div>
+    <p class="footnote" data-key="other-foot">Shows, exhibits and play areas that never post a wait. They don't send alerts.</p>` : '');
 
   const list = $('#rides-list');
   list.className = 'group rides';
@@ -1537,7 +1570,7 @@ function toggleFollow(rideId) {
 
 function followAll() {
   save((t) => { t.watched = null; t.rideMutes = {}; }, { watched: null, rideMutes: {} }, (before) => {
-    toast(`Alerts on for all ${dash.rides.length} rides`, {
+    toast(`Alerts on for all ${dash.rides.filter((r) => !r.other).length} rides`, {
       label: 'Undo',
       run: () => save((t) => { t.watched = before.watched; t.rideMutes = before.rideMutes; }, { watched: before.watched, rideMutes: before.rideMutes || {} }),
     });
@@ -2004,6 +2037,7 @@ function openRide(rideId) {
 const WAIT_CHOICES = [10, 15, 20, 30, 45, 60];
 
 function waitAlertHtml(r) {
+  if (r.other) return '';
   const alert = dash.trip.waitAlerts?.[r.id];
   const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
   const armed = alert && !alert.sentAt;
@@ -2084,7 +2118,9 @@ function rideHtml(r, detail, failed) {
       </div>`);
   }
 
-  parts.push(`
+  parts.push(r.other
+    ? `<p class="footnote" data-key="follow">This attraction never posts a wait, so it doesn't send alerts.</p>`
+    : `
     <div class="group ${down ? 'spaced-sm' : ''}" data-key="follow"><div class="row">
       ${icon('bell', 'row-icon tint-accent')}
       <span class="row-label">Alerts for this ride</span>
@@ -2194,7 +2230,7 @@ function openParkInfo() {
 }
 
 function parkHtml(info, failed) {
-  const downNow = dash.rides.filter((r) => r.status === 'DOWN').length;
+  const downNow = dash.rides.filter((r) => r.status === 'DOWN' && !r.other).length;
   const parts = [`<p class="page-sub" data-key="hours">${esc(hoursText())}</p>`];
   const { openingTime: open, closingTime: close, lateEvent } = dash.park;
   if (open || close) {
@@ -2208,10 +2244,11 @@ function parkHtml(info, failed) {
   if (cr?.now || cr?.today.some((v) => v != null)) {
     parts.push(`<h2 class="section-label" data-key="crowd-label">Crowds</h2>
       <div class="group padded" data-key="crowd">
-        ${cr.now ? `<p class="best-line"><strong>${esc(cr.now.label)}</strong> · ${cr.now.level}/10. The big rides average ${cr.now.index} min; usually ${cr.now.typical} at ${fmtHour(cr.now.hour)}.</p>` : ''}
+        ${cr.now?.paused ? `<p class="best-line"><strong>Crowd level paused</strong> · ${cr.now.paused === 'hold' ? "waits during a hold and just after it don't show how busy the park is." : 'too few of the big rides are posting waits right now.'}</p>`
+          : cr.now ? `<p class="best-line"><strong>${esc(cr.now.label)}</strong> · the big rides average about ${cr.now.index} min; usually ${cr.now.typical} at ${fmtHour(cr.now.hour)}.</p>` : ''}
         <div data-chart="crowd" data-key="crowd-chart" data-sig="${sigOf([cr.today, cr.typical])}"></div>
       </div>
-      <p class="footnote" data-key="crowd-foot">Average posted wait on this park's busiest rides, today against a usual day (from ${cr.days} day${cr.days === 1 ? '' : 's'}). Drag across the chart.</p>`);
+      <p class="footnote" data-key="crowd-foot">Average posted wait on this park's ten busiest rides, today against a usual day (from ${cr.days} day${cr.days === 1 ? '' : 's'}). Each ride is compared with its own usual wait and closed rides are left out, so a storm never reads as a quiet park. Drag across the chart.</p>`);
   }
   parts.push(`<div class="group padded spaced-sm" data-key="stats"><div class="stats">
     <div><p class="stat-label">Down now</p><p class="stat-value">${downNow}</p></div>
@@ -2262,7 +2299,7 @@ function openHold() {
 }
 
 function holdHtml() {
-  const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold');
+  const holds = dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold' && !r.other);
   const parts = [`<p class="page-sub" data-key="note">${esc(KIND_NOTE.hold)}</p>`];
   if (!holds.length) {
     // Left open while the rides came back: say so rather than go blank.

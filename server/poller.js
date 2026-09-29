@@ -9,13 +9,13 @@ import { weatherOutlook, modelHistory, stormAt, rainSensitive } from './weathero
 import { refreshWeather } from './weather.js';
 import { isLateOpening, CLUSTER_WINDOW_MS, CLUSTER_MIN_RIDES } from './episodes.js';
 import { recordWaits } from './insights.js';
-import { liveIndex, parkCrowd } from './crowdstate.js';
+import { recordCrowd, parkCrowd, usualWaits, isOtherAttraction } from './crowdstate.js';
 import { linesBuilding } from './crowds.js';
 import { recordCalls, scoreCalls } from './scorecard.js';
 import { gateEvents, gateSnapshot, restoreGate, forgetPending, pendingUpFor } from './gate.js';
 import {
   localTime, downMessage, upMessage, closedMessage, groupMessage, groupOutlook,
-  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, idleMessage, LONG_OUTAGE_MS,
+  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, idleMessage, linesMessage, LONG_OUTAGE_MS,
 } from './messages.js';
 import { localDate } from './time.js';
 import { currentSchedule, isParkClosed, hoursDisagree } from './parkstatus.js';
@@ -329,7 +329,8 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
   // Trips are sent to side by side, so one slow delivery doesn't hold up the
   // rest; each trip's own pushes still go out in order.
   await Promise.all(targets.map(async (trip) => {
-    const follows = (id) => !isTripMuted(trip, id, state);
+    // Attractions that never post a wait (a castle, a gallery) never alert.
+    const follows = (id) => !isTripMuted(trip, id, state) && !isOtherAttraction(parkId, id, rides[id]);
     const mine = events.filter((ev) => follows(ev.ride.id));
     skipped += events.length - mine.length;
     const pushes = [];
@@ -406,7 +407,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
     }
 
     // The Home Screen badge: this trip's rides down now.
-    const badge = Object.entries(rides).filter(([id, r]) => r.status === 'DOWN' && followsRide(trip, id)).length;
+    const badge = Object.entries(rides).filter(([id, r]) => r.status === 'DOWN' && followsRide(trip, id) && !isOtherAttraction(parkId, id, r)).length;
     for (const push of pushes) {
       if (simulated) push.message += ' · SIMULATED TEST';
       if ((await deliver(trip, push, { tag: push.tag, badge })).ok) sent++;
@@ -685,36 +686,45 @@ export async function stopPolling(waitMs = 5000) {
   ]);
 }
 
-// "Lines are building": the headliner waits up by a third (and at least 10
-// minutes) in half an hour, at a busier-than-usual time. Once per park every
-// two hours, only to trips that asked, never while paused or after close.
-// The index is recorded every poll, so the park page can show today's curve.
-const CROWD_KEEP_MS = 3 * 3600_000;
-const CROWD_ALERT_GAP_MS = 2 * 3600_000;
+// "Lines are building": the big rides running well further over their usual
+// than half an hour ago, at a busier-than-usual time (crowds.js). Only to
+// trips that asked, never while paused or after close, and at most every two
+// hours for each trip, counted from when it reached a phone. A reading is
+// taken every poll, which is also what the crowd row shows.
+export const CROWD_ALERT_GAP_MS = 2 * 3600_000;
 export async function notifyCrowds(parkId, now = Date.now()) {
   const state = parkState[parkId];
-  const index = liveIndex(parkId);
-  state.crowd = (state.crowd || []).filter(([t]) => now - t < CROWD_KEEP_MS);
-  if (index != null) state.crowd.push([now, index]);
-  const building = linesBuilding(state.crowd, now, parkCrowd(parkId, now));
-  if (!building || now - (state.crowdAlertAt || 0) < CROWD_ALERT_GAP_MS || isPastClosing(state, now)) return 0;
-  state.crowdAlertAt = now;
+  recordCrowd(parkId, now);
+  if (isParkClosed(state, now)) return 0;
+  const building = linesBuilding(state.crowd || [], now);
+  if (!building) return 0;
+  const crowd = parkCrowd(parkId, now);
   const parkName = getPark(parkId)?.name || 'the park';
-  const quick = Object.values(state.rides || {})
-    .filter((r) => r.status === 'OPERATING' && r.waitTime != null)
-    .sort((a, b) => a.waitTime - b.waitTime)
-    .slice(0, 2)
-    .map((r) => `${r.name} (${r.waitTime} min)`);
+  const usual = usualWaits(parkId, now);
   const targets = Object.values(trips).filter((t) => t.parkId === parkId && t.crowdAlerts && isTripActive(t, now)
-    && !(t.mute && (t.mute.until === null || t.mute.until > now)));
+    && !(t.mute && (t.mute.until === null || t.mute.until > now))
+    && now - (t.crowdAlertAt || 0) >= CROWD_ALERT_GAP_MS);
   let sent = 0;
   await Promise.all(targets.map(async (trip) => {
-    if ((await deliver(trip, {
-      title: `Lines are building at ${parkName}`,
-      message: `The big rides average ${building.to} min, up from ${building.from} half an hour ago.${quick.length ? ` Shortest now: ${quick.join(', ')}.` : ''}`,
+    const result = await deliver(trip, {
+      ...linesMessage(building, crowd, parkName, shorterThanUsual(state.rides || {}, usual, (id) => followsRide(trip, id))),
       click: appLink(trip, { view: 'park' }),
-      priority: 3,
-    }, { tag: 'crowd', now })).ok) sent++;
+    }, { tag: 'crowd', now });
+    if (!reachedSomeone(trip, result)) return;
+    trip.crowdAlertAt = now;
+    sent++;
   }));
+  if (sent) saveTrips();
   return sent;
+}
+
+// Rides worth heading for: running, with a wait well under their usual for
+// this hour, best first. A carousel's 5 minutes is not news; a headliner at
+// half its usual is.
+export function shorterThanUsual(rides, usual, include = () => true, max = 2) {
+  return Object.entries(rides)
+    .filter(([id, r]) => include(id) && r.status === 'OPERATING' && r.waitTime != null && usual[id] >= 15 && r.waitTime <= usual[id] * 0.7)
+    .map(([id, r]) => ({ id, name: r.name, wait: r.waitTime, usual: usual[id] }))
+    .sort((a, b) => a.wait / a.usual - b.wait / b.usual || b.usual - a.usual)
+    .slice(0, max);
 }

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  hourlyAverages, extractWaitProfile, profileFromSamples, headliners, crowdIndex, hourlyIndex,
-  crowdLevel, typicalByHour, bestTimes, linesBuilding,
+  hourlyAverages, extractWaitProfile, profileFromSamples, headliners, typicalByHour, bestTimes, linesBuilding,
+  rideTypicals, usualIndex, crowdRatio, crowdLabel, smoothedCrowd, settleLabel, minPosting,
 } from '../server/crowds.js';
 
 const H = 3600_000, M = 60_000;
@@ -55,24 +55,48 @@ test('headliners are the rides with the longest typical waits', () => {
   assert.deepEqual(ids, ['big', 'other']);
 });
 
-test('the crowd index needs at least three headliners posting', () => {
-  assert.equal(crowdIndex({ a: 30, b: 40, c: 50, d: null }, ['a', 'b', 'c', 'd']), 40);
-  assert.equal(crowdIndex({ a: 30, b: 40 }, ['a', 'b', 'c']), null);
-  const idx = hourlyIndex({ a: flat(30), b: flat(40), c: flat(50) }, ['a', 'b', 'c']);
-  assert.equal(idx[12], 40);
-  assert.equal(idx[3], null);
+test("each headliner is read against its own usual, so closed rides don't read as quiet", () => {
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const day = { a: flat(90), b: flat(60), c: flat(60), d: flat(40), e: flat(30), f: flat(20) };
+  const typicals = rideTypicals({ d1: day, d2: day, d3: day });
+  assert.equal(typicals.a[12], 90);
+  assert.equal(usualIndex(ids, typicals)[12], 50);
+  const usual = { a: 90, b: 60, c: 60, d: 40, e: 30, f: 20 };
+  assert.equal(crowdRatio(usual, ids, typicals, 12), 1);
+  // The two biggest rides close in a storm: the rest are still at their usual.
+  assert.equal(crowdRatio({ ...usual, a: null, b: null }, ids, typicals, 12), 1);
+  // Everything at 1.5 times its usual.
+  assert.equal(crowdRatio(Object.fromEntries(ids.map((id) => [id, usual[id] * 1.5])), ids, typicals, 12), 1.5);
+  // Half of the headliners, at least three, must be posting.
+  assert.equal(minPosting(10), 5);
+  assert.equal(minPosting(4), 3);
+  assert.equal(crowdRatio({ a: 90, b: 60 }, ids, typicals, 12), null);
+  assert.equal(crowdRatio(usual, ids, typicals, 3), null, 'an hour with no usual');
 });
 
-test('the crowd level ranks now against the same hour on past days', () => {
-  const past = [20, 30, 40, 50, 60];
-  assert.equal(crowdLevel(65, past).level, 10);
-  assert.equal(crowdLevel(15, past).level, 1);
-  const mid = crowdLevel(40, past);
-  assert.equal(mid.level, 6); // the middle of 1 to 10
-  assert.equal(mid.label, 'About usual');
-  assert.equal(mid.typical, 40);
-  assert.equal(crowdLevel(40, [30, 50]), null, 'too few days to compare');
-  assert.equal(crowdLevel(null, past), null);
+test('the words come from how far over or under usual the waits are', () => {
+  assert.equal(crowdLabel(0.7), 'Quieter than usual');
+  assert.equal(crowdLabel(1), 'About usual');
+  assert.equal(crowdLabel(1.14), 'About usual');
+  assert.equal(crowdLabel(1.2), 'Busier than usual');
+  assert.equal(crowdLabel(1.6), 'Much busier than usual');
+});
+
+test('readings are averaged over 15 minutes, and the label moves only when two agree', () => {
+  const now = 100 * M;
+  const samples = [[80 * M, 2, 50], [90 * M, 1, 50], [95 * M, 1.2, 50], [100 * M, 1.1, 50]];
+  const c = smoothedCrowd(samples, now);
+  assert.ok(Math.abs(c.ratio - 1.1) < 1e-9, 'the reading from 20 minutes ago is out');
+  assert.equal(c.index, 55);
+  assert.equal(smoothedCrowd(samples, 60 * M), null);
+  let shown = settleLabel(null, 'About usual');
+  assert.deepEqual(shown, { label: 'About usual', next: null });
+  shown = settleLabel(shown, 'Busier than usual');
+  assert.equal(shown.label, 'About usual', 'one reading is not enough');
+  shown = settleLabel(shown, 'About usual');
+  assert.deepEqual(shown, { label: 'About usual', next: null });
+  shown = settleLabel(settleLabel(shown, 'Busier than usual'), 'Busier than usual');
+  assert.equal(shown.label, 'Busier than usual');
 });
 
 test('best times come from the median wait for each hour across days', () => {
@@ -86,11 +110,17 @@ test('best times come from the median wait for each hour across days', () => {
   assert.deepEqual(typicalByHour([[1], [2]]).slice(0, 1), [null]);
 });
 
-test('lines are building only on a real rise, and only when busier than usual', () => {
+test('lines are building only when waits outpace a usual day, and only when busier than usual', () => {
   const now = 100 * M;
-  const rising = [[60 * M, 30], [80 * M, 38], [100 * M, 45]];
-  assert.deepEqual(linesBuilding(rising, now, { level: 8 }), { from: 30, to: 45 });
-  assert.equal(linesBuilding(rising, now, { level: 5 }), null, 'not busy');
-  assert.equal(linesBuilding([[60 * M, 40], [100 * M, 48]], now, { level: 9 }), null, 'rise too small');
-  assert.equal(linesBuilding([[90 * M, 20], [100 * M, 60]], now, { level: 9 }), null, 'no reading from half an hour ago');
+  const at = (min, ratio, usual = 50) => [min * M, ratio, usual];
+  // From usual to 1.4 times usual in half an hour.
+  const rising = [at(60, 1), at(65, 1), at(70, 1), at(85, 1.3), at(95, 1.4), at(100, 1.4)];
+  // The reading at 85 is just outside the 15 minutes up to now.
+  assert.deepEqual(linesBuilding(rising, now), { from: 50, to: 70, ratio: 1.4 });
+  // Waits rising the way they do every morning: the ratio stays put.
+  const morning = [at(60, 1, 30), at(70, 1, 35), at(95, 1, 55), at(100, 1, 60)];
+  assert.equal(linesBuilding(morning, now), null, 'an ordinary ramp');
+  assert.equal(linesBuilding([at(60, 0.6), at(100, 0.95)], now), null, 'not busier than usual');
+  assert.equal(linesBuilding([at(60, 1.2, 20), at(100, 1.45, 20)], now), null, 'under 10 minutes more');
+  assert.equal(linesBuilding([at(90, 1), at(100, 1.6)], now), null, 'no reading from half an hour ago');
 });

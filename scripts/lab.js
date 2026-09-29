@@ -70,12 +70,21 @@ function schedule(park) {
   };
 }
 
-// Waits wander a little each tick, around each ride's typical wait.
+// The seeded history's shape of a day: waits low at opening, highest mid-day.
+// k: park-local hours since the lab's park opened, six hours before start-up.
+const localHour = (t, tz) => Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date(t)));
+const openHourOf = (tz) => (localHour(now0, tz) + 18) % 24;
+const dayShape = (k) => (k > 12 ? 0.55 : 0.55 + 0.6 * Math.sin((k / 12) * Math.PI));
+// A ride's wait on a usual day right now, as the seeded history has it (a
+// median day is 1.05 times its base), times the crowd scenario's factor.
+const usualNow = (w, r) => r.base * 1.05 * dayShape((localHour(Date.now(), w.tz) - openHourOf(w.tz) + 24) % 24) * w.crowd;
+
+// Waits wander a little each tick, around each ride's usual wait for now.
 function tick() {
   for (const w of Object.values(world)) {
     for (const r of w.rides.values()) {
       if (r.status !== 'OPERATING' || r.walkOn) continue;
-      const target = r.base * w.crowd;
+      const target = usualNow(w, r);
       r.waitTime = Math.max(5, Math.round((r.waitTime + (target - r.waitTime) * 0.2 + rand(-5, 5)) / 5) * 5);
     }
   }
@@ -85,7 +94,7 @@ setInterval(tick, 10_000);
 const later = (min, fn) => setTimeout(fn, min * MIN);
 const setStatus = (park, r, status) => {
   r.status = status;
-  if (status === 'OPERATING' && !r.walkOn) r.waitTime = Math.round((r.base * world[park.id].crowd) / 5) * 5;
+  if (status === 'OPERATING' && !r.walkOn) r.waitTime = Math.max(5, Math.round(usualNow(world[park.id], r) / 5) * 5);
   if (status !== 'OPERATING') r.waitTime = null;
 };
 const running = (park) => [...world[park.id].rides.values()].filter((r) => r.status === 'OPERATING' && !r.hostile);
@@ -279,7 +288,7 @@ function seed() {
   for (const park of PARKS) {
     const w = world[park.id];
     const rides = [...w.rides.values()].filter((r) => !r.hostile);
-    const openHour = (Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: park.timezone }).format(new Date(now0))) + 18) % 24;
+    const openHour = openHourOf(park.timezone);
     history.fetched[park.id] = [];
     history.episodes[park.id] = [];
     history.waits[park.id] = {};

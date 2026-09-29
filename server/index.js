@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, waitTrend } from './insights.js';
-import { parkCrowd, crowdToday, rideBestTimes } from './crowdstate.js';
+import { parkCrowd, crowdToday, rideBestTimes, usualWaits, isOtherAttraction, defaultFollows } from './crowdstate.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
@@ -128,6 +128,7 @@ async function dashboard(trip) {
   const state = await freshPark(trip.parkId);
   const park = getPark(trip.parkId);
   const schedule = currentSchedule(state);
+  const usual = usualWaits(trip.parkId);
   return {
     trip: tripView(trip),
     park: {
@@ -153,6 +154,10 @@ async function dashboard(trip) {
     rides: Object.entries(state.rides || {}).map(([id, r]) => ({
       id,
       ...r,
+      // Its usual posted wait at this hour, where the archive knows one.
+      usual: usual[id] ?? null,
+      // Never posts a wait: listed apart, and never alerted about.
+      ...(isOtherAttraction(trip.parkId, id, r) ? { other: true } : {}),
       trend: r.status === 'OPERATING' ? waitTrend(state.waits?.[id]) : null,
       ...(r.status === 'DOWN' && r.downSince
         ? { outlook: downOutlook(trip.parkId, id, (Date.now() - r.downSince) / 60_000) }
@@ -205,7 +210,7 @@ async function handleApi(req, res, url) {
     if ((wait = limit.create.take(who))) return tooMany(res, wait);
     const body = requireObject(await readBody(req));
     if (typeof body.parkId !== 'string' || !getPark(body.parkId)) return json(res, 400, { error: 'unknown parkId' });
-    const trip = createTrip(body.parkId);
+    const trip = createTrip(body.parkId, { watched: defaultFollows(body.parkId) });
     knownCodes.add(who, trip.code);
     pollPark(trip.parkId); // warm up state so the first dashboard load is instant
     return json(res, 201, { trip: tripView(trip) });
@@ -294,7 +299,7 @@ async function handleApi(req, res, url) {
       // hopping back to a park restores it instead of starting over.
       trip.watchedByPark = { ...trip.watchedByPark, [trip.parkId]: trip.watched };
       trip.parkId = patch.parkId;
-      trip.watched = trip.watchedByPark[patch.parkId] ?? null;
+      trip.watched = Object.hasOwn(trip.watchedByPark, patch.parkId) ? trip.watchedByPark[patch.parkId] : defaultFollows(patch.parkId);
       trip.rideMutes = {};
       pollPark(trip.parkId);
     }

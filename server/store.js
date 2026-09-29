@@ -183,7 +183,8 @@ function randomCode(len) {
   return out;
 }
 
-export function createTrip(parkId) {
+// watched: the rides it starts with alerts on (null: every ride).
+export function createTrip(parkId, { watched = null } = {}) {
   let code;
   do {
     code = randomCode(6);
@@ -193,7 +194,7 @@ export function createTrip(parkId) {
     // Random suffix keeps the public ntfy topic unguessable from the code alone.
     topic: `parkalert-${code.toLowerCase()}-${randomCode(8).toLowerCase()}`,
     parkId,
-    watched: null,
+    watched,
     mute: null,
     rideMutes: {},
     createdAt: Date.now(),

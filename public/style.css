@@ -672,14 +672,8 @@ main { position: relative; transition: none; }
 /* ---- Crowd level: one quiet row, a ten-step meter ---- */
 .crowd-group { margin-bottom: 0.9rem; }
 .crowd-row .row-label small { margin-top: 0.3rem; }
-.crowd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
 .crowd-word { font-weight: 600; }
-.crowd-num { font-size: 0.875rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
-.crowd-meter { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; margin-top: 0.45rem; }
-.crowd-meter span { height: 0.35rem; background: var(--fill); }
-.crowd-meter span:first-child { border-radius: 999px 0 0 999px; }
-.crowd-meter span:last-child { border-radius: 0 999px 999px 0; }
-.crowd-meter span.on { background: var(--accent); }
+.crowd-row.stale .crowd-word { color: var(--label-2); }
 
 /* ---- Wait or go: the verdict, and the chance it's back soon ---- */
 .card-advice, .advice-detail { font-size: 0.9375rem; margin-top: 0.5rem; line-height: 1.35; }
