@@ -45,3 +45,7 @@ export const HEALTH_TOKEN = env.HEALTH_TOKEN || null;
 export const TRUST_PROXY = env.TRUST_PROXY != null
   ? env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true'
   : !!(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PUBLIC_DOMAIN);
+
+// The stress lab (npm run lab) sets this to list each push to a phone in its
+// panel; nothing else should.
+export const LOG_PUSHES = env.LOG_PUSHES === '1';

@@ -5,6 +5,7 @@
 import { publish } from './notify.js';
 import { sendPush } from './webpush.js';
 import { saveTrips } from './store.js';
+import { LOG_PUSHES } from './config.js';
 
 export const MAX_DEVICES = 20;
 
@@ -33,6 +34,8 @@ export async function deliver(trip, push, { tag = null, device = null, ntfyOnly 
     ...(push.ride ? { ride: push.ride } : {}),
   };
   const urgency = push.quiet ? 'normal' : push.urgency || ((push.priority || 3) >= 4 ? 'high' : 'normal');
+  // The stress lab lists what went to each phone (LOG_PUSHES=1).
+  if (LOG_PUSHES) for (const d of targets) console.log(`[phone-push] ${JSON.stringify({ device: d.id, trip: trip.code, title: data.title, body: data.body, url: data.url, quiet: !!push.quiet })}`);
   let gone = false;
   for (const d of targets) {
     jobs.push(sendPush(d, data, { urgency }).then((result) => {
