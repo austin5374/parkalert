@@ -737,3 +737,6 @@ main { position: relative; transition: none; }
 .chevron.turn.open { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .chevron.turn { transition: none; } }
 .recent-row.sub { padding-left: calc(var(--gutter) + 1rem); }
+
+/* A second paragraph under a sheet's heading, for a caveat. */
+.sheet-note { padding: 0 var(--gutter) 0.4rem; color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; overflow-wrap: anywhere; }

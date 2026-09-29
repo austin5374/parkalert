@@ -1916,8 +1916,12 @@ async function switchPark(to, from, { undo = true } = {}) {
 }
 
 function openLeave() {
+  // An ntfy subscription lives in the ntfy app, out of ParkAlert's reach.
+  const topic = !phone.id && localStorage.getItem(alertsReadyKey()) === '1' ? dash?.trip.topic : null;
+  const ntfyNote = topic ? `<p>This phone gets alerts through ntfy: also unsubscribe from <strong>${esc(topic)}</strong> in the ntfy app, or its alerts keep coming.</p>` : '';
   const content = el(`<div>
     ${sheetHead('Leave this trip?', `This phone stops showing it. The trip keeps running for anyone else on it, and you can rejoin with code <strong>${esc(tripCode)}</strong>.`)}
+    ${ntfyNote ? `<div class="sheet-note">${ntfyNote}</div>` : ''}
     <div class="btn-stack">
       <button class="btn-secondary danger pressable" type="button" data-act="leave">Leave trip</button>
       <button class="btn-secondary pressable" type="button" data-act="cancel">Cancel</button>
