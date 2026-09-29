@@ -115,6 +115,7 @@ const SCENARIOS = {
   }],
   storm: ['Lightning: outdoor rides close together (a hold)', (park) => {
     const w = world[park.id];
+    if (!w.metar) w.stormBegan = Date.now();
     w.metar = 'TS';
     const outdoor = running(park).filter((r) => r.outdoor);
     for (const r of outdoor) setStatus(park, r, 'DOWN');
@@ -122,7 +123,7 @@ const SCENARIOS = {
   }],
   clear: ['The storm passes; held rides reopen over the next 3 to 6 min', (park) => {
     const w = world[park.id];
-    w.metar = null;
+    endStorm(w);
     log(`${park.name}: storm passed`);
     for (const r of w.rides.values()) if (r.status === 'DOWN' && r.outdoor) later(rand(3, 6), () => { setStatus(park, r, 'OPERATING'); log(`${park.name}: ${r.name} reopened after storm`); });
   }],
@@ -177,14 +178,33 @@ const SCENARIOS = {
   }],
   recover: ['Everything back to normal now', (park) => {
     const w = world[park.id];
-    w.metar = null; w.fail = null; w.crowd = 1; w.close = Date.now() + 6 * HOUR;
+    endStorm(w); w.fail = null; w.crowd = 1; w.close = Date.now() + 6 * HOUR;
     for (const r of w.rides.values()) { r.hidden = false; setStatus(park, r, 'OPERATING'); }
     log(`${park.name}: all recovered`);
   }],
 };
 
 // ---------- fake upstream + control panel ----------
-const METAR = (station, ts) => `${station} ${new Date().toISOString().slice(8, 10)}${new Date().toISOString().slice(11, 13)}${new Date().toISOString().slice(14, 16)}Z 27012G25KT 5SM ${ts ? '+TSRA ' : ''}SCT030${ts ? 'CB' : ''} 29/22 A2992`;
+function endStorm(w) {
+  if (w.metar) w.stormEnded = Date.now();
+  w.metar = null;
+}
+
+// A station's report, as the real ones read: thunder while any park using
+// the station has its storm on (a storm at EPCOT is lightning at Kissimmee
+// for Magic Kingdom too), with the minute it began in the remarks, and the
+// minute it ended for an hour after, as a special report gives them.
+const hhmm = (t) => new Date(t).toISOString().slice(11, 16).replace(':', '');
+function METAR(station) {
+  const now = new Date().toISOString();
+  const worlds = PARKS.filter((p) => (p.weather || []).includes(station)).map((p) => world[p.id]).filter(Boolean);
+  const on = worlds.filter((w) => w.metar === 'TS');
+  const head = `${station} ${now.slice(8, 10)}${now.slice(11, 13)}${now.slice(14, 16)}Z 27012G25KT 5SM`;
+  if (on.length) return `${head} +TSRA SCT030CB 29/22 A2992 RMK AO2 TSB${hhmm(Math.min(...on.map((w) => w.stormBegan)))}`;
+  const ended = worlds.filter((w) => w.stormEnded && Date.now() - w.stormEnded < HOUR).sort((a, b) => b.stormEnded - a.stormEnded)[0];
+  if (ended) return `${head} SCT030 29/22 A2992 RMK AO2 TSB${hhmm(ended.stormBegan)}E${hhmm(ended.stormEnded)}`;
+  return `${head} SCT030 29/22 A2992 RMK AO2`;
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${LAB_PORT}`);
@@ -205,7 +225,7 @@ const server = http.createServer(async (req, res) => {
     for (const park of PARKS) {
       for (const id of park.weather || []) {
         if (ids.includes(id) && !out.some((m) => m.icaoId === id)) {
-          out.push({ icaoId: id, obsTime: Math.floor(Date.now() / 1000), rawOb: METAR(id, world[park.id]?.metar === 'TS') });
+          out.push({ icaoId: id, obsTime: Math.floor(Date.now() / 1000), rawOb: METAR(id) });
         }
       }
     }

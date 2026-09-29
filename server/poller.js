@@ -15,7 +15,7 @@ import { recordCalls, scoreCalls } from './scorecard.js';
 import { gateEvents, gateSnapshot, restoreGate, forgetPending, pendingUpFor } from './gate.js';
 import {
   localTime, downMessage, upMessage, closedMessage, groupMessage, groupOutlook,
-  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, idleMessage, linesMessage, LONG_OUTAGE_MS,
+  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, idleMessage, linesMessage, stormPassedMessage, LONG_OUTAGE_MS,
 } from './messages.js';
 import { localDate } from './time.js';
 import { currentSchedule, isParkClosed, hoursDisagree } from './parkstatus.js';
@@ -421,6 +421,37 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
   return { sent, skipped };
 }
 
+const holdOpen = (state) => Object.values(state.incidents || {}).some((i) => i.kind === 'hold' && !i.endedAt);
+
+// "Storm passed at 3:12 PM": when the weather behind a hold clears, the
+// trips following its rides hear it at once, with when they usually reopen.
+// It replaces the hold's push on the lock screen. Once for each all-clear:
+// lightning coming back and passing again is another one.
+export async function notifyStormPassed(parkId, now = Date.now()) {
+  const state = parkState[parkId];
+  const rides = state?.rides || {};
+  const parkName = getPark(parkId)?.name || 'the park';
+  let sent = 0;
+  for (const inc of Object.values(state?.incidents || {})) {
+    if (inc.kind !== 'hold' || inc.endedAt) continue;
+    const held = inc.rides.filter((id) => rides[id]?.status === 'DOWN');
+    if (!held.length) continue;
+    const outlook = holdOutlook(parkId, inc.id, now);
+    if (outlook.weather !== 'passed' || !outlook.clearedAt || inc.passedTold === outlook.clearedAt) continue;
+    inc.passedTold = outlook.clearedAt;
+    const targets = Object.values(trips).filter((t) => t.parkId === parkId && isTripActive(t, now));
+    await Promise.all(targets.map(async (trip) => {
+      const mine = held.filter((id) => !isTripMuted(trip, id, state, now) && !isOtherAttraction(parkId, id, rides[id]));
+      if (!mine.length) return;
+      const push = { ...stormPassedMessage(outlook, mine.map((id) => rides[id].name), parkName, state.timezone, now), click: appLink(trip, { view: 'hold' }) };
+      const badge = Object.entries(rides).filter(([id, r]) => r.status === 'DOWN' && followsRide(trip, id) && !isOtherAttraction(parkId, id, r)).length;
+      if ((await deliver(trip, push, { tag: `inc:${inc.id}`, now, badge })).ok) sent++;
+    }));
+    saveState();
+  }
+  return sent;
+}
+
 // Wait-time alerts are about the ride as it is now, not a transition, so they
 // are checked on every poll. A pause or the park's close holds them back
 // without using them up; one fires once, and only if the push got out.
@@ -564,8 +595,9 @@ async function doPollPark(parkId) {
   parkState[parkId] ??= { rides: {}, timezone: getPark(parkId)?.timezone || 'America/New_York', schedule: null };
   const state = parkState[parkId];
   try {
-    // Weather is fetched alongside, and never holds up the ride poll.
-    refreshWeather(parkId);
+    // Weather is fetched alongside, and never holds up the ride poll; every
+    // minute while a hold is on, since its end is what everyone waits for.
+    refreshWeather(parkId, Date.now(), { urgent: holdOpen(state) });
     await refreshSchedule(parkId);
     const live = await fetchLiveAttractions(parkId);
     // An empty list for a park we know is an API hiccup, not every ride
@@ -605,6 +637,7 @@ async function doPollPark(parkId) {
       toSend.length || updates.length ? notifyTrips(parkId, toSend, { updates, now }) : null,
       notifyWaitAlerts(parkId, rides, now),
       notifyCrowds(parkId, now),
+      notifyStormPassed(parkId, now),
     ]);
   } catch (err) {
     state.lastError = err.message;

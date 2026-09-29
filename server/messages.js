@@ -153,6 +153,31 @@ export function groupOutlook(outlooks) {
   return n * 2 >= outlooks.length ? outlooks.find((o) => o.kind === kind) : null;
 }
 
+// "3:40 to 3:55 PM", "11:50 AM to 12:10 PM", or "around 3:40 PM".
+export function clockSpan(a, b, timezone) {
+  const A = localTime(a, timezone);
+  const B = b == null ? A : localTime(b, timezone);
+  if (A === B) return `around ${A}`;
+  const [ta, pa] = A.split('\u00a0');
+  return `${pa === B.split('\u00a0')[1] ? ta : A} to ${B}`;
+}
+
+// The weather that closed a hold has passed: the moment everyone waiting is
+// waiting for. outlook: the hold's (weather 'passed', clearedAt, window in
+// minutes from now, basis). down: this trip's rides still closed by it.
+export function stormPassedMessage(outlook, down, parkName, timezone, now = Date.now()) {
+  const w = outlook.window;
+  const when = w ? clockSpan(now + w.lo * 60_000, w.hi == null ? null : now + w.hi * 60_000, timezone) : null;
+  const back = !when ? null
+    : outlook.basis?.from === 'rule' ? `Rides reopen about 30 min after the last lightning: ${when}`
+      : `Rides often back ${when}`;
+  return {
+    title: `${outlook.cause === 'rain' ? 'Rain stopped' : 'Storm passed'} at ${localTime(outlook.clearedAt, timezone)}`,
+    message: [back, `${down.length} ride${down.length === 1 ? '' : 's'} still closed: ${listNames(down)}`, parkName].filter(Boolean).join('\n'),
+    priority: 4,
+  };
+}
+
 // ---- Crowds ----
 
 // building: { from, to } minutes, from linesBuilding. crowd: parkCrowd now.
