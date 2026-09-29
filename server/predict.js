@@ -281,6 +281,9 @@ export function describe(est) {
 const closedPct = (est) => Math.round((est.stayedDownShare || 0) * 100);
 export const CLOSED_PCT = 30;
 
+// "Check back in about 20 min": soon, said as a time.
+const checkBack = (p50) => (p50 != null ? `Check back in about ${spoken(roundMin(p50))}` : 'Check back in half an hour');
+
 // A chance as people say it. Ten or twenty outages can't make anything
 // certain, so the ends are words, never 0% or 100%.
 //   "Nearly all outages like this", "62% of outages like this"
@@ -298,8 +301,8 @@ export function shareOf(p, what = 'outages like this') {
 //   3. The park closes before half of these reopen: say so.
 //   4. The chance it's back soon decides:
 //        6 in 10 or more within 15 min  -> worth waiting nearby
-//        half or more within 30 min      -> check back soon
-//        half or more within the hour    -> ride something nearby
+//        half or more within 30 min      -> check back (in about the median)
+//        half or more within the hour    -> stay close
 //        otherwise                        -> ride something else
 // A weather estimate from the 30-minute rule has no curve; its range stands in.
 //   est: from estimate()/afterClearing(); minutesToClose: or null
@@ -320,13 +323,13 @@ export function advise(est, { minutesToClose = null } = {}) {
   // The same numbers the card's legend shows beneath, in the same words.
   if (c) {
     if (c[15] >= 0.6) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `${shareOf(c[15])} are over within 15 min.` };
-    if (c[30] >= 0.5) return { key: 'soon', verdict: 'Check back soon', detail: `${shareOf(c[30])} are over within 30 min.` };
-    if (c[60] >= 0.5) return { key: 'nearby', verdict: 'Ride something nearby', detail: `${shareOf(c[60])} are over within the hour.` };
+    if (c[30] >= 0.5) return { key: 'soon', verdict: checkBack(est.p50), detail: `${shareOf(c[30])} are over within 30 min.` };
+    if (c[60] >= 0.5) return { key: 'nearby', verdict: 'Stay close', detail: `${shareOf(c[60])} are over within the hour.` };
     return { key: 'go', verdict: 'Ride something else', detail: c[60] >= 0.045 ? `Only ${shareOf(c[60])} are over within the hour.` : 'These usually take over an hour.' };
   }
   if (p50 == null) return null;
   if (p50 <= 12) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `Often back within ${spoken(Math.round(p50))}.` };
-  if (p50 <= 30) return { key: 'soon', verdict: 'Check back soon', detail: `Often back within ${spoken(Math.round(p50))}.` };
-  if (p50 <= 60) return { key: 'nearby', verdict: 'Ride something nearby', detail: `Often back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 30) return { key: 'soon', verdict: checkBack(p50), detail: `Often back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 60) return { key: 'nearby', verdict: 'Stay close', detail: `Often back within ${spoken(Math.round(p50))}.` };
   return { key: 'go', verdict: 'Ride something else', detail: 'These usually take over an hour.' };
 }

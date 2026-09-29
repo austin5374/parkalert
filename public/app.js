@@ -53,11 +53,12 @@ function el(html) {
 // And in the same format as the pushes (server/poller.js), so an alert and
 // the card it opens never read "2:10 PM" and "14:10" for one moment.
 const LOCALE = 'en-US';
+// The space before AM or PM never breaks: "5:53 AM" stays on one line.
 function fmtTime(ts) {
   if (ts == null) return '';
   return new Intl.DateTimeFormat(LOCALE, {
     hour: 'numeric', minute: '2-digit', timeZone: dash?.park.timezone || undefined,
-  }).format(new Date(ts));
+  }).format(new Date(ts)).replace(/\s(?=[AP]M\b)/, '\u00a0');
 }
 
 // A time that may not be today, said the way a person would: "9:30 PM",
@@ -1101,7 +1102,7 @@ function renderHeader() {
     paused: ['pause', 'Paused'],
     closed: ['moon', 'Park closed'],
     setup: ['bell-off', 'Set up alerts'],
-    none: ['bell-off', 'No rides on'],
+    none: ['bell-off', 'No ride alerts'],
   }[st.kind];
   const pill = $('#btn-alerts');
   pill.className = `pill pressable ${st.kind}`;
@@ -1202,7 +1203,7 @@ function bestLeftToday(typical) {
 
 // "7 PM": an hour on the park's clock.
 function fmtHour(h) {
-  return `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
+  return `${h % 12 || 12}\u00a0${h < 12 ? 'AM' : 'PM'}`;
 }
 
 // How busy the park is right now: the big rides' waits against their usual
@@ -1525,7 +1526,7 @@ function shortWaitsHtml() {
     .slice(0, 4);
   if (!quick.length) return '';
   return `<h2 class="section-label" data-key="short-label">Shorter than usual right now</h2>
-    <div class="group" data-key="short">${quick.map((r) => `
+    <div class="group plain" data-key="short">${quick.map((r) => `
     <button class="row recent-row pressable" type="button" data-ride="${esc(r.id)}">
       <span class="row-label">${esc(r.name)}<small>Usually ${r.usual} min at this time${queueTags(r).length ? ` · ${esc(queueTags(r).join(' · '))}` : ''}</small></span>
       <span class="row-detail">${r.waitTime} min${trendHtml(r)}</span>
@@ -1638,7 +1639,7 @@ function drawRides() {
   for (const b of document.querySelectorAll('[data-filter]')) {
     const f = b.dataset.filter;
     const n = f === 'all' ? null : all.filter(FILTERS[f]).length;
-    const label = { all: 'All', open: 'Open', down: 'Down', following: 'With alerts' }[f];
+    const label = { all: 'All', open: 'Open', down: 'Down', following: 'Alerts' }[f];
     morph(b, n == null ? label : `${label} <span class="count">${n}</span>`);
   }
   $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length}` : `Alerts on for ${following} of ${all.length}`;
@@ -1767,7 +1768,7 @@ function renderTrip() {
   $('#trip-code').textContent = tripCode;
   const ready = alertsReady();
   const d = $('#setup-detail');
-  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Via ntfy' : 'Not set up';
+  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Through the ntfy app' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
   // Nothing when not paused, as Settings shows no value for an unset row;
@@ -1991,7 +1992,7 @@ function alertSetupContent() {
       <button class="btn-primary pressable" type="button" data-act="push-on" ${denied ? 'disabled' : ''}>${icon('bell')}<span>Turn on notifications</span></button>
       <p class="footnote center hidden" data-note></p>
     </div>`));
-    const more = el('<details class="more"><summary>Or use the ntfy app instead</summary></details>');
+    const more = el('<details class="more"><summary>Or get alerts through ntfy, a free app</summary></details>');
     more.appendChild(ntfy);
     content.appendChild(more);
     content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
@@ -2000,7 +2001,7 @@ function alertSetupContent() {
     content.appendChild(el(`<div class="btn-stack">
       <button class="btn-primary pressable" type="button" data-act="install">${icon('share')}<span>Add to Home Screen</span></button>
     </div>`));
-    const more = el('<details class="more"><summary>Or use the ntfy app instead</summary></details>');
+    const more = el('<details class="more"><summary>Or get alerts through ntfy, a free app</summary></details>');
     more.appendChild(ntfy);
     content.appendChild(more);
     content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
@@ -3053,6 +3054,11 @@ async function fetchDashboard() {
   renderAll();
   // The page on top reloads its own detail (a ride's history, the park's week).
   if (!offline) pages.top?.load?.();
+  if (dash && queuedTap) {
+    const tap = queuedTap;
+    queuedTap = null;
+    tap();
+  }
 }
 
 /* ---------- Screens & navigation ---------- */
@@ -3184,7 +3190,14 @@ $('#join-form').onsubmit = async (e) => {
 
 $('#btn-park').onclick = openParkInfo;
 // Controls that act on the trip's data wait for it rather than failing.
-const withDash = (fn) => () => (dash ? fn() : toast('Still connecting. Try again in a moment.'));
+// A tap on something that needs the trip's data before it has arrived (just
+// opened, or a park switch loading) waits for it rather than being refused.
+let queuedTap = null;
+const withDash = (fn) => () => {
+  if (dash) return fn();
+  queuedTap = fn;
+  toast(offline ? "Can't reach ParkAlert right now. This opens once it answers." : 'One moment…');
+};
 $('#btn-alerts').onclick = withDash(() => {
   const kind = alertState().kind;
   if (kind === 'setup') openAlertSetup();

@@ -188,7 +188,6 @@ a, a:visited { color: var(--accent); }
 .cover-btn { position: absolute; inset: 0; z-index: 1; width: 100%; border-radius: 0.5rem; cursor: pointer; }
 .cover-btn:active ~ * { opacity: 0.6; }
 .nav-meta { display: flex; align-items: center; gap: 0.2rem; }
-.nav-meta .meta-chevron { transform: rotate(90deg); }
 .nav .large-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav .large-title.wrap {
   white-space: normal; overflow-wrap: break-word;

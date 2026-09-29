@@ -404,7 +404,7 @@ async function handleApi(req, res, url) {
     if (req.method === 'POST' && parts[5] === 'test') {
       const { ok } = await deliver(trip, {
         title: 'ParkAlert is on',
-        message: 'This phone will get an alert when a ride you follow goes down or comes back up.',
+        message: 'This phone will get an alert when a ride with alerts on goes down or comes back up.',
         click: appLink(trip),
       }, { device: device.id, tag: 'test' });
       return json(res, ok ? 200 : 502, { ok });
