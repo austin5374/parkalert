@@ -1894,10 +1894,12 @@ function openPause({ fresh = false } = {}) {
   const tz = dash.park.timezone || undefined;
   const morning = nextLocalHour(Date.now(), tz, 7);
   const thisMorning = localDay(morning, tz) === localDay(Date.now(), tz);
-  // Each option says when it ends, as Focus does.
+  // Each option says when it ends, the same way, as Focus does.
+  const close = dash.park.closingTime ? Date.parse(dash.park.closingTime) : null;
   const options = [
     ['For 1 hour', Date.now() + 3600_000],
     ['For 3 hours', Date.now() + 3 * 3600_000],
+    ...(close && close > Date.now() + 15 * 60_000 && st.kind !== 'closed' ? [['Until the park closes', close]] : []),
     [thisMorning ? 'Until this morning' : 'Until tomorrow morning', morning],
     ['Until I turn them back on', null],
   ];
@@ -1911,15 +1913,6 @@ function openPause({ fresh = false } = {}) {
       ? 'Pause just this phone, or everyone on the trip. The Down now list keeps updating either way.'
       : 'Nobody on this trip gets alerts while paused. The Down now list keeps updating.';
   const content = el(`<div data-sheet="pause">${sheetHead('Pause alerts', note)}</div>`);
-  const optionRows = (scope) => {
-    const g = el('<div class="group plain"></div>');
-    for (const [label, until] of options) {
-      const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(until === morning ? fmtTime(until) : `Until ${fmtTime(until)}`)}</span>` : ''}</button>`);
-      row.onclick = () => { sheet.close(); if (scope === 'phone') setPhoneMute({ until }); else setMute({ until }); };
-      g.appendChild(row);
-    }
-    return g;
-  };
   const resumeRow = (label, run) => {
     const g = el(`<div class="group plain"><button class="row pressable" type="button">${icon('bell', 'row-icon tint-accent')}<span class="row-label">${label}</span></button></div>`);
     g.querySelector('button').onclick = () => { sheet.close(); run(); };
@@ -1933,12 +1926,30 @@ function openPause({ fresh = false } = {}) {
     content.appendChild(resumeRow('Resume on this phone', () => setPhoneMute(null)));
     content.appendChild(el('<div style="height:1rem"></div>'));
   }
+  // Who, then one list of how long: a choice of scope over the list rather
+  // than the same list twice.
+  let scope = perPhone ? 'phone' : 'trip';
   if (perPhone) {
-    content.appendChild(el('<h2 class="section-label">Just this phone</h2>'));
-    content.appendChild(optionRows('phone'));
-    content.appendChild(el('<h2 class="section-label">Everyone on this trip</h2>'));
+    const who = el(`<div class="segmented pause-scope" role="group" aria-label="Pause">
+      <button type="button" data-scope="phone" aria-pressed="true">This phone</button>
+      <button type="button" data-scope="trip" aria-pressed="false">Everyone</button>
+    </div>`);
+    who.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-scope]');
+      if (!b) return;
+      scope = b.dataset.scope;
+      for (const x of who.querySelectorAll('[data-scope]')) x.setAttribute('aria-pressed', String(x === b));
+      haptic();
+    });
+    content.appendChild(who);
   }
-  content.appendChild(optionRows('trip'));
+  const list = el('<div class="group plain spaced-sm"></div>');
+  for (const [label, until] of options) {
+    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(`Until ${fmtUntil(until)}`)}</span>` : ''}</button>`);
+    row.onclick = () => { sheet.close(); if (scope === 'phone') setPhoneMute({ until }); else setMute({ until }); };
+    list.appendChild(row);
+  }
+  content.appendChild(list);
   const cancel = el('<div class="btn-stack"><button class="btn-secondary pressable" type="button">Cancel</button></div>');
   cancel.querySelector('button').onclick = () => sheet.close();
   content.appendChild(cancel);
