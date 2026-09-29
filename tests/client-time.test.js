@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const ctx = vm.createContext({ Intl, Date, Object, Number, String, Math });
 vm.runInContext(fs.readFileSync(new URL('../public/time.js', import.meta.url), 'utf8'), ctx);
-const { nextLocalHour, localDay, extractTripCode } = ctx;
+const { nextLocalHour, localDay, extractTripCode, matchesSearch } = ctx;
 const NY = 'America/New_York';
 const iso = (t) => new Date(t).toISOString();
 
@@ -71,4 +71,22 @@ test('the join field finds the code in whatever was pasted', () => {
   // Typing is left alone until a code is there.
   assert.equal(extractTripCode('MKL'), null);
   assert.equal(extractTripCode('Join m'), null);
+});
+
+test('search understands digits, short forms, plurals and ride acronyms', () => {
+  const sdmt = 'Seven Dwarfs Mine Train';
+  const btmr = 'Big Thunder Mountain Railroad';
+  assert.equal(matchesSearch(sdmt, '7 dwarfs'), true);
+  assert.equal(matchesSearch(sdmt, 'seven dwarves'), true);
+  assert.equal(matchesSearch(sdmt, '7DMT'), true);
+  assert.equal(matchesSearch(btmr, 'big thunder mtn'), true);
+  assert.equal(matchesSearch(btmr, 'BTMRR'), true);
+  assert.equal(matchesSearch('Pirates of the Caribbean', 'potc'), true);
+  assert.equal(matchesSearch("Rock 'n' Roller Coaster Starring Aerosmith", 'rnrc'), true);
+  assert.equal(matchesSearch("Rémy's Ratatouille Adventure", 'remys'), true);
+  assert.equal(matchesSearch('Space Mountain', 'mountain space'), true);
+  // Still selective.
+  assert.equal(matchesSearch(sdmt, 'thunder'), false);
+  assert.equal(matchesSearch('Haunted Mansion', 'hmx'), false);
+  assert.equal(matchesSearch('Haunted Mansion', 'h'), true, 'a single letter starts a word');
 });

@@ -47,7 +47,18 @@ function nextLocalHour(now, timeZone, hour) {
 // Ride search, the way Apple's search fields behave: case, accents and
 // apostrophes don't matter ("remys" finds "Rémy's"), a leading "the" is
 // ignored, and every word typed must start some word of the name, in any
-// order ("mountain space" finds Space Mountain).
+// order ("mountain space" finds Space Mountain). Guests also type numbers
+// and nicknames: digits match number words ("7 dwarfs"), a few short forms
+// and plurals are understood ("mtn", "dwarves"), and a ride's initials or
+// its well-known acronym find it ("7DMT", "BTMRR").
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const SEARCH_SAME = { mtn: 'mountain', mt: 'mountain', rr: 'railroad', dwarves: 'dwarfs', n: 'and' };
+// Acronyms fans use that aren't simply a ride's initials.
+const SEARCH_ALIASES = {
+  btmrr: 'big thunder mountain railroad', rnrc: 'rock n roller coaster', tsmm: 'toy story mania',
+  rotr: 'rise of the resistance', mfsr: 'millennium falcon smugglers run', fop: 'flight of passage',
+  gotg: 'guardians of the galaxy', tta: 'peoplemover', mmrr: 'runaway railway', totr: 'twilight zone tower of terror',
+};
 function searchWords(text) {
   return String(text)
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -56,7 +67,8 @@ function searchWords(text) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .split(' ')
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((w) => (/^\d+$/.test(w) && NUMBER_WORDS[Number(w)]) || SEARCH_SAME[w] || w);
 }
 function matchesSearch(name, query) {
   let words = searchWords(query);
@@ -64,7 +76,16 @@ function matchesSearch(name, query) {
   if (!words.length) return true;
   const hay = searchWords(name);
   const joined = hay.join('');
-  return words.every((w) => hay.some((h) => h.startsWith(w))) || joined.includes(words.join(''));
+  if (words.every((w) => hay.some((h) => h.startsWith(w))) || joined.includes(words.join(''))) return true;
+  // One word typed: a ride's initials, with a number as its digit ("7dmt"),
+  // or a known acronym.
+  if (words.length !== 1) return false;
+  const q = String(query).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (q.length < 2) return false;
+  const initials = hay.map((h) => h[0]).join('');
+  const withDigits = hay.map((h) => (NUMBER_WORDS.indexOf(h) > 0 ? String(NUMBER_WORDS.indexOf(h)) : h[0])).join('');
+  if (initials.includes(q) || withDigits.includes(q)) return true;
+  return !!SEARCH_ALIASES[q] && matchesSearch(name, SEARCH_ALIASES[q]);
 }
 
 // A trip code out of whatever was pasted into the join field: the code alone
