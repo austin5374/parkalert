@@ -2415,9 +2415,9 @@ function rideHtml(r, detail, failed) {
 
   // Wait times today
   if (detail.waits.some(([, v]) => v != null)) {
-    parts.push(`<h2 class="section-label" data-key="waits-label">Wait times today</h2>
+    parts.push(`<h2 class="section-label" data-key="waits-label">Wait times, last six hours</h2>
       <div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
-      <p class="footnote" data-key="waits-foot">Drag across the chart to see the wait at any time. Gaps are when it was down or closed.</p>`);
+      <p class="footnote" data-key="waits-foot">The last six hours of posted waits. Drag across the chart to see any time. Gaps are when it was down or closed.</p>`);
   }
 
   // When the line is usually shortest: in what is left of today, which is
@@ -2682,9 +2682,15 @@ const contentWidth = (box) => {
   return box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
 };
 
+// The last six hours, scaled to them, so the morning's peak doesn't flatten
+// the afternoon; the whole day's pattern is under Best time.
+const WAIT_CHART_MS = 6 * 3600_000;
 function waitChart(box, { waits, now }) {
   const W = Math.max(160, contentWidth(box)), H = 116, top = 6, bottom = 2;
-  const pts = waits.map(([t, w]) => ({ t, w }));
+  let pts = waits.map(([t, w]) => ({ t, w }));
+  const start = Math.max(pts[0].t, now - WAIT_CHART_MS);
+  const inEffect = pts.filter((p) => p.t <= start).pop();
+  pts = [...(inEffect ? [{ t: start, w: inEffect.w }] : []), ...pts.filter((p) => p.t > start)];
   const t0 = pts[0].t, t1 = Math.max(now, t0 + 60_000);
   const max = niceMax(Math.max(10, ...pts.map((p) => p.w ?? 0)));
   const x = (t) => ((t - t0) / (t1 - t0)) * W;
@@ -2744,7 +2750,7 @@ function waitChart(box, { waits, now }) {
     } else dot.setAttribute('visibility', 'hidden');
   };
   const latest = pts[pts.length - 1];
-  svg.setAttribute('aria-label', `Wait times today, from ${fmtTime(t0)} to now. Now ${latest.w == null ? 'not running' : `${latest.w} minutes`}.`);
+  svg.setAttribute('aria-label', `Wait times from ${fmtTime(t0)} to now. Now ${latest.w == null ? 'not running' : `${latest.w} minutes`}.`);
   show(t1, false);
 
   // Scrub: the crosshair follows the finger along X; vertical drags still scroll.
