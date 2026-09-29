@@ -28,8 +28,16 @@ export const holdTitle = (outlook) => (isStorm(outlook) ? 'Storm hold' : 'Park-w
 // ---- One ride ----
 
 // ride: { name, downSince }, outlook from downOutlook.
+// When a ride went down, as far as anyone knows: exact, between two polls
+// either side of a gap in the feed, or only that it was down when first seen.
+export function wentDown(ride, timezone) {
+  const at = localTime(ride.downSince ?? Date.now(), timezone);
+  if (ride.downExact !== false) return `Went down at ${at}`;
+  return ride.downAfter != null ? `Went down between ${localTime(ride.downAfter, timezone)} and ${at}` : `Down since before ${at}`;
+}
+
 export function downMessage(ride, outlook, parkName, timezone) {
-  const lines = [`Went down at ${localTime(ride.downSince ?? Date.now(), timezone)} · ${parkName}`];
+  const lines = [`${wentDown(ride, timezone)} · ${parkName}`];
   if (outlook?.kind === 'hold') lines.push(`Part of a ${holdTitle(outlook).toLowerCase()}: ${outlook.rides} rides closed`);
   const line = outlookLine(outlook);
   if (line) lines.push(line);
@@ -46,17 +54,29 @@ export function upMessage(ev, parkName, timezone) {
     };
   }
   const long = ev.downtimeMs >= LONG_OUTAGE_MS;
+  const took = ev.downtimeRange ? downtimeSpan(ev.downtimeRange) : ev.downtimeMs ? `Was down ${formatDuration(ev.downtimeMs)}` : null;
   return {
-    title: long ? `${ev.ride.name} is back up after ${formatDuration(ev.downtimeMs)}` : `${ev.ride.name} is back up`,
-    message: ev.downtimeMs
-      ? `${long ? `Down since ${localTime(ev.ride.downSince ?? Date.now() - ev.downtimeMs, timezone)}` : `Was down ${formatDuration(ev.downtimeMs)}`} · ${parkName}`
-      : `Back at ${localTime(ev.reopenedAt ?? Date.now(), timezone)} · ${parkName}`,
+    title: long ? `${ev.ride.name} is back up after ${ev.downtimeRange && ev.downtimeRange[1] == null ? 'at least ' : ''}${formatDuration(ev.downtimeRange?.[0] ?? ev.downtimeMs)}` : `${ev.ride.name} is back up`,
+    message: `${long ? `Down since ${ev.ride.downExact === false ? 'before ' : ''}${localTime(ev.ride.downSince ?? Date.now() - ev.downtimeMs, timezone)}` : took ?? `Back at ${localTime(ev.reopenedAt ?? Date.now(), timezone)}`} · ${parkName}`,
     priority: 4,
   };
 }
 
+// An outage whose length is only known to lie in [lo, hi] (hi null: no upper
+// bound, it was already down when first seen).
+export function downtimeSpan([lo, hi]) {
+  if (hi == null) return `Was down at least ${formatDuration(lo)}`;
+  if (hi - lo < 2 * 60_000) return `Was down ${formatDuration((lo + hi) / 2)}`;
+  return `Was down ${formatDuration(lo)} to ${formatDuration(hi)}`;
+}
+
 // A ride back after this long is news on its own, never folded into a group.
 export const LONG_OUTAGE_MS = 60 * 60_000;
+
+export function goneMessage(ev, parkName, timezone) {
+  const since = ev.ride.downSince ? `Down since ${localTime(ev.ride.downSince, timezone)}. ` : '';
+  return { title: `${ev.ride.name} is no longer listed`, message: `${since}It left the park's ride list while down, and may not reopen today · ${parkName}`, priority: 3 };
+}
 
 export function closedMessage(ev, parkName, timezone) {
   const since = ev.ride.downSince ? `Down since ${localTime(ev.ride.downSince, timezone)}, now closed` : 'Now closed';
@@ -78,8 +98,9 @@ export function groupDowntime(ms, late = false) {
 
 // Rides that went down together. kind: 'hold' or 'group'. The hold, its
 // range and what to do come first, since a lock screen shows two lines.
-export function incidentDownMessage(kind, names, parkName, outlook, at, timezone) {
-  const when = `${parkName} · ${localTime(at, timezone)}`;
+//   after: set when the rides were first seen after a gap in the feed
+export function incidentDownMessage(kind, names, parkName, outlook, at, timezone, after = null) {
+  const when = `${parkName} · ${after != null ? `between ${localTime(after, timezone)} and ${localTime(at, timezone)}` : localTime(at, timezone)}`;
   if (kind === 'hold') {
     const lines = [outlookLine(outlook), listNames(names), when].filter(Boolean);
     return { title: `${holdTitle(outlook)}: ${names.length} rides closed`, message: lines.join('\n'), priority: 3 };

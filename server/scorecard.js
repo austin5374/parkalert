@@ -73,13 +73,13 @@ export function scoreCalls(calls = {}, scores = [], events, now = Date.now()) {
   const nextCalls = { ...calls };
   const added = [];
   for (const ev of events) {
-    if (ev.type !== 'UP' && ev.type !== 'CLOSED') continue;
+    if (ev.type !== 'UP' && ev.type !== 'CLOSED' && ev.type !== 'GONE') continue;
     const list = nextCalls[ev.ride.id];
     delete nextCalls[ev.ride.id];
     if (ev.late || !list) continue;
     for (const c of list) {
       const width = Math.round((c.hi - c.lo) / MIN);
-      if (ev.type === 'CLOSED') {
+      if (ev.type !== 'UP') {
         if (now > c.hi) added.push({ at: now, stage: c.stage, cause: c.cause, hit: false, width, miss: null, closed: true });
         continue;
       }

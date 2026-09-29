@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { remaining, estimate, describe, classifyLive, MIN_SAMPLES } from '../server/predict.js';
-import { applyLiveData, MISSING_POLLS, CLOSED_OUTAGE_MS } from '../server/poller.js';
+import { applyLiveData, MISSING_POLLS, MISSING_DOWN_MS, CLOSED_OUTAGE_MS } from '../server/poller.js';
 
 const ep = (minutes, extra = {}) => ({ rideId: 'a', minutes, endedAs: 'OPERATING', kind: 'breakdown', ...extra });
 const eps = (list, extra) => list.map((m) => ep(m, extra));
@@ -117,8 +117,40 @@ test('a ride missing from one response keeps its outage clock, and is dropped if
   ({ rides, events } = applyLiveData(rides, att('DOWN'), 180_000));
   assert.equal(rides.a.downSince, 60_000, 'same outage when it reappears');
   assert.deepEqual(events, []);
+  // Down when it left: kept for half an hour, so its return is still "back up".
   for (let i = 0; i < MISSING_POLLS + 1; i++) ({ rides } = applyLiveData(rides, onlyB, 240_000 + i * 60_000));
-  assert.equal(rides.a, undefined, 'gone after several polls');
+  assert.equal(rides.a.status, 'DOWN', 'a down ride is kept longer than a running one');
+  ({ rides, events } = applyLiveData(rides, att('OPERATING'), 900_000));
+  assert.deepEqual([events[0].type, events[0].downtimeMs], ['UP', 840_000], 'back from the missing: the whole outage');
+  // Down and gone for half an hour: phones hear it is no longer listed.
+  ({ rides } = applyLiveData(rides, att('DOWN'), 960_000));
+  for (const t of [1_020_000, 1_020_000 + MISSING_DOWN_MS]) ({ rides, events } = applyLiveData(rides, onlyB, t));
+  assert.deepEqual(events.map((e) => e.type), ['GONE']);
+  assert.equal(rides.a, undefined);
+  // A running ride that goes missing is simply dropped after a few polls.
+  ({ rides } = applyLiveData({}, att('OPERATING').slice(0, 1), 0));
+  for (let i = 1; i <= MISSING_POLLS + 1; i++) ({ rides, events } = applyLiveData(rides, [], i * 60_000));
+  assert.deepEqual([rides.a, events], [undefined, []]);
+});
+
+test('after a gap in the feed, a change is known only to fall between the two polls', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }];
+  let rides, events;
+  ({ rides } = applyLiveData({}, att('OPERATING'), 0, { prevPoll: null, pollMs: 60_000 }));
+  // The feed was down for four minutes; at 5 min the ride is seen down.
+  ({ rides, events } = applyLiveData(rides, att('DOWN'), 5 * 60_000, { prevPoll: 60_000, pollMs: 60_000 }));
+  assert.equal(events[0].after, 60_000);
+  assert.deepEqual([rides.a.downExact, rides.a.downAfter], [false, 60_000]);
+  ({ rides } = applyLiveData(rides, att('DOWN'), 6 * 60_000, { prevPoll: 5 * 60_000, pollMs: 60_000 }));
+  ({ events } = applyLiveData(rides, att('OPERATING'), 7 * 60_000, { prevPoll: 6 * 60_000, pollMs: 60_000 }));
+  // Went down somewhere between 1 and 5 min, seen back up at 7: at least 2 min, at most 6.
+  assert.deepEqual(events[0].downtimeRange, [2 * 60_000, 6 * 60_000]);
+});
+
+test('a ride already down when first seen is marked so, with no start time claimed', () => {
+  const { rides } = applyLiveData({}, [{ id: 'a', name: 'A', status: 'DOWN', waitTime: null }], 0);
+  assert.equal(rides.a.downExact, false);
+  assert.equal(rides.a.downAfter, undefined);
 });
 
 test('estimates pick up newly archived days', () => {

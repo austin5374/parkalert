@@ -15,7 +15,7 @@ import { recordCalls, scoreCalls } from './scorecard.js';
 import { gateEvents, gateSnapshot, restoreGate, forgetPending, pendingUpFor } from './gate.js';
 import {
   localTime, downMessage, upMessage, closedMessage, groupMessage, groupOutlook,
-  incidentDownMessage, incidentGrewMessage, incidentUpMessage, LONG_OUTAGE_MS,
+  incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, LONG_OUTAGE_MS,
 } from './messages.js';
 import { localDate } from './time.js';
 
@@ -24,6 +24,13 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_MS) || 60_000;
 // A ride missing from a response keeps its last state this many polls before
 // it is dropped, so one patchy response can't restart its outage clock.
 export const MISSING_POLLS = 5;
+// A ride that is down when it leaves the feed is kept this long, so its
+// return is still "back up"; past it, phones are told it is no longer listed
+// rather than left believing "is down" for the rest of the day.
+export const MISSING_DOWN_MS = 30 * 60_000;
+// A poll this many intervals after the last good one is a gap: changes seen
+// on it happened sometime in between, and pushes say so.
+const GAP_POLLS = 2.5;
 // A ride that closes while down is still on the same outage if it reopens
 // within this long: "back up" then says how long it was really out. Past
 // it (reopening next morning, say) it had simply closed for the day.
@@ -33,9 +40,12 @@ export const CLOSED_OUTAGE_MS = 8 * 3600_000;
 // Returns { rides, events } where events = [{ type: 'DOWN'|'UP'|'CLOSED', ride, downtimeMs }].
 //   stormAt(t): whether the weather reported lightning nearby at t, which
 //     lets rides already settled as breakdowns join a hold (see rememberHolds)
-export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { stormAt = null } = {}) {
+//   prevPoll: when the last good poll was; after a gap, a change is only
+//     known to have happened since then
+export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { stormAt = null, prevPoll = null, pollMs = POLL_INTERVAL_MS } = {}) {
   const rides = {};
   const changes = []; // [type, id, extra], turned into events once kinds are settled
+  const gap = prevPoll != null && now - prevPoll > GAP_POLLS * pollMs;
   for (const att of liveAttractions) {
     const prev = prevRides?.[att.id];
     const ride = {
@@ -55,6 +65,13 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { st
     if (att.status === 'DOWN') {
       ride.downSince = outage ? outage.downSince : now;
       ride.downFrom = outage ? outage.downFrom ?? null : prev?.status ?? null;
+      // When it went down is exact only if the change was seen between two
+      // polls in a row: not on a first sight, nor after a gap.
+      if (outage ? outage.downExact === false : !prev || gap) {
+        ride.downExact = false;
+        const after = outage ? outage.downAfter ?? null : prev && gap ? prevPoll : null;
+        if (after != null) ride.downAfter = after;
+      }
       if (outage?.liveKind) {
         ride.liveKind = outage.liveKind;
         if (outage.holdSize) ride.holdSize = outage.holdSize;
@@ -69,10 +86,15 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { st
     }
     if (prev && prev.status !== att.status) {
       if (prev.status === 'OPERATING' && att.status === 'DOWN') {
-        changes.push(['DOWN', att.id, {}]);
+        changes.push(['DOWN', att.id, gap ? { after: prevPoll } : {}]);
       } else if (outage && att.status === 'OPERATING') {
+        // After a gap, or when the start was never seen, the length is a range.
+        const uncertain = gap || outage.downExact === false;
+        const lo = outage.downSince ? (gap ? prevPoll : now) - outage.downSince : null;
+        const from = outage.downExact === false ? outage.downAfter ?? null : outage.downSince;
         changes.push(['UP', att.id, {
           downtimeMs: outage.downSince ? now - outage.downSince : null,
+          ...(uncertain && lo != null ? { downtimeRange: [Math.max(0, lo), from != null ? now - from : null] } : {}),
           // It never opened on time, so it is opening late, not coming back.
           late: isLateOpening({ from: outage.downFrom }),
           // What the outage was, for grouping its "back up" with the others.
@@ -85,10 +107,17 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { st
     }
     rides[att.id] = ride;
   }
+  const gone = [];
   for (const [id, prev] of Object.entries(prevRides || {})) {
     if (rides[id]) continue;
     const missed = (prev.missed || 0) + 1;
-    if (missed <= MISSING_POLLS) rides[id] = { ...prev, missed };
+    const missingSince = prev.missingSince ?? now;
+    const downish = prev.status === 'DOWN' || prev.closedWhileDown;
+    if (downish ? now - missingSince < MISSING_DOWN_MS : missed <= MISSING_POLLS) {
+      rides[id] = { ...prev, missed, missingSince };
+    } else if (prev.status === 'DOWN') {
+      gone.push({ type: 'GONE', ride: { id, ...prev }, downtimeMs: prev.downSince ? now - prev.downSince : null, incident: prev.incident ?? null });
+    }
   }
   rememberHolds(rides, { stormAt });
   // GROUP_MIN or more rides starting an outage in one poll, outside a hold,
@@ -96,7 +125,7 @@ export function applyLiveData(prevRides, liveAttractions, now = Date.now(), { st
   // Never on a first poll, when every down ride looks new.
   const fresh = Object.entries(rides).filter(([id, r]) => r.status === 'DOWN' && r.downSince === now && !r.incident && prevRides?.[id]);
   if (fresh.length >= GROUP_MIN) for (const [, r] of fresh) r.incident = `group-${Math.round(now / 1000)}`;
-  const events = changes.map(([type, id, extra]) => ({ type, ride: { id, ...rides[id] }, ...extra }));
+  const events = [...changes.map(([type, id, extra]) => ({ type, ride: { id, ...rides[id] }, ...extra })), ...gone];
   return { rides, events };
 }
 
@@ -331,7 +360,8 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
         const downNow = followedIn(inc).filter((id) => rides[id]?.status === 'DOWN').length;
         pushes.push({ ...incidentGrewMessage(inc.kind, downNow, evs.map((ev) => ev.ride.name), parkName, outlook), click: appLink(trip, { view }), tag: `inc:${key}` });
       } else {
-        pushes.push({ ...incidentDownMessage(inc.kind, evs.map((ev) => ev.ride.name), parkName, outlook, inc.start, tz), click: appLink(trip, { view }), tag: `inc:${key}` });
+        const after = evs.find((ev) => ev.after != null)?.after ?? null;
+        pushes.push({ ...incidentDownMessage(inc.kind, evs.map((ev) => ev.ride.name), parkName, outlook, inc.start, tz, after), click: appLink(trip, { view }), tag: `inc:${key}` });
       }
     }
 
@@ -352,6 +382,9 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
         for (const ev of rest) single(ev, type === 'UP' ? upMessage(ev, parkName, tz) : closedMessage(ev, parkName, tz));
       }
     }
+
+    // A down ride that left the feed: nobody can say it is back, so say that.
+    for (const ev of mine.filter((e) => e.type === 'GONE')) single(ev, goneMessage(ev, parkName, tz));
 
     // An incident's rides coming back: one update per incident, replacing
     // the "went down" push, or single pushes for a trip that got singles.
@@ -540,7 +573,9 @@ async function doPollPark(parkId) {
       forgetPending(parkId);
     } else if (!restored.has(parkId)) restoreGate(parkId, upgradeGate(parkId, state.gate));
     restored.add(parkId);
-    const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now, { stormAt: (t) => stormAt(parkId, t, now) });
+    const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now, {
+      stormAt: (t) => stormAt(parkId, t, now), prevPoll: state.lastPoll ?? null,
+    });
     state.rides = rides;
     syncIncidents(parkId, state, rides, now);
     state.recent = recordRecent(state.recent, events, now);

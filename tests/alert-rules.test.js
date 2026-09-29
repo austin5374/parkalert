@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSchedule } from '../server/themeparks.js';
 import { recordRecent, GROUP_MIN } from '../server/poller.js';
-import { groupMessage, groupOutlook, incidentDownMessage, incidentUpMessage, upMessage } from '../server/messages.js';
+import { groupMessage, groupOutlook, incidentDownMessage, incidentUpMessage, upMessage, downMessage, goneMessage } from '../server/messages.js';
 import { isTripActive, TRIP_IDLE_MS } from '../server/store.js';
 
 // Magic Kingdom on 2026-09-27 as the API returned it: early entry, a 6pm
@@ -119,4 +119,17 @@ test('a grouped "back up" says how long the rides were down, like a single one',
   assert.equal(m([8, 30, 65].map((x) => x * 60_000)), 'A, B, C\nDown 8 min to 1 hr 5 min · EPCOT');
   assert.equal(m([null, null, null]), 'A, B, C\nEPCOT');
   assert.equal(m([20, 21, 22].map((x) => x * 60_000), { late: true }), 'A, B, C\nOpened about 21 min late · EPCOT');
+});
+
+test('a push says what is known about when: exact, between two polls, or only "before"', () => {
+  const tz = 'America/New_York';
+  const at = Date.parse('2026-09-27T13:44:00Z');
+  const ride = (extra) => ({ name: 'A', downSince: at, ...extra });
+  assert.match(downMessage(ride({}), null, 'EPCOT', tz).message, /^Went down at 9:44\u00a0AM · EPCOT/);
+  assert.match(downMessage(ride({ downExact: false, downAfter: at - 4 * 60_000 }), null, 'EPCOT', tz).message, /^Went down between 9:40\u00a0AM and 9:44\u00a0AM · EPCOT/);
+  assert.match(downMessage(ride({ downExact: false }), null, 'EPCOT', tz).message, /^Down since before 9:44\u00a0AM · EPCOT/);
+  const up = (downtimeRange) => upMessage({ type: 'UP', ride: ride({}), downtimeMs: 3 * 60_000, downtimeRange }, 'EPCOT', tz).message;
+  assert.equal(up([60_000, 4 * 60_000]), 'Was down 1 min to 4 min · EPCOT');
+  assert.equal(up([3 * 60_000, null]), 'Was down at least 3 min · EPCOT');
+  assert.equal(goneMessage({ ride: ride({}) }, 'EPCOT', tz).title, 'A is no longer listed');
 });
