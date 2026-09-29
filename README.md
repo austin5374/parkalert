@@ -46,7 +46,8 @@ Data goes in `data/` (git-ignored): `trips.json` (readable), `state.json` (live 
 server/
   index.js        HTTP server: API routes, static files, security headers, rate limits
   config.js       every environment setting, with its default
-  poller.js       60s polling, transition detection, anti-flicker, alert wording and fan-out
+  poller.js       60s polling, transition detection, alert wording and fan-out
+  gate.js         anti-flicker: which transitions phones hear about, and when
   waitalerts.js   "tell me when the wait drops to N min" alerts
   deliver.js      sends each alert: the trip's ntfy topic, and every phone on the app's own notifications
   webpush.js      Web Push: VAPID signing and RFC 8291 encryption, no library
@@ -168,7 +169,7 @@ With no signal, the app still opens: it shows the last rides it saw, marked `Off
 - Pausing (1 hour, 3 hours, until 7am on the park's clock, or until turned back on) can be for just this phone, when it uses the app's own notifications, or for everyone on the trip. A phone on ntfy can only pause the whole trip, or mute the subscription in the ntfy app.
 - The app's own notifications for the same ride replace each other on the lock screen ("back up" replaces "is down") instead of piling up.
 - Alerts stop on their own after the park's last close of the day, which includes ticketed evening events. On a Halloween party night Magic Kingdom closes at 6pm but alerts continue until the party ends at midnight. If today's hours can't be fetched, alerts stay on rather than guessing.
-- Anti-flicker: a repeat alert for the same ride in the same direction within 5 minutes is held back (`NOTIFY_COOLDOWN_MS` in `server/poller.js`), so a ride flapping between statuses can't spam your phones. It is held, not dropped: once the 5 minutes pass, it goes out if the ride is still that way, so the last alert you got always matches reality.
+- Anti-flicker: "is down" goes out the moment a ride goes down, unless your phone already thinks it is down. "Back up" waits until the ride has stayed up for a minute (`UP_CONFIRM_MS` in `server/gate.js`). A ride that flickers back and breaks again costs nothing, and the last alert you got stays true: a flapping ride is one "down", then one "back up" once it settles.
 - After a gap in polling (the trip hopped to another park and back, or the server or the API was down for more than 15 minutes), the next poll starts afresh with no alerts, because nobody knows when things changed in between. The dashboard shows the current state straight away.
 - Ride alerts: on for every ride by default. They are shared across the trip, and each park keeps its own, so hopping parks and back restores them.
 

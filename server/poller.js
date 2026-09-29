@@ -13,6 +13,7 @@ import { recordWaits } from './insights.js';
 import { liveIndex, parkCrowd } from './crowdstate.js';
 import { linesBuilding } from './crowds.js';
 import { recordCalls, scoreCalls } from './scorecard.js';
+import { gateEvents, gateSnapshot, restoreGate, forgetPending } from './gate.js';
 import { localDate } from './time.js';
 
 // POLL_MS exists for the stress lab (npm run lab); real use keeps 60s.
@@ -150,81 +151,10 @@ export function isTripMuted(trip, rideId, state, now = Date.now()) {
   return false;
 }
 
-// Anti-flicker: a ride flapping OPERATING/DOWN on consecutive polls would
-// otherwise push up to 60 alerts/hour to every phone. A repeat of the same
-// ride+direction within the cooldown is held back, not dropped: once the
-// cooldown passes, it goes out if the ride is still that way and the last
-// alert about it said otherwise. Dropping it outright meant a ride that went
-// down, came back, and went down again a minute later for an hour left every
-// phone saying "back up".
-export const NOTIFY_COOLDOWN_MS = 5 * 60_000;
-const lastNotified = new Map(); // "parkId:rideId:type" -> epoch ms
-const lastSent = new Map(); // "parkId:rideId" -> type of the last alert sent
-const held = new Map(); // "parkId:rideId" -> { parkId, ev } held back by the cooldown
-
-function cooldownOk(key, now) {
-  if (now - (lastNotified.get(key) ?? -Infinity) < NOTIFY_COOLDOWN_MS) return false;
-  lastNotified.set(key, now);
-  if (lastNotified.size > 500) {
-    for (const [k, ts] of lastNotified) if (now - ts >= NOTIFY_COOLDOWN_MS) lastNotified.delete(k);
-  }
-  return true;
-}
-
-// The status a ride must still have for a held alert to still be true.
-const STILL = { DOWN: 'DOWN', UP: 'OPERATING', CLOSED: 'CLOSED' };
-
-// Decide which of this poll's transitions to alert on now, and release any
-// held-back alert whose cooldown has passed. rides: the park's current state.
-export function gateEvents(parkId, events, rides, now = Date.now()) {
-  const out = [];
-  const send = (ev) => {
-    lastSent.set(`${parkId}:${ev.ride.id}`, ev.type);
-    out.push(ev);
-  };
-  for (const ev of events) {
-    const key = `${parkId}:${ev.ride.id}`;
-    held.delete(key); // a newer transition supersedes anything held
-    if (cooldownOk(`${key}:${ev.type}`, now)) send(ev);
-    else {
-      held.set(key, { parkId, ev });
-      console.log(`[poller] cooldown: holding ${ev.type} ${ev.ride.name}`);
-    }
-  }
-  for (const [key, { parkId: p, ev }] of held) {
-    if (p !== parkId || events.some((e) => `${parkId}:${e.ride.id}` === key)) continue;
-    if (now - (lastNotified.get(`${key}:${ev.type}`) ?? -Infinity) < NOTIFY_COOLDOWN_MS) continue;
-    held.delete(key);
-    const ride = rides[ev.ride.id];
-    if (ride?.status !== STILL[ev.type] || lastSent.get(key) === ev.type) continue;
-    cooldownOk(`${key}:${ev.type}`, now);
-    send({ ...ev, ride: { id: ev.ride.id, ...ride } });
-  }
-  return out;
-}
-
-// Held alerts belong to the snapshot they came from; after a gap they are stale.
-function forgetHeld(parkId) {
-  for (const [key, h] of held) if (h.parkId === parkId) held.delete(key);
-}
-
-// The gate lives in memory, so it is copied into the park's saved state each
-// poll and read back after a restart. A redeploy inside the gap window then
-// still sends a held alert, and still knows what each phone last heard.
-export function gateSnapshot(parkId) {
-  const mine = (map) => Object.fromEntries([...map].filter(([k]) => k.startsWith(`${parkId}:`)));
-  return {
-    held: [...held].filter(([, h]) => h.parkId === parkId).map(([key, h]) => [key, h.ev]),
-    lastSent: mine(lastSent),
-    lastNotified: mine(lastNotified),
-  };
-}
-export function restoreGate(parkId, snap) {
-  if (!snap) return;
-  for (const [key, ev] of snap.held || []) if (!held.has(key)) held.set(key, { parkId, ev });
-  for (const [k, v] of Object.entries(snap.lastSent || {})) if (!lastSent.has(k)) lastSent.set(k, v);
-  for (const [k, v] of Object.entries(snap.lastNotified || {})) if (!lastNotified.has(k)) lastNotified.set(k, v);
-}
+// Which transitions phones hear about, and when, lives in gate.js: "down" at
+// once, "back up" once it has stuck, and nothing that repeats what phones
+// already believe.
+export { gateEvents, gateSnapshot, restoreGate, UP_CONFIRM_MS } from './gate.js';
 const restored = new Set(); // parks whose saved gate has been read this run
 
 // What to tell people about a DOWN ride: what kind of outage it looks like,
@@ -572,8 +502,8 @@ async function doPollPark(parkId) {
     const baseline = isBaseline(state.lastPoll, now);
     if (baseline && state.lastPoll) {
       console.log(`[poller] ${getPark(parkId)?.name || parkId}: last snapshot is ${Math.round((now - state.lastPoll) / 60_000)} min old, starting afresh`);
-      forgetHeld(parkId);
-    } else if (!restored.has(parkId)) restoreGate(parkId, state.gate);
+      forgetPending(parkId);
+    } else if (!restored.has(parkId)) restoreGate(parkId, upgradeGate(parkId, state.gate));
     restored.add(parkId);
     const { rides, events } = applyLiveData(baseline ? {} : state.rides, live, now);
     state.rides = rides;
@@ -591,9 +521,9 @@ async function doPollPark(parkId) {
         events.map((e) => `${e.type} ${e.ride.name}`).join(', ')
       );
     }
-    // Every poll, so an alert held by the cooldown goes out once it passes.
+    // Every poll, so a "back up" goes out once it has stuck.
     const news = events.filter((ev) => ev.type !== 'CLOSED' || closingIsNews(state, now));
-    const toSend = gateEvents(parkId, news, rides, now);
+    const { send: toSend } = gateEvents(parkId, news, rides, now, state.incidents || {});
     state.gate = gateSnapshot(parkId);
     await Promise.all([
       toSend.length ? notifyTrips(parkId, toSend) : null,
@@ -604,6 +534,15 @@ async function doPollPark(parkId) {
     state.lastError = err.message;
     console.error(`[poller] poll failed for ${parkId}:`, err.message);
   }
+}
+
+// Gates saved before gate.js keyed rides as "parkId:rideId" and kept a
+// time cooldown; only what phones were last told carries over.
+export function upgradeGate(parkId, snap) {
+  if (!snap || !('lastNotified' in snap)) return snap;
+  const lastSent = {};
+  for (const [k, v] of Object.entries(snap.lastSent || {})) if (k.startsWith(`${parkId}:`)) lastSent[k.slice(parkId.length + 1)] = v;
+  return { lastSent };
 }
 
 // Score the estimates of rides that just reopened, then write down what the
