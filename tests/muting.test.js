@@ -66,3 +66,43 @@ test("today's hours are checked again during the day, and more often near close"
   assert.equal(scheduleIsFresh(st({ fetchedAt: nearClose - 20 * 60_000 }), nearClose), false);
   assert.equal(scheduleIsFresh(st({ fetchedAt: nearClose - 5 * 60_000 }), nearClose), true);
 });
+
+// Forty rides at 3pm with a 10pm close, running or closed as asked.
+const withRides = (schedule, { operating = 0, closed = 0, down = 0 } = {}) => {
+  const rides = {};
+  let i = 0;
+  for (const [status, n] of [['OPERATING', operating], ['CLOSED', closed], ['DOWN', down]]) for (let k = 0; k < n; k++) rides[`r${i++}`] = { name: 'R', status };
+  return { timezone: NY, schedule, rides };
+};
+
+test('past the posted close, rides still running keep alerts on', async () => {
+  const { parkStatus } = await import('../server/parkstatus.js');
+  const late = Date.parse('2026-09-28T02:30:00Z'); // 10:30pm, half an hour past close
+  const running = withRides(today, { operating: 30, closed: 10 });
+  assert.equal(parkStatus(running, late), 'openLate');
+  assert.equal(isTripMuted(trip(), 'a', running, late), false);
+  const emptying = withRides(today, { operating: 5, closed: 35 });
+  assert.equal(parkStatus(emptying, late), 'closed');
+  assert.equal(isTripMuted(trip(), 'a', emptying, late), true);
+});
+
+test('within its hours, a park whose rides have nearly all closed is closed', async () => {
+  const { parkStatus } = await import('../server/parkstatus.js');
+  const day = { ...today, openingTime: '2026-09-27T09:00:00-04:00' };
+  const shut = withRides(day, { operating: 1, closed: 39 });
+  assert.equal(parkStatus(shut, now), 'closedEarly');
+  assert.equal(isTripMuted(trip(), 'a', shut, now), true);
+  assert.equal(closingIsNews(shut, now), false, 'every ride closing at once is not forty pushes');
+  // A storm hold is not a closing: down rides are still in service.
+  const storm = withRides(day, { operating: 2, down: 20, closed: 18 });
+  assert.equal(parkStatus(storm, now), 'open');
+  assert.equal(isTripMuted(trip(), 'a', storm, now), false);
+});
+
+test('while hours and rides disagree, the hours are read again every few minutes', async () => {
+  const { scheduleIsFresh, SCHEDULE_TTL_DISAGREE_MS } = await import('../server/poller.js');
+  const late = Date.parse('2026-09-28T02:30:00Z');
+  const st = (fetchedAgo) => withRides({ ...today, fetchedAt: late - fetchedAgo }, { operating: 30, closed: 10 });
+  assert.equal(scheduleIsFresh(st(SCHEDULE_TTL_DISAGREE_MS - 1000), late), true);
+  assert.equal(scheduleIsFresh(st(SCHEDULE_TTL_DISAGREE_MS + 1000), late), false);
+});

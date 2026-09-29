@@ -18,6 +18,7 @@ import {
   incidentDownMessage, incidentGrewMessage, incidentUpMessage, goneMessage, LONG_OUTAGE_MS,
 } from './messages.js';
 import { localDate } from './time.js';
+import { currentSchedule, isParkClosed, hoursDisagree } from './parkstatus.js';
 
 // POLL_MS exists for the stress lab (npm run lab); real use keeps 60s.
 const POLL_INTERVAL_MS = Number(process.env.POLL_MS) || 60_000;
@@ -159,21 +160,14 @@ export function rememberHolds(rides, { stormAt = null } = {}) {
   for (const r of down) if (r.liveKind === 'hold') r.holdSize = Math.max(r.holdSize || 0, size[r.incident ?? 'hold']);
 }
 
-// Hours count only on the park day they describe. If today's schedule could
-// not be fetched, yesterday's is still in state, and its closing time would
-// mute every alert all day; unknown hours mean no auto-mute instead.
-export function currentSchedule(state, now = Date.now()) {
-  const s = state?.schedule;
-  if (!s?.date) return null;
-  return s.date === localDate(now, state.timezone || s.timezone || 'America/New_York') ? s : null;
-}
-
 // A down ride switching to CLOSED is news in the middle of the day: it has
 // probably given up for the day. Before the park opens, or around closing
 // time, it is just the park's hours, and says nothing. Unknown hours count
 // as the middle of the day, as with muting.
 const CLOSING_WINDOW_MS = 30 * 60_000;
 export function closingIsNews(state, now = Date.now()) {
+  // Every ride closing at once is the park closing, whatever its hours say.
+  if (isParkClosed(state, now)) return false;
   const s = currentSchedule(state, now);
   const at = (iso) => (iso ? Date.parse(iso) : null);
   const open = at(s?.openingTime);
@@ -185,11 +179,8 @@ export function closingIsNews(state, now = Date.now()) {
   return true;
 }
 
-function isPastClosing(state, now = Date.now()) {
-  const s = currentSchedule(state, now);
-  const closing = s?.lastCloseTime ?? s?.closingTime;
-  return closing ? now > new Date(closing).getTime() : false;
-}
+// Past the park's close, as its hours and its rides both have it.
+const isPastClosing = (state, now = Date.now()) => isParkClosed(state, now);
 
 // Whether the trip has alerts on for this ride at all (its switch), pause aside.
 export const followsRide = (trip, rideId) => !trip.rideMutes?.[rideId] && (trip.watched == null || trip.watched.includes(rideId));
@@ -201,6 +192,8 @@ export function isTripMuted(trip, rideId, state, now = Date.now()) {
   if (isPastClosing(state, now)) return true; // auto-mute after park close
   return false;
 }
+
+export { currentSchedule } from './parkstatus.js';
 
 // Which transitions phones hear about, and when, lives in gate.js: "down" at
 // once, "back up" once it has stuck, and nothing that repeats what phones
@@ -483,11 +476,15 @@ export async function simulateTransition(trip, type) {
 // park is still open.
 export const SCHEDULE_TTL_MS = 60 * 60_000;
 export const SCHEDULE_TTL_NEAR_CLOSE_MS = 15 * 60_000;
+// While the rides disagree with the hours (a park closing early, or running
+// past its posted close), they are read again every few minutes.
+export const SCHEDULE_TTL_DISAGREE_MS = 5 * 60_000;
 export function scheduleIsFresh(state, now = Date.now()) {
   const s = state?.schedule;
   const today = localDate(now, state?.timezone || 'America/New_York');
   // Schedules saved before lastCloseTime existed are refetched once.
   if (s?.date !== today || !('lastCloseTime' in s) || !s.fetchedAt) return false;
+  if (hoursDisagree(state, now)) return now - s.fetchedAt < SCHEDULE_TTL_DISAGREE_MS;
   const close = Date.parse(s.lastCloseTime || s.closingTime || '');
   const nearClose = Number.isFinite(close) && now >= close - 60 * 60_000 && now <= close + 30 * 60_000;
   return now - s.fetchedAt < (nearClose ? SCHEDULE_TTL_NEAR_CLOSE_MS : SCHEDULE_TTL_MS);

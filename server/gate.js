@@ -58,7 +58,9 @@ export function gateEvents(parkId, events, rides, now = Date.now(), incidents = 
   for (const [id, p] of m.pendingUp) {
     const ride = rides[id];
     if (ride?.status !== 'OPERATING') {
-      if (!ride) m.pendingUp.delete(id); // left the feed; applyLiveData handles that
+      // Closed before it stuck (the park closing on it, say): no "back up"
+      // hours later when it next opens. Left the feed: applyLiveData decides.
+      if (!ride || ride.status !== 'DOWN') m.pendingUp.delete(id);
       continue;
     }
     if (now - p.seenAt < UP_CONFIRM_MS) continue;

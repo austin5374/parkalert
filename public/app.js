@@ -935,21 +935,31 @@ function alertState() {
   const m = dash.trip.mute;
   if (m && (m.until === null || m.until > Date.now())) return { kind: 'paused', until: m.until, scope: 'trip' };
   if (phoneMuted()) return { kind: 'paused', until: phone.mute.until, scope: 'phone' };
-  // The same rule the server mutes by: the day's last close, events included.
-  const close = dash.park.lastCloseTime || dash.park.lateEvent?.closingTime || dash.park.closingTime;
-  if (close && Date.now() > Date.parse(close)) return { kind: 'closed' };
+  // The same rule the server mutes by: its hours and its rides together
+  // (server/parkstatus.js). Older servers only sent the hours.
+  if (parkClosed()) return { kind: 'closed' };
   if (!alertsReady()) return { kind: 'setup' };
   // Alerts on, about nothing: say so instead of a reassuring bell.
   if (!dash.rides.some((r) => isFollowing(r.id))) return { kind: 'none' };
   return { kind: 'on' };
 }
 
+// Closed for alerts: past its hours with the rides agreeing, or closed early.
+function parkClosed() {
+  const st = dash.park.status;
+  if (st) return st === 'closed' || st === 'closedEarly';
+  const close = dash.park.lastCloseTime || dash.park.lateEvent?.closingTime || dash.park.closingTime;
+  return !!close && Date.now() > Date.parse(close);
+}
+
 function hoursText() {
-  const { openingTime: open, closingTime: close, lateEvent, lastCloseTime } = dash.park;
+  const { openingTime: open, closingTime: close, lateEvent, lastCloseTime, status } = dash.park;
   const now = Date.now();
   const lastClose = lastCloseTime || lateEvent?.closingTime || close;
+  if (status === 'closedEarly') return 'Most rides have closed';
+  if (status === 'openLate') return 'Open past its posted hours';
   if (open && now < Date.parse(open)) return `Opens ${fmtTime(Date.parse(open))}`;
-  if (lastClose && now > Date.parse(lastClose)) return 'Closed for the day';
+  if (parkClosed() || (!status && lastClose && now > Date.parse(lastClose))) return 'Closed for the day';
   if (close && now < Date.parse(close)) {
     return `Open until ${fmtTime(Date.parse(close))}${lateEvent ? `, event until ${fmtTime(Date.parse(lateEvent.closingTime))}` : ''}`;
   }
@@ -1201,11 +1211,17 @@ function downHtml() {
     // and old or offline data each say what they are.
     const open = Date.parse(dash.park.openingTime || '');
     const stale = offline || Date.now() - dash.lastPoll > STALE_MS;
+    // What the rides are doing, not just that none is down: every ride
+    // closed early must never read as "Everything's running".
+    const c = dash.park.counts || rideCountsOf(dash.rides);
+    const running = c.total ? c.operating / c.total : 1;
     const [glyph, cls, title, text] =
-      alertState().kind === 'closed' ? ['moon', 'closed', 'Park closed', 'Closed for the day. Alerts start again when it opens.']
-        : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride with alerts on is late to open.`]
-          : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, 'This catches up as soon as ParkAlert can be reached again.']
-            : ['check-circle', '', "Everything's running", "You'll get an alert when a ride with alerts on goes down."];
+      dash.park.status === 'closedEarly' ? ['moon', 'closed', 'Most rides are closed', `Only ${c.operating} of ${c.total} are running, so the park seems to have closed early. Alerts are off until rides reopen.`]
+        : alertState().kind === 'closed' ? ['moon', 'closed', 'Park closed', 'Closed for the day. Alerts start again when it opens.']
+          : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride with alerts on is late to open.`]
+            : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, staleText()]
+              : running >= 0.6 ? ['check-circle', '', "Everything's running", "You'll get an alert when a ride with alerts on goes down."]
+                : ['check-circle', '', 'Nothing is down', `${c.operating} of ${c.total} rides are running; the rest are closed. You'll get an alert when a ride with alerts on goes down.`];
     parts.push(`
       <div class="empty ${cls}" data-key="empty">
         ${icon(glyph)}
@@ -1244,6 +1260,26 @@ function downHtml() {
   }
   if (!alertsReady()) parts.push(setupRowHtml());
   return parts.join('');
+}
+
+// Rides now, leaving out any missing from the feed (as server/parkstatus.js counts).
+function rideCountsOf(rides) {
+  const c = { operating: 0, down: 0, closed: 0, total: 0 };
+  for (const r of rides) {
+    if (r.missed) continue;
+    c.total++;
+    if (r.status === 'OPERATING') c.operating++;
+    else if (r.status === 'DOWN') c.down++;
+    else c.closed++;
+  }
+  return c;
+}
+
+// Why the data is old, when it is: our connection, or the park's ride feed.
+function staleText() {
+  if (offline && failure === 'offline') return 'This catches up as soon as your phone is back online.';
+  if (offline) return 'This catches up as soon as ParkAlert can be reached again.';
+  return "The park's ride feed isn't answering, so alerts are paused until it's back.";
 }
 
 // Rides that came back, or gave up and closed, recently: so an alert opened

@@ -13,6 +13,7 @@ import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
 import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, appLink } from './poller.js';
 import { PORT, NTFY_BASE, HEALTH_TOKEN } from './config.js';
+import { parkStatus, rideCounts } from './parkstatus.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
 import { deliver, MAX_DEVICES, deviceMuted } from './deliver.js';
@@ -137,6 +138,10 @@ async function dashboard(trip) {
       closingTime: schedule?.closingTime || null,
       lateEvent: schedule?.lateEvent || null,
       lastCloseTime: schedule?.lastCloseTime || null, // when alerts stop for the day
+      // Open or not, by its hours and its rides together (see parkstatus.js),
+      // so the app says what the server mutes by.
+      status: parkStatus(state),
+      counts: rideCounts(state.rides),
     },
     ntfyBase: NTFY_BASE,
     version: APP_VERSION,

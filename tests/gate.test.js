@@ -99,3 +99,10 @@ test("an incident's rides coming back are gathered, then told together", async (
   r = gateEvents('G11', [], all(['OPERATING', 'OPERATING', 'OPERATING']), 11 * MIN, inc);
   assert.deepEqual(r.updates.map((u) => [u.ups.map((e) => e.ride.id), u.final]), [[['c'], true]]);
 });
+
+test('a ride that reopens and then closes before it sticks is never "back up" later', () => {
+  gateEvents('G12', [down('a')], state('a', 'DOWN'), 0);
+  gateEvents('G12', [up('a')], state('a', 'OPERATING'), MIN);
+  gateEvents('G12', [], state('a', 'CLOSED'), MIN + 20_000); // the park closes on it
+  assert.deepEqual(types(gateEvents('G12', [], state('a', 'OPERATING'), 3 * 3600_000)), [], 'not when it opens hours later');
+});
