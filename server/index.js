@@ -396,6 +396,14 @@ async function handleApi(req, res, url) {
       saveTrips();
       return json(res, 200, { device: { id: device.id, mute: device.mute } });
     }
+    // The push service replaced this phone's subscription (the service
+    // worker's pushsubscriptionchange): same phone, same pause, new address.
+    if (req.method === 'PUT' && parts.length === 5) {
+      const sub = parseSubscription(await readBody(req), isPushEndpoint);
+      Object.assign(device, { endpoint: sub.endpoint, keys: sub.keys, seenAt: Date.now() });
+      saveTrips();
+      return json(res, 200, { device: { id: device.id, mute: device.mute } });
+    }
     if (req.method === 'DELETE' && parts.length === 5) {
       trip.devices = trip.devices.filter((d) => d !== device);
       saveTrips();

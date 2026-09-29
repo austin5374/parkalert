@@ -237,6 +237,7 @@ Everything the app uses, all JSON. A trip code is the only credential.
 | `GET /api/push-key` | The server's VAPID public key, for subscribing. |
 | `POST /api/trips/:code/devices` `{subscription}` | Register this phone for the app's own notifications (idempotent by endpoint). Only known push services are accepted. |
 | `PATCH /api/trips/:code/devices/:id` `{mute}` | Pause this phone alone (`null` or `{until}`). `GET` reads it; `DELETE` takes the phone off the trip. |
+| `PUT /api/trips/:code/devices/:id` `{subscription}` | The push service replaced this phone's subscription: the service worker sends the new one (on `pushsubscriptionchange`, with the app closed), and the phone keeps its place and its pause. |
 | `POST /api/trips/:code/devices/:id/test` | A test notification to this phone only. |
 | `POST /api/trips/:code/simulate` `{type: "up" \| "down"}` | See above. |
 

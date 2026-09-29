@@ -30,7 +30,8 @@ self.addEventListener('message', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('parkalert-') && k !== CACHE).map((k) => caches.delete(k))))
+      // Old versions' files go; the phone left for pushsubscriptionchange stays.
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('parkalert-') && k !== CACHE && k !== 'parkalert-phone').map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -94,4 +95,29 @@ self.addEventListener('notificationclick', (e) => {
     }
     await self.clients.openWindow(target);
   })());
+});
+
+// The push service can replace a subscription while the app is closed.
+// Left alone, the old address stops working, the server drops the phone
+// and it hears nothing until the app is next opened, while it still says
+// "Alerts on". So the worker subscribes again and tells the server itself,
+// using the trip and phone the page left it (it can't read the page's
+// storage).
+self.addEventListener('pushsubscriptionchange', (e) => {
+  e.waitUntil((async () => {
+    const saved = await (await caches.open('parkalert-phone')).match('/phone');
+    if (!saved) return;
+    const { trip, id } = await saved.json();
+    let sub = e.newSubscription;
+    if (!sub) {
+      const { publicKey } = await (await fetch('/api/push-key')).json();
+      const key = Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    await fetch(`/api/trips/${encodeURIComponent(trip)}/devices/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON() }),
+    });
+  })().catch(() => {}));
 });

@@ -914,6 +914,7 @@ async function subscribePhone({ ask = true } = {}) {
     const { device } = await api(`/trips/${code}/devices`, { method: 'POST', body: { subscription: sub.toJSON() } });
     if (code !== tripCode) return 'failed';
     localStorage.setItem(deviceKey(code), device.id);
+    tellWorkerPhone({ trip: code, id: device.id });
     phone.mute = device.mute;
     return 'on';
   } catch {
@@ -933,8 +934,18 @@ async function syncPhone() {
   if (dash) renderAll();
 }
 
+// The service worker re-registers this phone if the push service replaces
+// its subscription while the app is closed; it can't read localStorage, so
+// the trip and phone are left for it in its own storage.
+function tellWorkerPhone(phoneOnTrip) {
+  caches.open('parkalert-phone')
+    .then((c) => (phoneOnTrip ? c.put('/phone', new Response(JSON.stringify(phoneOnTrip))) : c.delete('/phone')))
+    .catch(() => {});
+}
+
 // Leaving a trip takes this phone off its alerts.
 async function forgetPhone(code) {
+  tellWorkerPhone(null);
   let id = null;
   try { id = localStorage.getItem(deviceKey(code)); localStorage.removeItem(deviceKey(code)); } catch {}
   phone.mute = null;

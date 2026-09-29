@@ -393,3 +393,25 @@ test("a trip's own manifest opens the installed app on that trip", async () => {
   assert.equal(own.id, plain.id, 'still the same app');
   assert.equal((await (await fetch(`${base}/manifest.webmanifest?trip=<script>`)).json()).start_url, '/', 'only a code');
 });
+
+test('a phone whose push subscription was replaced keeps its place and its pause', async () => {
+  const trip = await newTrip();
+  const { generateKeyPairSync, randomBytes } = await import('node:crypto');
+  const sub = (tag) => {
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    const raw = publicKey.export({ format: 'jwk' });
+    const p256dh = Buffer.concat([Buffer.from([4]), Buffer.from(raw.x, 'base64url'), Buffer.from(raw.y, 'base64url')]).toString('base64url');
+    return { subscription: { endpoint: `https://fcm.googleapis.com/fcm/send/${tag}`, keys: { p256dh, auth: randomBytes(16).toString('base64url') } } };
+  };
+  const made = await call('POST', `/api/trips/${trip.code}/devices`, sub('old'));
+  assert.equal(made.status, 201);
+  const id = made.body.device.id;
+  await call('PATCH', `/api/trips/${trip.code}/devices/${id}`, { mute: { until: null } });
+  const put = await call('PUT', `/api/trips/${trip.code}/devices/${id}`, sub('new'));
+  assert.equal(put.status, 200);
+  assert.deepEqual(put.body.device, { id, mute: { until: null } });
+  const { trips } = await import('../server/store.js');
+  assert.equal(trips[trip.code].devices.length, 1);
+  assert.match(trips[trip.code].devices[0].endpoint, /\/new$/);
+  assert.equal((await call('PUT', `/api/trips/${trip.code}/devices/nope`, sub('x'))).status, 404);
+});
