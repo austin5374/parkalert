@@ -3098,7 +3098,13 @@ $('#btn-locate').onclick = locate;
 const joinInput = $('#join-code');
 const joinBtn = $('#join-form button');
 const syncJoin = () => { joinBtn.disabled = joinInput.value.trim().length !== 6; };
-joinInput.addEventListener('input', syncJoin);
+// A pasted code with a space, an invite link or the whole invite message:
+// keep just the code.
+joinInput.addEventListener('input', () => {
+  const code = extractTripCode(joinInput.value);
+  if (code && joinInput.value !== code) joinInput.value = code;
+  syncJoin();
+});
 syncJoin();
 // Join feedback sits under the field being typed in, not up at the top of the page.
 const JOIN_HINT = $('#join-note').textContent;

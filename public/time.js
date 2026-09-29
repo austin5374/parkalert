@@ -1,6 +1,6 @@
 /* Park-clock helpers. A classic script like app.js and loaded before it, so
    these are plain globals; nothing here touches the DOM, so tests can run it. */
-/* exported localDay, nextLocalHour, fmtDuration, matchesSearch */
+/* exported localDay, nextLocalHour, fmtDuration, matchesSearch, extractTripCode */
 
 // "<1 min", "47 min", "1 hr 5 min". server/notify.js says it the same way,
 // so a push and the app never describe one outage differently.
@@ -65,4 +65,20 @@ function matchesSearch(name, query) {
   const hay = searchWords(name);
   const joined = hay.join('');
   return words.every((w) => hay.some((h) => h.startsWith(w))) || joined.includes(words.join(''));
+}
+
+// A trip code out of whatever was pasted into the join field: the code alone
+// (with stray spaces), an invite link (?join=CODE), or a whole invite message
+// ("Join my ParkAlert trip at Magic Kingdom. Code MKLABS ..."). Null while
+// nothing in it looks like one yet, so typing is left alone.
+function extractTripCode(text) {
+  const s = String(text || '');
+  const link = s.match(/[?&](?:join|trip)=([A-Za-z0-9]{6})(?![A-Za-z0-9])/);
+  if (link) return link[1].toUpperCase();
+  const said = s.match(/\bcode\s*:?\s*([A-Za-z0-9]{6})(?![A-Za-z0-9])/i);
+  if (said) return said[1].toUpperCase();
+  const bare = s.replace(/\s+/g, '');
+  if (/^[A-Za-z0-9]{6}$/.test(bare)) return bare.toUpperCase();
+  const runs = s.match(/\b[A-Z0-9]{6}\b/g);
+  return runs ? runs[runs.length - 1] : null;
 }

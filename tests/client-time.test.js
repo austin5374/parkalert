@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const ctx = vm.createContext({ Intl, Date, Object, Number, String, Math });
 vm.runInContext(fs.readFileSync(new URL('../public/time.js', import.meta.url), 'utf8'), ctx);
-const { nextLocalHour, localDay } = ctx;
+const { nextLocalHour, localDay, extractTripCode } = ctx;
 const NY = 'America/New_York';
 const iso = (t) => new Date(t).toISOString();
 
@@ -60,4 +60,15 @@ test('ride search ignores accents, apostrophes, "the" and word order', () => {
   assert.ok(!matchesSearch('Space Mountain', 'thunder'));
   assert.ok(!matchesSearch('Haunted Mansion', 'haunted pirates'));
   assert.ok(matchesSearch('Anything', '   '));
+});
+
+test('the join field finds the code in whatever was pasted', () => {
+  assert.equal(extractTripCode(' MKLABS'), 'MKLABS');
+  assert.equal(extractTripCode('mklabs '), 'MKLABS');
+  assert.equal(extractTripCode('Join my ParkAlert trip at Magic Kingdom. Code MS3ETN\nhttps://parkalert.app/?join=MS3ETN'), 'MS3ETN');
+  assert.equal(extractTripCode('https://parkalert.app/?join=tmmdt5'), 'TMMDT5');
+  assert.equal(extractTripCode('Code: MS3ETN'), 'MS3ETN');
+  // Typing is left alone until a code is there.
+  assert.equal(extractTripCode('MKL'), null);
+  assert.equal(extractTripCode('Join m'), null);
 });
