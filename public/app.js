@@ -536,7 +536,8 @@ const pages = (() => {
   }
 
   function syncInert() {
-    $('#app').inert = stack.length > 0;
+    // Everything under the page is out of reach, except the tab bar.
+    for (const sel of ['#nav', '#nav-bar', '#app main']) $(sel).inert = stack.length > 0;
     stack.forEach((p, i) => { p.el.inert = i < stack.length - 1; });
     host.classList.toggle('hidden', !stack.length);
   }
@@ -1070,6 +1071,7 @@ let lastFit = null;
 let lastBadge = null;
 function renderHeader() {
   $('#park-name').textContent = parkLabel(dash.park.name);
+  $('#nav-bar-title').textContent = parkLabel(dash.park.name);
   document.title = `${parkLabel(dash.park.name)} · ParkAlert`;
 
   const meta = $('#park-meta');
@@ -1286,9 +1288,44 @@ const setupRowHtml = () => `
     ${icon('chevron', 'chevron')}
   </button></div>`;
 
+// Down now changes under a reader: a ride breaks, a hold forms. Someone who
+// has scrolled keeps their place (what they were reading stays put, and the
+// new card arrives above, out of the way); at the top of the list a new card
+// grows in, instead of shoving everything below it down at once.
 function renderDown() {
-  morph($('#down-list'), downHtml());
+  const list = $('#down-list');
+  const anchor = view === 'down' && scrollY > 8 && !pages.top ? readingAnchor() : null;
+  const loading = !!list.querySelector('[data-key=skeleton]');
+  const before = new Set(list.querySelectorAll('.card[data-ride], .cards[data-key], .crowd-group'));
+  morph(list, downHtml());
   renderRecent(new Set(dash.rides.filter((r) => r.status === 'DOWN' && r.downSince).map((r) => r.id)));
+  if (anchor) {
+    const shift = anchor.el.isConnected ? anchor.el.getBoundingClientRect().top - anchor.top : 0;
+    if (Math.abs(shift) > 1) scrollBy(0, shift);
+  } else if (!loading && before.size && !reducedMotion()) {
+    for (const el of list.querySelectorAll('.card[data-ride], .cards[data-key], .crowd-group')) {
+      if (before.has(el)) continue;
+      // A new group of cards grows as one; the cards inside come with it.
+      if (el.matches('.card') && !before.has(el.parentElement)) continue;
+      grow(el);
+    }
+  }
+}
+
+// What the reader is looking at: the first card or row whose bottom is below
+// the header, and where it sits now.
+function readingAnchor() {
+  const top = document.body.classList.contains('compact') ? $('#nav-bar').getBoundingClientRect().bottom : 0;
+  for (const el of document.querySelectorAll('#view-down .card, #view-down .crowd-group, #view-down .row, #view-down .section-label')) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > top && r.height) return { el, top: r.top };
+  }
+  return null;
+}
+
+function grow(el) {
+  const h = el.offsetHeight;
+  el.animate([{ height: '0px', opacity: 0, overflow: 'hidden' }, { height: `${h}px`, opacity: 1, overflow: 'hidden' }], { duration: 240, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
 }
 
 function downHtml() {
@@ -3045,10 +3082,16 @@ function switchView(name, { top = false } = {}) {
 
 /* ---------- Wire up ---------- */
 document.querySelectorAll('.tab').forEach((t) => {
-  // Tapping the tab you're already on scrolls it back to the top, as on iOS.
-  t.onclick = () => (view === t.dataset.view
-    ? window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' })
-    : switchView(t.dataset.view));
+  // Tapping the tab you're already on goes back to its top, as on iOS: out of
+  // any page first, then up the list. Another tab closes pages and switches.
+  t.onclick = () => {
+    if (pages.depth) {
+      pages.clear();
+      if (view === t.dataset.view) return;
+    }
+    if (view === t.dataset.view) window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    else switchView(t.dataset.view);
+  };
 });
 $('#btn-locate').onclick = locate;
 
@@ -3211,8 +3254,10 @@ $('#row-install').onclick = async () => {
 };
 syncInstall();
 
-const nav = $('#nav');
-addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 2), { passive: true });
+// Past the large title, the compact bar shows the park's name.
+const syncCompact = () => document.body.classList.toggle('compact', !onSetup() && $('#park-name').getBoundingClientRect().bottom < $('#nav-bar').offsetHeight);
+addEventListener('scroll', syncCompact, { passive: true });
+$('#nav-bar').onclick = () => window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
 
 // Coming back (to the tab, or online) catches up whichever screen is showing.
 const resume = () => {

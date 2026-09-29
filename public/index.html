@@ -103,6 +103,9 @@
 
   <!-- Main app -->
   <div id="app" class="screen hidden">
+    <!-- Once the large title scrolls away, the park's name in a compact bar,
+         as iOS does. A tap goes back to the top. -->
+    <div class="nav-bar" id="nav-bar" aria-hidden="true"><span id="nav-bar-title"></span></div>
     <header class="nav" id="nav">
       <div class="nav-inner">
         <!-- The heading stays a heading; one transparent button over the whole
