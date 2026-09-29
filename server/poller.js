@@ -311,6 +311,13 @@ export function syncIncidents(parkId, state, rides, now = Date.now()) {
   return incidents;
 }
 
+// What a one-ride push says the ride now is, for an open app to show at once.
+const rideWord = (ev) => ({
+  id: ev.ride.id,
+  status: { DOWN: 'DOWN', UP: 'OPERATING', CLOSED: 'CLOSED' }[ev.type] ?? null,
+  downSince: ev.type === 'DOWN' ? ev.ride.downSince ?? null : null,
+});
+
 // Push events to every active trip at the park (or just `only`), honouring
 // each trip's mutes. A trip nobody has opened in three weeks is a finished
 // vacation: its park is no longer polled for it, and it gets no pushes
@@ -334,7 +341,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
     const mine = events.filter((ev) => follows(ev.ride.id));
     skipped += events.length - mine.length;
     const pushes = [];
-    const single = (ev, msg) => pushes.push({ ...msg, click: appLink(trip, { ride: ev.ride.id }), tag: `ride:${ev.ride.id}` });
+    const single = (ev, msg) => pushes.push({ ...msg, click: appLink(trip, { ride: ev.ride.id }), tag: `ride:${ev.ride.id}`, ride: rideWord(ev) });
     const followedIn = (inc) => (inc?.rides || []).filter(follows);
 
     // Down: a new incident is one push when this trip follows enough of it;

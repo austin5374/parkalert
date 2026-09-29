@@ -11,7 +11,7 @@ export const MAX_DEVICES = 20;
 export const deviceMuted = (device, now = Date.now()) =>
   !!device.mute && (device.mute.until === null || device.mute.until > now);
 
-// push: { title, message, click, priority, tags, quiet }. tag: notifications
+// push: { title, message, click, priority, tags, quiet, ride }. tag: notifications
 // with the same tag replace each other on the phone, so "back up" replaces
 // "is down" instead of stacking. quiet: an update to something already on
 // the lock screen, shown without a sound (ntfy's low priority). device: send
@@ -29,6 +29,8 @@ export async function deliver(trip, push, { tag = null, device = null, ntfyOnly 
     title: push.title, body: push.message, url: push.click || '/', tag,
     ...(push.quiet ? { quiet: true } : {}),
     ...(Number.isInteger(badge) ? { badge } : {}),
+    // The ride's new state, so an open app can show it before it refreshes.
+    ...(push.ride ? { ride: push.ride } : {}),
   };
   const urgency = push.quiet ? 'normal' : push.urgency || ((push.priority || 3) >= 4 ? 'high' : 'normal');
   let gone = false;

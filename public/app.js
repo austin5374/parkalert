@@ -920,15 +920,43 @@ async function setPhoneMute(mute, { undo = true } = {}) {
   }
 }
 
-// A tapped notification with the app already open: go where it points.
+// Word from the service worker. A push arriving while the app is open:
+// what it shows should match what just arrived, so the ride the push is
+// about changes at once and everything else follows with a refresh. A tapped
+// notification with the app already open (which on iPhone changes no
+// visibility, so nothing else would refresh): go where it points.
 navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type === 'refresh') {
+    patchRide(e.data.ride);
+    if (tripCode && dash) refresh();
+    return;
+  }
   if (e.data?.type !== 'open') return;
   const url = new URL(e.data.url, location.origin);
   const code = url.searchParams.get('trip')?.toUpperCase();
   pendingOpen = { ride: url.searchParams.get('ride'), view: url.searchParams.get('view') };
-  if (code && code !== tripCode) setTrip(code);
-  else openPending();
+  if (code && code !== tripCode) {
+    setTrip(code);
+    return;
+  }
+  patchRide(e.data.ride);
+  refresh();
+  openPending();
 });
+
+// A push's own word on its ride ({ id, status, downSince }), applied to the
+// last dashboard until the next one lands.
+function patchRide(p) {
+  const r = p?.id && dash?.rides.find((x) => x.id === p.id);
+  if (!r || !p.status || r.status === p.status) return;
+  r.status = p.status;
+  if (p.status === 'DOWN') {
+    r.downSince = p.downSince ?? Date.now();
+    r.waitTime = null;
+    delete r.outlook;
+  } else if (p.status === 'OPERATING') r.downSince = null;
+  renderAll();
+}
 
 /* ---------- Header ---------- */
 function alertState() {
@@ -2039,7 +2067,9 @@ function estimateExplainer(o) {
 const liveRide = (id) => dash?.rides.find((r) => r.id === id) || null;
 
 // Opens at once with what is already known; the history fills in after.
-function openRide(rideId) {
+//   fresh: opened from an alert, so nothing is shown from the last dashboard
+//   (which may predate the alert) until this ride's own detail is in.
+function openRide(rideId, { fresh = false } = {}) {
   const known = liveRide(rideId);
   if (!known) return;
   const page = {
@@ -2050,7 +2080,10 @@ function openRide(rideId) {
     detail: null,
     failed: false,
     title: () => liveRide(rideId)?.name || known.name,
-    render() { return rideHtml(liveRide(rideId) || this.detail?.ride || known, this.detail, this.failed); },
+    render() {
+      if (fresh && !this.detail && !this.failed) return skeleton('ride');
+      return rideHtml(freshestRide(liveRide(rideId) || known, this.detail), this.detail, this.failed);
+    },
     charts() { return this.detail ? rideCharts(this.detail) : null; },
     async load() {
       try {
@@ -2063,6 +2096,17 @@ function openRide(rideId) {
     },
   };
   pages.push(page);
+}
+
+// The ride as of whichever is newer: the dashboard, or the page's own
+// detail (fetched as the page opened, so usually newer). The dashboard's
+// extras (its usual wait, the outlook) stay where the detail has none.
+function freshestRide(live, detail) {
+  if (!detail?.ride || !(detail.now > (dash?.now ?? 0))) return live;
+  const r = { ...live, ...detail.ride };
+  if (r.status !== 'DOWN') delete r.outlook;
+  else if (detail.outlook) r.outlook = detail.outlook;
+  return r;
 }
 
 // Wait alert: "tell me when the wait is at most N". Only limits under the
@@ -2899,7 +2943,9 @@ function openPending() {
   pendingOpen = null;
   switchView('down');
   if (ride) {
-    if (dash.rides.some((r) => r.id === ride)) openRide(ride);
+    // What the alert said beats a dashboard that may be half a minute old:
+    // the page shows its skeleton until its own fresh detail arrives.
+    if (dash.rides.some((r) => r.id === ride)) openRide(ride, { fresh: true });
     else toast("That ride isn't in today's ride list any more");
   } else if (view === 'hold' && dash.rides.some((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold')) {
     openHold();

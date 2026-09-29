@@ -51,8 +51,9 @@ self.addEventListener('fetch', (e) => {
 });
 
 // The app's own notifications. The server sends { title, body, url, tag,
-// quiet }; a newer notification with the same tag (the same ride, or the
-// same storm) replaces the older. A quiet one replaces it without a sound.
+// quiet, badge, ride }; a newer notification with the same tag (the same
+// ride, or the same storm) replaces the older. A quiet one replaces it
+// without a sound. ride: { id, status, downSince } for a one-ride push.
 self.addEventListener('push', (e) => {
   let d;
   try { d = e.data.json(); } catch { d = { title: 'ParkAlert', body: e.data?.text() || '' }; }
@@ -60,8 +61,9 @@ self.addEventListener('push', (e) => {
   if (Number.isInteger(d.badge)) {
     try { (d.badge ? self.navigator.setAppBadge?.(d.badge) : self.navigator.clearAppBadge?.())?.catch?.(() => {}); } catch {}
   }
-  // An open app refreshes at once, so what it shows matches what just arrived.
-  e.waitUntil(self.clients.matchAll({ type: 'window' }).then((ws) => ws.forEach((w) => w.postMessage({ type: 'refresh' }))).catch(() => {}));
+  // An open app refreshes at once, so what it shows matches what just
+  // arrived, and patches the ride the push is about straight away.
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then((ws) => ws.forEach((w) => w.postMessage({ type: 'refresh', ride: d.ride || null }))).catch(() => {}));
   e.waitUntil(self.registration.showNotification(d.title || 'ParkAlert', {
     body: d.body || '',
     tag: d.tag || undefined,
@@ -69,7 +71,7 @@ self.addEventListener('push', (e) => {
     silent: !!d.quiet,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
-    data: { url: d.url || '/' },
+    data: { url: d.url || '/', ride: d.ride || null },
   }));
 });
 
@@ -84,7 +86,7 @@ self.addEventListener('notificationclick', (e) => {
     const open = windows.find((w) => new URL(w.url).origin === self.location.origin);
     if (open) {
       await open.focus();
-      open.postMessage({ type: 'open', url: target });
+      open.postMessage({ type: 'open', url: target, ride: e.notification.data?.ride || null });
       return;
     }
     await self.clients.openWindow(target);
