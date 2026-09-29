@@ -80,6 +80,10 @@ public/
 tests/            node:test suites; fakes.js stands in for ThemeParks.wiki, ntfy and both weather feeds
 ```
 
+### The stress lab
+
+`npm run lab` runs the real server against a fake park you control, with nothing leaving your machine. The control panel at `http://localhost:4100` has a button per scenario: a breakdown, a wave of three, a storm hold and its clearing, a flapping ride, rides late to open, a ride that closes for the day, a crowd surge, the park closing, the ride feed failing or crawling, a ride vanishing from the feed, and everything at once. It lists every push the server sends. The app runs at `http://localhost:3000/?trip=MKLABS` (also `DLLABS` and `EPLABS`), polling every 10 seconds, over 30 days of seeded outage history and wait profiles. One Magic Kingdom ride has been down for five hours, and a few rides have hostile names (markup, a very long name, emoji, quotes). `npm run lab -- --auto` fires a random scenario every 90 seconds. The data lives in `.lab-data/` and is reseeded on each run unless you add `--keep`.
+
 ### Working without the real API
 
 `THEMEPARKS_BASE` points the server at any ThemeParks.wiki-compatible API: a local fake, or a caching mirror. `NTFY_BASE` does the same for pushes, and `WEATHER_BASE` and `WEATHER_ARCHIVE` for the two weather feeds. `tests/fakes.js` shows the shape each needs.

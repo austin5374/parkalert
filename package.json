@@ -10,7 +10,8 @@
     "test": "node --test tests/*.test.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test",
-    "backtest": "node scripts/backtest.js"
+    "backtest": "node scripts/backtest.js",
+    "lab": "node scripts/lab.js"
   },
   "engines": {
     "node": ">=22"
