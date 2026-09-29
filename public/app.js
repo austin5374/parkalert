@@ -1867,7 +1867,7 @@ function alertSetupContent() {
     const more = el('<details class="more"><summary>Or use the ntfy app instead</summary></details>');
     more.appendChild(ntfy);
     content.appendChild(more);
-    content.appendChild(el('<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Set up later</button></div>'));
+    content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
   } else if (needsInstallForPush()) {
     head.appendChild(el('<p>On iPhone, ParkAlert can notify you itself once it is on your Home Screen. Add it there, open it from its icon, and turn notifications on from this screen.</p>'));
     content.appendChild(el(`<div class="btn-stack">
@@ -1876,7 +1876,7 @@ function alertSetupContent() {
     const more = el('<details class="more"><summary>Or use the ntfy app instead</summary></details>');
     more.appendChild(ntfy);
     content.appendChild(more);
-    content.appendChild(el('<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Set up later</button></div>'));
+    content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
   } else {
     head.appendChild(el('<p>Alerts arrive through ntfy, a free notification app. No account needed, and it takes about a minute.</p>'));
     content.appendChild(ntfy);
@@ -2929,9 +2929,18 @@ async function showApp({ firstRun = false } = {}) {
   renderAll();
   await refresh();
   scheduleRefresh();
-  syncPhone();
+  // A phone that already allows notifications joins the trip's alerts on
+  // its own; that has to finish before deciding whether to ask.
+  const joining = syncPhone();
   if (pendingOpen) openPending();
-  else if (firstRun && dash && !alertsReady()) openAlertSetup();
+  else if (firstRun && dash) {
+    await joining;
+    if (!alertsReady()) openAlertSetup();
+    else if (phone.id) {
+      api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' }).catch(() => {});
+      toast('Alerts are on for this phone. A test is on its way.');
+    }
+  }
 }
 
 // What a tapped push asked for: its ride's sheet, the hold, or the Down
