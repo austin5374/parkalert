@@ -236,6 +236,22 @@ const haptic = (() => {
   };
 })();
 
+// Moving focus for screen readers when a page or sheet opens, without the
+// keyboard focus ring: iOS drew a heavy blue box round every page's back
+// button, which read as a glitch. A keyboard user (last input a key) still
+// gets the ring.
+let keyboardUser = false;
+addEventListener('keydown', (e) => { if (e.key === 'Tab') keyboardUser = true; }, true);
+addEventListener('pointerdown', () => { keyboardUser = false; }, true);
+function quietFocus(node) {
+  if (!node) return;
+  if (!keyboardUser) {
+    node.classList.add('quiet-focus');
+    node.addEventListener('blur', () => node.classList.remove('quiet-focus'), { once: true });
+  }
+  node.focus({ preventScroll: true });
+}
+
 /* ---------- In-place updates ---------- */
 // Refreshes patch what is on screen instead of replacing it. Replacing the
 // nodes every 15 seconds was the root of most of the jank: a tap landing
@@ -456,7 +472,7 @@ const sheet = (() => {
     isOpen = true;
     entry = addBack(() => slideAway());
     animateTo(0);
-    panel.focus({ preventScroll: true });
+    quietFocus(panel);
   }
   function close(velocity = 0) {
     if (!isOpen) return;
@@ -614,7 +630,7 @@ const pages = (() => {
     paint(p, width());
     p.entry = addBack(() => slideOut(p), p.url);
     animate(p, 0);
-    p.el.querySelector('.page-back').focus({ preventScroll: true });
+    quietFocus(p.el.querySelector('.page-back'));
     p.load?.();
     return p;
   }
@@ -1285,7 +1301,9 @@ function fmtHour(h) {
 // Old data is greyed and dated, like the rest of the screen.
 function crowdRowHtml() {
   const c = dash.crowd;
-  if (!c || alertState().kind === 'closed') return '';
+  // Paused, it would only take a whole card to say it can't say anything;
+  // the park page carries the reason.
+  if (!c || c.paused || alertState().kind === 'closed') return '';
   const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
   const [title, detail] = c.paused === 'hold'
     ? ['Crowd level paused', "Waits during a hold and just after it don't show how busy the park is"]
@@ -1312,7 +1330,9 @@ function crowdRowHtml() {
 // as its fill on the bar is.
 function chanceHtml(o, id = '') {
   const c = o?.chance;
-  if (!c) return '';
+  // Nothing likely within the hour: an empty bar and three "<5%" say less
+  // than the verdict above it ("these usually take over an hour").
+  if (!c || c[60] < 0.045) return '';
   const pct = (p) => Math.round(p * 100);
   const say = (p) => (p >= 0.955 ? '>95%' : p < 0.045 ? '<5%' : `${pct(p)}%`);
   const key = (m, label) => `<span><i class="k${m}${c[m] < 0.045 ? ' none' : ''}"></i>${label} ${say(c[m])}</span>`;
@@ -1485,12 +1505,16 @@ function downHtml() {
           ${o.chance ? chanceHtml(o) : timeline(first)}
           ${o.text && o.advice ? `<p class="card-clock">${esc(o.text)}</p>` : ''}
           ${basisLine(o) ? `<p class="card-foot">${esc(basisLine(o))}</p>` : ''}
-          <div class="hold-rides">${holds.map((r) => `
+          <div class="hold-rides">${holds.slice(0, holds.length > 4 ? 3 : 4).map((r) => `
             <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
               <span class="row-label">${esc(r.name)}</span>
               <span class="row-detail">${downFor(r)}</span>
               ${icon('chevron', 'chevron')}
-            </button>`).join('')}</div>
+            </button>`).join('')}${holds.length > 4 ? `
+            <button class="hold-ride hold-all pressable" type="button" data-act="open-hold" data-key="more">
+              <span class="row-label">All ${holds.length} rides in this hold</span>
+              ${icon('chevron', 'chevron')}
+            </button>` : ''}</div>
         </div></div>`);
     }
     if (rest.length) {
@@ -2283,6 +2307,12 @@ function estimateExplainer(o) {
     if (!o.basis) return 'ParkAlert has not seen enough weather closures here to put a range on this one yet.';
     if (o.basis.from === 'rule') return 'Until ParkAlert has seen enough storms here to learn how this ride really goes, this uses the 30-minute rule: most reopen 30 to 45 minutes after the storm passes.';
     const what = o.cause === 'rain' ? 'rain closures' : 'storms';
+    // Still going on: the range is how long it lasts plus the reopening
+    // after. Saying "timed from when it passed" here contradicted the
+    // "still nearby" right above it.
+    if (o.weather !== 'passed') {
+      return `The ${o.cause === 'rain' ? 'rain' : 'storm'} is still going on, so this is how long ${what} here usually last plus the time rides take to reopen afterwards, from ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. It tightens once the ${o.cause === 'rain' ? 'rain stops' : 'storm passes'}.`;
+    }
     return `Timed from when the ${o.cause === 'rain' ? 'rain stopped' : 'storm passed'}, not from when the ride went down: based on ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. The middle half of them reopened within the range above.`;
   }
   if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past outage like it, so there is no honest range to give.' : '';
@@ -2975,7 +3005,7 @@ function crowdChart(box, { today, typical, hour }) {
   const readout = el('<p class="chart-readout" aria-live="polite"></p>');
   const say = (h, user) => {
     const t = today[h], u = typical[h];
-    readout.textContent = `${user ? fmtHour(h) : `Now (${fmtHour(h)})`} · ${t != null ? `today ${t} min` : 'no reading today'}${u != null ? `, usually ${u}` : ''}`;
+    readout.textContent = `${user ? fmtHour(h) : `Now (${fmtHour(h)})`} · ${t != null ? `today ${t} min` : 'no reading yet today'}${u != null ? `, usually ${u} min` : ''}`;
   };
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img',
     'aria-label': `Average big-ride wait by hour, today against a usual day` });
