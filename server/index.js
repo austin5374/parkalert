@@ -8,6 +8,7 @@ import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, waitTrend, outagesToday } from './insights.js';
 import { parkCrowd, crowdToday, rideBestTimes, usualWaits, isOtherAttraction, defaultFollows } from './crowdstate.js';
+import { rideFacts } from './lands.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
@@ -190,6 +191,8 @@ async function dashboard(trip) {
     rides: Object.entries(state.rides || {}).map(([id, r]) => ({
       id,
       ...r,
+      // Its land, a short name for lists, and whether it is a coaster.
+      ...rideFacts(park?.name, r.name),
       // Its usual posted wait at this hour, where the archive knows one.
       usual: usual[id] ?? null,
       // Never posts a wait: listed apart, and never alerted about.
@@ -358,11 +361,13 @@ async function handleApi(req, res, url) {
     pruneWaitAlerts(trip, today);
     const alerts = { ...trip.waitAlerts };
     if (req.method === 'PUT') {
-      const { max } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      const { max, device } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      // "Just me": only a phone on this trip can keep an alert to itself.
+      if (device && !(trip.devices || []).some((d) => d.id === device)) return json(res, 400, { error: 'unknown device' });
       // Only a ride the park has: an alert for anything else could never fire.
       const known = parkState[trip.parkId]?.rides;
       if (!known || !Object.hasOwn(known, rideId)) return json(res, 404, { error: 'ride not found' });
-      alerts[rideId] = { max, day: today, setAt: Date.now() };
+      alerts[rideId] = { max, day: today, setAt: Date.now(), ...(device ? { device } : {}) };
       if (Object.keys(alerts).length > MAX_WAIT_ALERTS) return json(res, 400, { error: 'too many wait alerts' });
     } else delete alerts[rideId];
     trip.waitAlerts = alerts;

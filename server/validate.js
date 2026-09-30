@@ -33,7 +33,9 @@ export function requireRideId(id) {
 export function parseWaitAlert(body, min, max) {
   requireObject(body);
   if (!Number.isInteger(body.max) || body.max < min || body.max > max) bad(`max must be whole minutes from ${min} to ${max}`);
-  return { max: body.max };
+  // device: keep the alert to one phone ("Just me"); absent, it goes to the trip.
+  if (body.device != null && (typeof body.device !== 'string' || !body.device || body.device.length > 200)) bad('device must be a device id');
+  return { max: body.max, device: body.device ?? null };
 }
 
 // PATCH /api/trips/:code. Returns only the recognised fields, each checked,

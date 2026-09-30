@@ -43,8 +43,8 @@ export function dueWaitAlerts(trip, rides, today) {
 export function waitAlertMessage(ride, alert, parkName) {
   return {
     title: `${ride.name}: ${ride.waitTime} min wait`,
-    // It goes to everyone on the trip, most of whom didn't set it: no "you".
-    message: `Alert set for ${alert.max} min or less · ${parkName}`,
+    // A trip-wide alert reaches people who didn't set it: no "you" there.
+    message: alert.device ? `You asked for ${alert.max} min or less · ${parkName}` : `Alert set for ${alert.max} min or less · ${parkName}`,
     priority: 4,
   };
 }
