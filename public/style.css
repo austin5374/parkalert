@@ -34,8 +34,8 @@
   --flip-edge: transparent;
   --red-soft: rgba(204, 49, 40, 0.12);
   --accent-soft: rgba(23, 64, 107, 0.12);
-  --chrome: rgba(230, 235, 243, 0.82);
-  --tabbar-bg: rgba(230, 235, 243, 0.95);
+  --chrome: rgba(230, 235, 243, 0.97);
+  --tabbar-bg: rgba(230, 235, 243, 0.98);
   --toast: rgba(255, 255, 255, 0.95);
   --sheet: #e6ebf3;
   --sheet-group: #ffffff;
@@ -75,8 +75,8 @@
     --flip-edge: rgba(255, 255, 255, 0.1);
     --red-soft: rgba(255, 91, 80, 0.16);
     --accent-soft: rgba(134, 169, 223, 0.2);
-    --chrome: rgba(11, 18, 32, 0.8);
-    --tabbar-bg: rgba(11, 18, 32, 0.95);
+    --chrome: rgba(11, 18, 32, 0.97);
+    --tabbar-bg: rgba(11, 18, 32, 0.98);
     --toast: rgba(29, 39, 56, 0.96);
     --sheet: #151d2c;
     --sheet-group: #1d2738;
@@ -315,8 +315,9 @@ main {
   font-size: 0.875rem; font-weight: 500; letter-spacing: 0;
   transition: background-color 180ms ease, box-shadow 180ms ease;
 }
-.segmented button[aria-pressed='true'] { background: var(--surface); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
-@media (prefers-color-scheme: dark) { .segmented button[aria-pressed='true'] { background: #33415a; } }
+.segmented button[aria-pressed='true'], .segmented button[aria-checked='true'] { background: var(--surface); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.segmented button { min-height: 2.75rem; }
+@media (prefers-color-scheme: dark) { .segmented button[aria-pressed='true'], .segmented button[aria-checked='true'] { background: #33415a; } }
 .list-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 1rem var(--gutter) 0.45rem; font-size: 0.8125rem; color: var(--label-2);
@@ -396,8 +397,7 @@ main {
   padding-bottom: env(safe-area-inset-bottom);
   /* Nearly opaque: its small labels must stay readable over whatever
      scrolls beneath (a green switch took them under 4.5:1). */
-  background: var(--tabbar-bg);
-  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  background: var(--bg);
   box-shadow: 0 -0.5px 0 var(--separator);
 }
 body.paging .tabbar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -866,8 +866,8 @@ body:not(.view-down) #nav { display: none; }
 .bolt-mark { width: 0.75rem; height: 0.8rem; fill: var(--orange); stroke: none; }
 .bolt-mark.theirs { fill: var(--label-3); }
 .slim .rl { flex: 1; min-width: 0; font-weight: 600; font-size: 1rem; line-height: 1.25; }
-.slim .rl .nm { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.slim .rl small { display: block; font-weight: 400; font-size: 0.8125rem; color: var(--label-2); margin-top: 0.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0; }
+.slim .rl .nm { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.slim .rl small { display: block; font-weight: 400; font-size: 0.8125rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
 .slim.quiet .rl { font-weight: 400; color: var(--label-2); }
 .slim.theirs { min-height: 2.9rem; padding-left: calc(var(--gutter) + 0.6rem); }
 .slim.theirs .rl { font-size: 0.875rem; }
@@ -880,7 +880,7 @@ body:not(.view-down) #nav { display: none; }
 .slim.theirs .tile { font-size: 0.9375rem; }
 .when2 { display: flex; flex-direction: column; align-items: center; gap: 0.05rem; flex: none; }
 .when2 small { color: var(--orange); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
-.notsoon { font-size: 0.875rem; font-weight: 600; color: var(--label-2); flex: none; max-width: 5.6rem; text-align: right; line-height: 1.2; }
+.notsoon { font-size: 0.875rem; font-weight: 600; color: var(--label-2); flex: none; max-width: 6rem; text-align: right; line-height: 1.2; }
 .more-below { display: none; }
 
 /* ---- Wait bars: one scale for every ride, the usual wait as a tick ---- */
@@ -992,7 +992,7 @@ body:not(.view-down) #nav { display: none; }
 .center-head p { color: var(--label); margin-top: 0.5rem; }
 .wait-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(3rem, 1fr)); gap: 0.5rem; padding: 0 var(--gutter); }
 .wait-nums button { font-family: var(--round); font-weight: 800; font-size: 1.25rem; min-height: 3rem; border-radius: 0.75rem; background: var(--sheet-group); text-align: center; }
-.wait-nums button[aria-pressed='true'] { background: var(--accent); color: var(--on-accent); }
+.wait-nums button[aria-checked='true'] { background: var(--accent); color: var(--on-accent); }
 .wait-nums + .note { text-align: center; }
 .scope { margin: 0 var(--gutter) 0.6rem; }
 
@@ -1013,7 +1013,6 @@ body:not(.view-down) #nav { display: none; }
 .ax-type .slim .tile, .ax-type .slim .notsoon, .ax-type .slim .when2 { margin-left: 1.3rem; }
 .ax-type .slim .when2 { flex-direction: row; gap: 0.4rem; align-items: baseline; }
 .ax-type .slim .chevron { display: none; }
-.ax-type .boardhead { display: none; }
 .ax-type .nav.sky { padding-bottom: 3.8rem; }
 .ax-type .status-title { max-width: none; }
 .ax-type .page-strip .page-title { max-width: none; }
@@ -1032,3 +1031,24 @@ body:not(.view-down) #nav { display: none; }
 .ax-type .sky-top { flex-wrap: wrap; row-gap: 0.4rem; }
 .ax-type .parkline { flex-basis: 100%; }
 .page-body > .spaced-sm { margin-top: 0.9rem; }
+
+/* "Likely back", on each row at large text sizes, where the time moves under the name. */
+.back-end { display: flex; align-items: center; gap: 0.4rem; flex: none; }
+.back-label { display: none; font-size: 0.875rem; font-weight: 600; color: var(--label-2); }
+.more-below { display: none; }
+.ax-type .back-end { flex-basis: 100%; margin-left: 1.3rem; }
+.ax-type .back-label { display: inline; }
+.ax-type .slim .tile, .ax-type .slim .notsoon, .ax-type .slim .when2 { margin-left: 0; }
+.ax-type .slim .notsoon { max-width: none; text-align: left; }
+.ax-type .slim .rl .nm { -webkit-line-clamp: unset; display: block; }
+.ax-type .more-below {
+  display: flex; align-items: center; justify-content: center; gap: 0.3rem; width: 100%; padding: 0.8rem 0 0;
+  color: var(--accent); font-weight: 600; font-size: 1rem;
+}
+.ax-type .more-below svg { width: 1rem; height: 1rem; transform: rotate(90deg); stroke-width: 2.4; }
+.ax-type .boardhead { display: flex; }
+
+/* The chips scroll sideways; a fade at the edge says there's more. */
+.filter-chips { -webkit-mask: linear-gradient(90deg, #000 calc(100% - 1.5rem), transparent); mask: linear-gradient(90deg, #000 calc(100% - 1.5rem), transparent); padding-right: 1.5rem; }
+.ax-type .nav.sky { padding-bottom: 3.2rem; padding-top: calc(env(safe-area-inset-top) + 0.5rem); }
+.ax-type .status-title { font-size: min(1.875rem, 34px); }

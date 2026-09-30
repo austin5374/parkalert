@@ -10,9 +10,9 @@ const norm = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]
 
 // [pattern, land, short name or null, coaster]
 const MK = [
-  ['walt disney world railroad main street', 'Main Street, U.S.A.', 'Railroad, Main Street'],
-  ['walt disney world railroad fantasyland', 'Fantasyland', 'Railroad, Fantasyland'],
-  ['walt disney world railroad frontierland', 'Frontierland', 'Railroad, Frontierland'],
+  ['walt disney world railroad main street', 'Main Street, U.S.A.', 'Railroad (Main Street)'],
+  ['walt disney world railroad fantasyland', 'Fantasyland', 'Railroad (Fantasyland)'],
+  ['walt disney world railroad frontierland', 'Frontierland', 'Railroad (Frontierland)'],
   ['main street vehicles', 'Main Street, U.S.A.'],
   ['jungle cruise', 'Adventureland'],
   ['pirates of the caribbean', 'Adventureland'],

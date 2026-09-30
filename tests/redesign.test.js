@@ -32,7 +32,7 @@ test('pushes say when a ride is likely back as a clock time', () => {
 });
 
 test('rides down together are never said to have broken, and weather is only likely', () => {
-  assert.equal(holdTitle({ cause: 'lightning' }, 12), '12 rides closed, likely lightning');
+  assert.equal(holdTitle({ cause: 'lightning' }, 12), '12 rides stopped, likely lightning');
   assert.equal(holdTitle({}, 8), '8 rides down together');
   const now = Date.parse('2026-09-21T14:55:00Z');
   const m = downMessage({ name: 'Space Mountain', downSince: now - 12 * 60_000 }, { kind: 'breakdown', window: { lo: 5, hi: 25 } }, 'Magic Kingdom', 'America/New_York', now);

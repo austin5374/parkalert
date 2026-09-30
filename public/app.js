@@ -1348,11 +1348,14 @@ function backAt(r, o = r.outlook) {
   return { kind: o.cause ? 'later' : 'time', at, range: !o.cause && w.hi != null ? [now + w.lo * 60_000, now + w.hi * 60_000] : null };
 }
 
-// The right-hand end of a row: one time, or a few plain words.
+// The right-hand end of a row: "Likely back" (said once, above the list, and
+// again on each row at large text sizes, where the time sits under the name)
+// and one time, or a few plain words.
+const backEnd = (b) => `<span class="back-end"><span class="back-label">Likely back</span>${backCell(b)}</span>`;
 function backCell(b) {
   if (b.kind === 'time') return `<span class="tile">${esc(pillTime(b.at))}</span>`;
   if (b.kind === 'later') return `<span class="when2"><span class="tile">${esc(pillTime(b.at))}</span><small>or later</small></span>`;
-  const words = { storm: 'After the storm', hour: 'In 1\u00a0hr+', closed: 'Maybe not today', none: 'No estimate yet' }[b.kind];
+  const words = { storm: 'After the storm', hour: 'In over an hour', closed: 'Maybe not today', none: 'No estimate yet' }[b.kind];
   return `<span class="notsoon">${words}</span>`;
 }
 // The same, as a screen reader hears it.
@@ -1388,33 +1391,38 @@ function boardRow(r, { theirs = false } = {}) {
   const o = r.outlook;
   const b = backAt(r);
   const since = downFor(r);
-  const what = o?.cause ? `Closed, likely ${causeWord(o)}`
+  const what = o?.cause ? `Stopped, likely ${causeWord(o)}`
     : o?.kind === 'opening' ? 'Late to open'
-      : `down ${since}`;
+      : since ? `down ${since}` : 'down';
   const sub = [r.land, what].filter(Boolean).join(' · ');
-  const said = [r.name, o?.cause ? `closed, likely for ${causeWord(o)}` : o?.kind === 'opening' ? 'late to open' : `down ${since}`, backWords(b)].join(', ');
+  const said = [r.name, o?.cause ? `stopped, likely for ${causeWord(o)}` : o?.kind === 'opening' ? 'late to open' : since ? `down ${since}` : 'down', backWords(b)].join(', ');
   return `<button class="slim pressable${theirs ? ' theirs' : ''}" type="button" data-ride="${esc(r.id)}" data-key="r-${esc(r.id)}" aria-label="${esc(said)}">
     <span class="mk">${statusMark(r, theirs)}</span>
     <span class="rl"><span class="nm">${esc(listName(r))}</span><small>${keepTogether(sub)}</small></span>
-    ${backCell(b)}${theirs ? '' : icon('chevron', 'chevron')}
+    ${backEnd(b)}${theirs ? '' : icon('chevron', 'chevron')}
   </button>`;
 }
 
-// Your rides caught in a hold: one line that leads with your ride, and opens
-// the hold. "Big Thunder Mountain", or "Big Thunder Mountain and 2 more of yours".
+// Your rides caught in a hold: one line that opens the hold. With one of
+// yours in it, that ride leads ("Big Thunder Mountain, closed, likely
+// lightning"); with several, the count does, so it matches the headline
+// ("16 rides closed, likely lightning, includes Big Thunder Mountain and 15
+// more of yours").
 function holdRow(held, mine) {
   const first = mine[0];
   const o = first.outlook;
   const b = backAt(first);
-  const name = listName(first);
+  const what = o?.cause ? `stopped, likely ${causeWord(o)}` : 'down together';
+  const others = held.length - 1;
+  const name = mine.length > 1 ? `${held.length} rides ${what}` : listName(first);
   const sub = mine.length > 1
-    ? o?.cause ? `${held.length} closed, likely ${causeWord(o)}` : `${held.length} rides down together`
-    : o?.cause ? `Closed, likely ${causeWord(o)}` : `Down with ${held.length - 1} other ride${held.length === 2 ? '' : 's'}`;
-  const said = `${name}${mine.length > 1 ? ` and ${mine.length - 1} more of yours` : ''}, ${o?.cause ? `closed, likely for ${causeWord(o)}, with ${held.length - 1} other rides` : `down with ${held.length - 1} other rides`}, ${backWords(b)}. Show all ${held.length}`;
+    ? `Includes ${listName(first)} and ${mine.length - 1} more of yours`
+    : `${o?.cause ? `Stopped, likely ${causeWord(o)}` : 'Down'}${others ? `, with ${others} other ride${others === 1 ? '' : 's'}` : ''}`;
+  const said = `${name}, ${sub}, ${backWords(b)}. Show all ${held.length}`;
   return `<button class="slim pressable" type="button" data-act="open-hold" data-key="hold" aria-label="${esc(said)}">
     <span class="mk">${statusMark(first, false)}</span>
     <span class="rl"><span class="nm">${esc(name)}</span><small>${esc(sub)}</small></span>
-    ${backCell(b)}${icon('chevron', 'chevron')}
+    ${backEnd(b)}${icon('chevron', 'chevron')}
   </button>`;
 }
 
@@ -1484,7 +1492,7 @@ function downHtml() {
   }
   const others = down.filter((r) => !isFollowing(r.id));
   const parts = [];
-  if (mine.length) parts.push(`<div class="boardhead" aria-hidden="true" data-key="head"><span>Your rides</span><span>Back at about</span></div>`, ...mine);
+  if (mine.length) parts.push(`<div class="boardhead" aria-hidden="true" data-key="head"><span>Your rides</span><span>Likely back</span></div>`, ...mine);
   if (others.length) {
     parts.push(`<button class="slim quiet pressable" type="button" data-act="toggle-others" data-key="others" aria-expanded="${othersOpen}">
       <span class="rl">${others.length} ${mine.length ? 'other ' : ''}ride${others.length === 1 ? ' is' : 's are'} down</span>${icon('chevron', `chevron turn${othersOpen ? ' open' : ''}`)}</button>`);
@@ -1497,7 +1505,7 @@ function downHtml() {
         const names = heldTheirs.slice(0, 3).map(listName).join(', ');
         parts.push(`<button class="slim theirs pressable" type="button" data-act="open-hold" data-key="held-theirs">
           <span class="mk">${statusMark(heldTheirs[0], true)}</span>
-          <span class="rl"><span class="nm">${heldTheirs.length} ${heldMine.length ? 'more ' : ''}${o?.cause ? `closed, likely ${causeWord(o)}` : 'down together'}</span><small>${esc(names)}${heldTheirs.length > 3 ? ` and ${heldTheirs.length - 3} more` : ''}</small></span>
+          <span class="rl"><span class="nm">${heldTheirs.length} ${heldMine.length ? 'more ' : ''}${o?.cause ? `stopped, likely ${causeWord(o)}` : 'down together'}</span><small>${esc(names)}${heldTheirs.length > 3 ? ` and ${heldTheirs.length - 3} more` : ''}</small></span>
           ${backCell(backAt(heldTheirs[0]))}</button>`);
       }
       for (const r of others.filter((x) => x.outlook?.kind !== 'hold').sort((a, b) => b.downSince - a.downSince)) parts.push(boardRow(r, { theirs: true }));
@@ -1506,6 +1514,7 @@ function downHtml() {
   const out = [];
   if (parts.length) {
     out.push(`<div class="group lift board" data-key="board">${parts.join('')}</div>`);
+    out.push(`<button class="more-below" type="button" data-act="more-below" data-key="more-below" aria-hidden="true" tabindex="-1">More below ${icon('chevron')}</button>`);
   } else {
     // Nothing down. Only a live, open park gets the shortest lines as its
     // card; closed, not open yet, and old data each say what they are.
@@ -1630,10 +1639,10 @@ function waitBar(r) {
   const pct = (m) => Math.min(100, (m / WAIT_SCALE) * 100).toFixed(1);
   return `<div class="wbar${isGood(r) ? ' good' : ''}" aria-hidden="true"><i style="width:${pct(r.waitTime)}%"></i>${r.usual != null ? `<b style="left:${pct(r.usual)}%"></b>` : ''}</div>`;
 }
-function waitRow(r, { sub = null } = {}) {
+function waitRow(r, { sub = null, following = false } = {}) {
   const usual = r.usual != null ? `usually ${r.usual}\u00a0min` : null;
   const small = sub ?? [r.land, usual].filter(Boolean).join(' · ');
-  const said = `${r.name}, ${r.waitTime} minute wait${r.usual != null ? `, usually ${r.usual}` : ''}`;
+  const said = `${r.name}, ${r.waitTime} minute wait, ${small.replace(/\u00a0/g, ' ').replace(/ · /g, ', ')}${following ? ', alerts on' : ''}`;
   return `<button class="barrow pressable" type="button" data-ride="${esc(r.id)}" data-key="w-${esc(r.id)}" aria-label="${esc(said)}">
     <span class="top2"><span class="rl">${esc(listName(r))}${small ? `<small>${esc(small)}</small>` : ''}</span>
     <span class="wait-num${isGood(r) ? ' good' : ''}">${r.waitTime}<small>min</small></span></span>
@@ -1706,7 +1715,7 @@ setRideView(rideView);
 // A ride that isn't running says what it is instead of drawing a bar.
 function statusRow(r, following) {
   const [word, cls] = r.status === 'DOWN'
-    ? (r.outlook?.cause ? ['Closed', 'weather'] : ['Down', 'down'])
+    ? (r.outlook?.cause ? ['Stopped', 'weather'] : ['Down', 'down'])
     : r.status === 'OPERATING' ? ['No posted wait', '']
       : r.status === 'REFURBISHMENT' ? ['Refurbishing', ''] : ['Closed', ''];
   const sub = [rideView === 'land' ? null : r.land, r.status === 'DOWN' && r.outlook?.cause ? `likely ${causeWord(r.outlook)}` : null].filter(Boolean).join(' · ');
@@ -1728,7 +1737,7 @@ function rideRow(r) {
     ...queueTags(r),
     alert && !alert.sentAt ? `wait alert at ${alert.max}\u00a0min` : null,
   ].filter(Boolean).join(' · ');
-  return waitRow(r, { sub: extras }).replace(`${esc(listName(r))}<small>`, `${esc(listName(r))}${following ? icon('bell', 'bell-mark') : ''}<small>`);
+  return waitRow(r, { sub: extras, following }).replace(`${esc(listName(r))}<small>`, `${esc(listName(r))}${following ? icon('bell', 'bell-mark') : ''}<small>`);
 }
 
 function renderRides() {
@@ -1854,7 +1863,7 @@ function renderTrip() {
   $('#trip-code').textContent = tripCode;
   const ready = alertsReady();
   const d = $('#setup-detail');
-  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Via ntfy' : 'Not set up';
+  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'On' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
   // Nothing when not paused, as Settings shows no value for an unset row;
@@ -1906,6 +1915,7 @@ $('#app').addEventListener('click', (e) => {
   else if (act === 'retry-dash') { offline = false; renderAll(); refresh(); }
   else if (act === 'toggle-others') { othersOpen = !othersOpen; haptic(); renderDown(); }
   else if (act === 'more-mine') { mineOpen = true; renderDown(); }
+  else if (act === 'more-below') scrollBy({ top: innerHeight * 0.6, behavior: reducedMotion() ? 'auto' : 'smooth' });
   else if (act === 'toggle-returns') {
     const id = e.target.closest('[data-inc]').dataset.inc;
     if (!openReturns.delete(id)) openReturns.add(id);
@@ -1987,14 +1997,14 @@ function openPause({ fresh = false } = {}) {
   };
   if (perPhone) {
     const who = el(`<div class="segmented pause-scope scope" role="radiogroup" aria-label="Who to pause">
-      <button type="button" role="radio" data-scope="phone" aria-pressed="${scope === 'phone'}" aria-checked="${scope === 'phone'}">Just this phone</button>
-      <button type="button" role="radio" data-scope="trip" aria-pressed="${scope === 'trip'}" aria-checked="${scope === 'trip'}">Everyone</button>
+      <button type="button" role="radio" data-scope="phone" aria-checked="${scope === 'phone'}">Just this phone</button>
+      <button type="button" role="radio" data-scope="trip" aria-checked="${scope === 'trip'}">Everyone</button>
     </div>`);
     who.addEventListener('click', (e) => {
       const b = e.target.closest('[data-scope]');
       if (!b) return;
       scope = b.dataset.scope;
-      for (const x of who.querySelectorAll('[data-scope]')) { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-checked', String(x === b)); }
+      for (const x of who.querySelectorAll('[data-scope]')) x.setAttribute('aria-checked', String(x === b));
       sayWho();
       haptic();
     });
@@ -2011,8 +2021,8 @@ function openPause({ fresh = false } = {}) {
       if (scope === 'phone') { sheet.close(); setPhoneMute({ until }); return; }
       // Everyone, from a phone that could have paused just itself: ask first,
       // naming how many phones, since the whole family goes quiet.
-      if (perPhone && dash.trip.phones > 1) confirmPauseAll(until, label);
-      else { sheet.close(); setMute({ until }); }
+      if (perPhone && dash.trip.phones <= 1 && !ntfyLive) { sheet.close(); setMute({ until }); }
+      else confirmPauseAll(until, label);
     };
     list.appendChild(row);
   }
@@ -2026,13 +2036,16 @@ function openPause({ fresh = false } = {}) {
 // Pausing every phone on the trip: Cancel is the big, easy button.
 function confirmPauseAll(until, label) {
   const n = dash.trip.phones;
+  // Phones on the ntfy app aren't counted by the server, so a count is
+  // only given when it is the whole story.
+  const who = n > 1 && dash.trip.ntfy === false ? `all ${n} phones on this trip` : 'everyone on this trip';
   const how = until == null ? 'until someone turns them back on' : label.startsWith('For') ? `${label.toLowerCase()}, until ${fmtUntil(until)}` : `until ${fmtUntil(until)}`;
   const content = el(`<div data-sheet="pause-all" class="center-head" style="padding:0.4rem var(--gutter) 0">
-    <h2>Pause alerts on all ${n} phones on this trip?</h2>
-    <p>No phone on the trip will get alerts ${esc(how)}.</p>
+    <h2>Pause alerts for ${esc(who)}?</h2>
+    <p>Nobody on the trip will get alerts ${esc(how)}.</p>
     <div class="btn-stack" style="padding-left:0;padding-right:0">
       <button class="btn-primary pressable" type="button" data-act="cancel">Cancel</button>
-      <button class="btn-ghost pressable" type="button" data-act="all">Pause all ${n} phones</button>
+      <button class="btn-ghost pressable" type="button" data-act="all">Pause for everyone</button>
     </div></div>`);
   content.querySelector('[data-act=cancel]').onclick = () => sheet.close();
   content.querySelector('[data-act=all]').onclick = () => { sheet.close(); setMute({ until }); };
@@ -2530,7 +2543,7 @@ function downAnswer(r, o) {
 function downKicker(r, o) {
   if (o?.cause) {
     const cleared = o.weather === 'passed' && o.clearedAt ? `weather cleared ${fmtTime(o.clearedAt)}` : 'still storming nearby';
-    return `<p class="kicker weather">${icon('bolt')}Closed, likely ${causeWord(o)} · ${esc(cleared)}</p>`;
+    return `<p class="kicker weather">${icon('bolt')}Stopped, likely ${causeWord(o)} · ${esc(cleared)}</p>`;
   }
   const what = o?.kind === 'opening' ? 'Late to open' : `Down ${downFor(r)}`;
   const extra = o?.kind === 'hold' && o.rides > 1 ? ` · with ${o.rides - 1} other rides` : '';
@@ -2603,7 +2616,7 @@ function dayLineHtml(r, detail, o) {
 function rideHtml(r, detail, failed) {
   const o = (r.status === 'DOWN' ? r.outlook : null) || (detail?.ride?.status === 'DOWN' ? detail.outlook : null);
   const parts = [heroHtml(r, o, detail)];
-  if (r.status === 'DOWN' && !r.other) parts.push('<p class="note" data-key="ll">Had a Lightning Lane for this ride? Check the Disney app for your options.</p>');
+  if (r.status === 'DOWN' && !r.other && r.lightningLane) parts.push('<p class="note" data-key="ll">Had a Lightning Lane for this ride? Check the Disney app for your options.</p>');
   if (!detail) {
     parts.push(failed
       ? `<div class="retry" data-key="retry"><p class="footnote">Couldn't load this ride's wait times and history.</p>
@@ -2725,18 +2738,18 @@ function openWaitAlert(rideId) {
   const content = el(`<div data-sheet="wait">
     ${sheetHead('Wait alert', `One alert, once, when the posted wait for ${esc(listName(r))} drops to your number. Today only.`)}
     ${perPhone ? `<div class="segmented scope" role="radiogroup" aria-label="Who gets it">
-      <button type="button" role="radio" data-scope="me" aria-pressed="${scope === 'me'}" aria-checked="${scope === 'me'}">Just me</button>
-      <button type="button" role="radio" data-scope="all" aria-pressed="${scope === 'all'}" aria-checked="${scope === 'all'}">Everyone</button></div>` : ''}
+      <button type="button" role="radio" data-scope="me" aria-checked="${scope === 'me'}">Just me</button>
+      <button type="button" role="radio" data-scope="all" aria-checked="${scope === 'all'}">Everyone</button></div>` : ''}
     <p class="note" style="padding-top:0">${esc(state)}</p>
-    ${choices.length ? `<div class="wait-nums" role="radiogroup" aria-label="Minutes or less" style="margin-top:0.8rem">${choices.map((m) => `<button type="button" role="radio" data-m="${m}" aria-pressed="${m === pick}" aria-checked="${m === pick}" aria-label="${m} minutes or less">${m}</button>`).join('')}</div>
+    ${choices.length ? `<div class="wait-nums" role="radiogroup" aria-label="Minutes or less" style="margin-top:0.8rem">${choices.map((m) => `<button type="button" role="radio" data-m="${m}" aria-checked="${m === pick}" aria-label="${m} minutes or less">${m}</button>`).join('')}</div>
       <p class="note">minutes or less</p>` : `<p class="note">The wait is already short. Nothing to set.</p>`}
     <div class="btn-stack">
       ${choices.length ? `<button class="btn-primary pressable" type="button" data-act="set">Set alert at ${pick}\u00a0min</button>` : ''}
       ${armed ? '<button class="btn-ghost pressable" type="button" data-act="off">Turn off this alert</button>' : '<button class="btn-ghost pressable" type="button" data-act="done">Cancel</button>'}
     </div></div>`);
   const sync = () => {
-    content.querySelectorAll('[data-m]').forEach((b) => { const on = Number(b.dataset.m) === pick; b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-checked', String(on)); });
-    content.querySelectorAll('[data-scope]').forEach((b) => { const on = b.dataset.scope === scope; b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-checked', String(on)); });
+    content.querySelectorAll('[data-m]').forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.m) === pick)));
+    content.querySelectorAll('[data-scope]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.scope === scope)));
     const set = content.querySelector('[data-act=set]');
     if (set) set.textContent = `Set alert at ${pick}\u00a0min${scope === 'all' ? ' for everyone' : ''}`;
   };
@@ -2852,7 +2865,7 @@ function openHold() {
     title: () => {
       const held = heldRides();
       const o = held[0]?.outlook;
-      return o?.cause ? `${held.length} rides closed, likely ${causeWord(o)}` : `${held.length} rides down together`;
+      return o?.cause ? `${held.length} rides stopped, likely ${causeWord(o)}` : `${held.length} rides down together`;
     },
     scene: () => ({}),
     render: holdHtml,
@@ -2880,7 +2893,7 @@ function holdHtml() {
     <h2 class="section-label" data-key="count">${held.length} ride${held.length === 1 ? '' : 's'}</h2>
     <div class="group" data-key="rides">${held.map((r) => {
       const yours = isFollowing(r.id);
-      return `<button class="slim pressable" type="button" data-ride="${esc(r.id)}" data-key="h-${esc(r.id)}" aria-label="${esc(`${r.name}${yours ? ', yours' : ''}`)}">
+      return `<button class="slim pressable" type="button" data-ride="${esc(r.id)}" data-key="h-${esc(r.id)}" aria-label="${esc([r.name, r.land, yours ? 'yours' : null].filter(Boolean).join(', '))}">
         <span class="mk">${statusMark(r, !yours)}</span>
         <span class="rl"><span class="nm">${esc(listName(r))}</span><small>${esc([r.land, yours ? 'yours' : null].filter(Boolean).join(' · '))}</small></span>
         ${icon('chevron', 'chevron')}</button>`;

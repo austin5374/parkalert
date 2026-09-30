@@ -43,7 +43,7 @@ export function outlookLine(outlook, timezone = null, now = Date.now()) {
 // closed, so weather is only "likely", and anything else is just "together".
 const isStorm = (outlook) => !!outlook?.cause;
 export const holdTitle = (outlook, n) => (isStorm(outlook)
-  ? `${n} rides closed, likely ${outlook.cause === 'rain' ? 'rain' : 'lightning'}`
+  ? `${n} rides stopped, likely ${outlook.cause === 'rain' ? 'rain' : 'lightning'}`
   : `${n} rides down together`);
 
 // ---- One ride ----
@@ -62,7 +62,7 @@ export function downMessage(ride, outlook, parkName, timezone, now = Date.now())
   const lines = [outlookLine(outlook, timezone, now)];
   if (outlook?.kind === 'hold') {
     const others = Math.max(0, (outlook.rides ?? 1) - 1);
-    lines.push(isStorm(outlook) ? `Closed, likely for ${outlook.cause === 'rain' ? 'rain' : 'lightning'}, with ${others} other rides` : `Down with ${others} other rides`);
+    lines.push(isStorm(outlook) ? `Stopped, likely for ${outlook.cause === 'rain' ? 'rain' : 'lightning'}, with ${others} other rides` : `Down with ${others} other rides`);
   }
   lines.push(`${wentDown(ride, timezone)} · ${parkName}`);
   return { title: `${ride.name} is down`, message: lines.filter(Boolean).join('\n'), priority: 3, urgency: 'high' };
@@ -190,12 +190,11 @@ export function clockSpan(a, b, timezone) {
 // minutes from now, basis). down: this trip's rides still closed by it.
 export function stormPassedMessage(outlook, down, parkName, timezone, now = Date.now()) {
   const w = outlook.window;
-  const when = w ? clockSpan(now + w.lo * 60_000, w.hi == null ? null : now + w.hi * 60_000, timezone) : null;
-  const back = !when ? null
-    : outlook.basis?.from === 'rule' ? `Rides reopen about 30 min after the last lightning: ${when}`
-      : `Rides often back ${when}`;
+  // The weather reports can't see what Disney's own sensors do, and rides are
+  // tested before they reopen: the time is a minimum, never a promise.
+  const back = w ? `Outdoor rides likely back ${localTime(now + w.lo * 60_000, timezone)} or later, after testing` : null;
   return {
-    title: `${outlook.cause === 'rain' ? 'Rain stopped' : 'Storm passed'} at ${localTime(outlook.clearedAt, timezone)}`,
+    title: `${outlook.cause === 'rain' ? 'The rain seems to have stopped' : 'The storm seems to have passed'} at ${localTime(outlook.clearedAt, timezone)}`,
     message: [back, `${down.length} ride${down.length === 1 ? '' : 's'} still closed: ${listNames(down)}`, parkName].filter(Boolean).join('\n'),
     priority: 4,
   };

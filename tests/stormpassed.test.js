@@ -55,8 +55,8 @@ test('when the storm behind a hold passes, trips following its rides hear it onc
   assert.equal(await notifyStormPassed(MK, now), 1);
   assert.deepEqual(fakes.pushes.map((p) => p.topic), ['follow']);
   const [p] = fakes.pushes;
-  assert.match(p.title, /^Storm passed at \d{1,2}:\d{2}\s[AP]M$/);
-  assert.match(p.message, /^Rides often back \d{1,2}:\d{2}( [AP]M)? to \d{1,2}:\d{2}\s[AP]M\n6 rides still closed: Outdoor 0, /);
+  assert.match(p.title, /^The storm seems to have passed at \d{1,2}:\d{2}\s[AP]M$/);
+  assert.match(p.message, /^Outdoor rides likely back \d{1,2}:\d{2}\s[AP]M or later, after testing\n6 rides still closed: Outdoor 0, /);
   // Once for this all-clear.
   assert.equal(await notifyStormPassed(MK, now + MIN), 0);
 });
