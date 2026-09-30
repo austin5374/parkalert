@@ -26,10 +26,10 @@ export default [
   },
   {
     files: ['public/app.js'],
-    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly', fmtDuration: 'readonly', matchesSearch: 'readonly' } },
+    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly', fmtDuration: 'readonly', matchesSearch: 'readonly', extractTripCode: 'readonly' } },
   },
   {
     files: ['public/sw.js'],
-    languageOptions: { sourceType: 'script', globals: globals.serviceworker },
+    languageOptions: { sourceType: 'script', globals: { ...globals.serviceworker, localClock: 'readonly' } },
   },
 ];

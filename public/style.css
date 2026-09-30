@@ -28,6 +28,7 @@
   --red-soft: rgba(255, 59, 48, 0.12);
   --accent-soft: rgba(0, 122, 255, 0.16);
   --chrome: rgba(242, 242, 247, 0.78);
+  --tabbar-bg: rgba(242, 242, 247, 0.94);
   --toast: rgba(255, 255, 255, 0.94);
   --sheet: #f2f2f7;
   --sheet-group: #ffffff;
@@ -60,6 +61,7 @@
     --red-soft: rgba(255, 69, 58, 0.16);
     --accent-soft: rgba(10, 132, 255, 0.22);
     --chrome: rgba(18, 18, 20, 0.74);
+    --tabbar-bg: rgba(18, 18, 20, 0.94);
     --toast: rgba(52, 52, 56, 0.95);
     --sheet: #1c1c1e;
     --sheet-group: #2c2c2e;
@@ -160,25 +162,34 @@ a, a:visited { color: var(--accent); }
 .join input::placeholder { text-transform: none; letter-spacing: -0.01em; color: var(--label-2); }
 .btn-inline { color: var(--accent); font-weight: 600; padding: 0.5rem 0.75rem; }
 .btn-inline:disabled { color: var(--label-3); }
+.btn-stack .btn-inline { align-self: center; }
 
 /* ---- Navigation header: a translucent layer content scrolls beneath ---- */
 .nav {
-  position: sticky; top: 0; z-index: 20;
+  position: relative;
   padding: calc(env(safe-area-inset-top) + 0.9rem) 0 0.7rem;
   background: var(--bg);
   transition: background-color 200ms ease, box-shadow 200ms ease;
 }
-.nav.scrolled {
-  background: var(--chrome);
+/* The large title scrolls away with the list, and this compact bar takes
+   over at the top, so the header never keeps a third of a landscape screen. */
+.nav-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  height: calc(env(safe-area-inset-top) + 2.75rem); padding: env(safe-area-inset-top) 4rem 0;
+  background: var(--chrome); box-shadow: 0 0.5px 0 var(--separator);
   -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
-  box-shadow: 0 0.5px 0 var(--separator);
+  font-size: 1.0625rem; font-weight: 600;
+  opacity: 0; pointer-events: none; transition: opacity 150ms ease;
 }
+.nav-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compact .nav-bar { opacity: 1; pointer-events: auto; }
+.no-tabbar .nav-bar { display: none; }
 .nav-inner { display: flex; align-items: flex-end; gap: 0.75rem; padding: 0 var(--gutter); max-width: 40rem; margin: 0 auto; }
 .nav-titles { flex: 1; min-width: 0; position: relative; }
 .cover-btn { position: absolute; inset: 0; z-index: 1; width: 100%; border-radius: 0.5rem; cursor: pointer; }
 .cover-btn:active ~ * { opacity: 0.6; }
 .nav-meta { display: flex; align-items: center; gap: 0.2rem; }
-.nav-meta .meta-chevron { transform: rotate(90deg); }
 .nav .large-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav .large-title.wrap {
   white-space: normal; overflow-wrap: break-word;
@@ -344,9 +355,10 @@ main {
 
 /* ---- Trip ---- */
 .code-card { padding: 1.1rem var(--gutter) var(--gutter); text-align: center; }
+/* Always all six characters: it is what a guest reads aloud to family. */
 .trip-code {
-  font-size: 2.25rem; font-weight: 700; letter-spacing: 0.22em; margin: 0.15rem 0 0.9rem 0.22em;
-  font-variant-numeric: tabular-nums; font-feature-settings: 'ss01';
+  font-size: min(2.25rem, 11vw); font-weight: 700; letter-spacing: 0.22em; margin: 0.15rem 0 0.9rem 0.22em;
+  font-variant-numeric: tabular-nums; font-feature-settings: 'ss01'; white-space: nowrap;
 }
 .btn-primary, .btn-secondary {
   display: flex; align-items: center; justify-content: center; gap: 0.45rem;
@@ -366,7 +378,9 @@ main {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; justify-content: center;
   padding-bottom: env(safe-area-inset-bottom);
-  background: var(--chrome);
+  /* Nearly opaque: its small labels must stay readable over whatever
+     scrolls beneath (a green switch took them under 4.5:1). */
+  background: var(--tabbar-bg);
   -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 -0.5px 0 var(--separator);
 }
@@ -419,7 +433,11 @@ main {
   display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 0.9375rem;
 }
-.step.done::before { content: '✓'; background: var(--green); color: #fff; }
+/* Done: the icon set's check, not a text glyph. */
+.step.done::before {
+  content: '';
+  background: var(--green) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 1.05rem no-repeat;
+}
 .step > * { grid-column: 2; }
 .step h3 { font-size: 1.0625rem; font-weight: 600; line-height: 1.75rem; }
 .step p { color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; margin: 0.1rem 0 0.6rem; }
@@ -544,7 +562,7 @@ main { position: relative; transition: none; }
   .card:active { transform: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .nav.scrolled, .tabbar, .toast { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .nav-bar, .tabbar, .toast { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (prefers-contrast: more) {
   :root { --label-2: var(--label); --separator: var(--label-3); }
@@ -578,6 +596,14 @@ main { position: relative; transition: none; }
 .ax-type .segmented { flex-wrap: wrap; }
 .ax-type .segmented button { flex-basis: 45%; }
 .ax-type { --tabbar-h: 56px; }
+/* Margins stay phone-sized, as iOS keeps them, so the text gets the width. */
+.ax-type { --gutter: 16px; }
+.ax-type .search-row { flex-wrap: wrap; }
+.ax-type .search-row .search { flex-basis: 100%; }
+.ax-type .trip-code { letter-spacing: 0.12em; margin-left: 0.12em; }
+/* A button whose label wraps keeps its icon above the words, not stranded
+   beside the first line. */
+.ax-type .btn-primary { flex-direction: column; gap: 0.2rem; padding: 0.6rem var(--gutter); }
 .ax-type .tab { font-size: 11px; }
 .ax-type .tab svg { width: 26px; height: 26px; }
 .ax-type .badge { font-size: 11px; min-width: 18px; height: 18px; line-height: 18px; }
@@ -586,7 +612,9 @@ main { position: relative; transition: none; }
 @media (prefers-color-scheme: dark) { .segmented.wait-limits .chip[aria-pressed='true'] { background: #636366; } }
 
 /* ---- Pages: detail screens that push in from the right ---- */
-.pages { position: fixed; inset: 0; z-index: 40; }
+/* Pages stop above the tab bar, which stays in reach as on iOS. */
+.pages { position: fixed; inset: 0 0 calc(var(--tabbar-h) + env(safe-area-inset-bottom)) 0; z-index: 40; }
+.no-tabbar .pages { bottom: 0; }
 .page-shade { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.14); opacity: 0; pointer-events: none; }
 .page {
   position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -617,7 +645,7 @@ main { position: relative; transition: none; }
 .page.titled .page-nav-title { opacity: 1; }
 .page-body {
   flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(env(safe-area-inset-bottom) + 2.5rem);
+  padding-bottom: 2.5rem;
 }
 .page-body > * { max-width: 40rem; margin-left: auto; margin-right: auto; }
 .page-body > .group { margin-left: max(var(--gutter), calc((100% - 40rem) / 2 + var(--gutter))); margin-right: max(var(--gutter), calc((100% - 40rem) / 2 + var(--gutter))); }
@@ -637,7 +665,10 @@ main { position: relative; transition: none; }
 
 /* Search with its sort toggle beside it. */
 .search-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem var(--gutter) 0; }
-.search-row .search { flex: 1; margin: 0; }
+/* min-width 0: a text field's intrinsic width (about 20 characters) must
+   never set the row's, or at large text the page pans sideways. */
+.search-row .search { flex: 1; margin: 0; min-width: 0; }
+.search input { width: 100%; }
 .sort-btn {
   flex: none; display: inline-flex; align-items: center; gap: 0.25rem; min-height: 2.25rem; padding: 0 0.7rem;
   border-radius: 0.65rem; background: var(--fill); color: var(--accent); font-size: 0.9375rem; font-weight: 600;
@@ -665,20 +696,15 @@ main { position: relative; transition: none; }
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .card-clock { font-size: 0.875rem; color: var(--label-2); margin-top: 0.1rem; letter-spacing: 0; }
-.segmented .count { color: var(--label-2); font-weight: 500; font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
+/* Full label colour on the grey track: the secondary one fell short of 4.5:1. */
+.segmented .count { color: var(--label); font-weight: 400; font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
 .page .ptr { top: calc(env(safe-area-inset-top) + 2.9rem); z-index: 2; }
 
 /* ---- Crowd level: one quiet row, a ten-step meter ---- */
 .crowd-group { margin-bottom: 0.9rem; }
 .crowd-row .row-label small { margin-top: 0.3rem; }
-.crowd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
 .crowd-word { font-weight: 600; }
-.crowd-num { font-size: 0.875rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
-.crowd-meter { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; margin-top: 0.45rem; }
-.crowd-meter span { height: 0.35rem; background: var(--fill); }
-.crowd-meter span:first-child { border-radius: 999px 0 0 999px; }
-.crowd-meter span:last-child { border-radius: 0 999px 999px 0; }
-.crowd-meter span.on { background: var(--accent); }
+.crowd-row.stale .crowd-word { color: var(--label-2); }
 
 /* ---- Wait or go: the verdict, and the chance it's back soon ---- */
 .card-advice, .advice-detail { font-size: 0.9375rem; margin-top: 0.5rem; line-height: 1.35; }
@@ -699,6 +725,8 @@ main { position: relative; transition: none; }
 .chance-key i { width: 0.55rem; height: 0.55rem; border-radius: 2px; background: var(--accent); display: inline-block; }
 .chance-key .k30 { opacity: 0.55; }
 .chance-key .k60 { opacity: 0.25; }
+.chance-key i.none { background: transparent; box-shadow: inset 0 0 0 1px var(--accent); opacity: 1; }
+.chance-key .chance-label { flex-basis: 100%; }
 .outlook-block .chance { margin-top: 0.8rem; }
 
 /* ---- Best time to ride, and the crowd chart ---- */
@@ -711,3 +739,22 @@ main { position: relative; transition: none; }
 .lg-today { background: var(--accent); }
 .lg-usual { background: var(--label-3); }
 .lg-max { margin-left: auto; }
+
+/* A row that opens in place: its chevron turns down when open. */
+.chevron.turn { transition: transform 200ms ease; }
+.chevron.turn.open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .chevron.turn { transition: none; } }
+.recent-row.sub { padding-left: calc(var(--gutter) + 1rem); }
+
+/* A second paragraph under a sheet's heading, for a caveat. */
+.sheet-note { padding: 0 var(--gutter) 0.4rem; color: var(--label-2); font-size: 0.9375rem; line-height: 1.4; overflow-wrap: anywhere; }
+
+/* iPad and wider: Down now's cards in two columns across a wider page,
+   instead of one phone-width column with empty sides. Rides and Trip stay
+   a comfortable reading width. */
+@media (min-width: 48rem) {
+  main, .nav-inner { max-width: 56rem; }
+  #view-down .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  #view-down .cards[data-key=hold] { grid-template-columns: minmax(0, 1fr); }
+  #view-rides, #view-trip { max-width: 40rem; margin: 0 auto; }
+}

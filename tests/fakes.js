@@ -20,13 +20,14 @@ export async function startFakes() {
     archiveCalls: [],
     archiveStatus: 200,
     fail: false,
+    delayMs: 0,
   };
   const pushes = [];
 
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
-    req.on('end', () => {
+    req.on('end', async () => {
       const send = (status, obj) => {
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(obj));
@@ -53,6 +54,8 @@ export async function startFakes() {
       }
       const m = req.url.match(/^\/v1\/entity\/([^/?]+)\/(live|schedule|history)/);
       if (!m || upstream.fail) return send(upstream.fail ? 503 : 404, {});
+      // A slow feed: live data answers this many ms late.
+      if (m[2] === 'live' && upstream.delayMs) await new Promise((r) => setTimeout(r, upstream.delayMs));
       const [, parkId, kind] = m;
       if (kind === 'live') {
         return send(200, {
@@ -80,6 +83,8 @@ export async function startFakes() {
   process.env.WEATHER_BASE = `${base}/weather`;
   process.env.WEATHER_ARCHIVE = `${base}/archive`;
   process.env.HEALTH_TOKEN = 'health-secret';
+  // The tests stand in for Railway's proxy, naming each client's address.
+  process.env.TRUST_PROXY = '1';
   process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'parkalert-test-'));
   return { upstream, pushes, close: () => server.close() };
 }

@@ -6,13 +6,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
-import { rideHistory, rideToday, parkSummary, waitTrend } from './insights.js';
-import { parkCrowd, crowdToday, rideBestTimes } from './crowdstate.js';
+import { rideHistory, rideToday, parkSummary, waitTrend, outagesToday } from './insights.js';
+import { parkCrowd, crowdToday, rideBestTimes, usualWaits, isOtherAttraction, defaultFollows } from './crowdstate.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
 import { startPolling, stopPolling, pollPark, freshPark, simulateTransition, downOutlook, currentSchedule, appLink } from './poller.js';
 import { PORT, NTFY_BASE, HEALTH_TOKEN } from './config.js';
+import { parkStatus, rideCounts } from './parkstatus.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
 import { deliver, MAX_DEVICES, deviceMuted } from './deliver.js';
@@ -44,13 +45,25 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// index.html's one inline script (it shows the right screen before app.js
+// arrives on a slow connection) is allowed by its hash, so no other inline
+// script can run.
+const BOOT_SCRIPT_HASH = (() => {
+  try {
+    const m = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/);
+    return m ? ` 'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'` : '';
+  } catch {
+    return '';
+  }
+})();
+
 // Everything the page loads comes from here. Inline styles are allowed
-// because the templates set a few style attributes; scripts never are, so
-// even a slip in escaping could not run one.
+// because the templates set a few style attributes; scripts never are
+// (bar the boot script above), so even a slip in escaping could not run one.
 const SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src 'self'${BOOT_SCRIPT_HASH}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "connect-src 'self'",
@@ -66,8 +79,21 @@ const SECURITY_HEADERS = {
 };
 
 function json(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
+  sendJson(res, status, JSON.stringify(body));
+}
+
+// JSON over 1 KB goes gzipped to clients that take it: the dashboard is
+// 30 KB raw and 4 KB compressed, and phones fetch it every 30 seconds on
+// park Wi-Fi and cellular.
+function sendJson(res, status, text, headers = {}) {
+  const gzip = text.length > 1024 && /\bgzip\b/.test(res.req?.headers['accept-encoding'] || '');
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    Vary: 'Accept-Encoding',
+    ...(gzip ? { 'Content-Encoding': 'gzip' } : {}),
+    ...headers,
+  });
+  res.end(gzip ? zlib.gzipSync(text) : text);
 }
 
 const limit = Object.fromEntries(Object.entries(LIMITS).map(([name, cfg]) => [name, createLimiter(cfg)]));
@@ -127,6 +153,7 @@ async function dashboard(trip) {
   const state = await freshPark(trip.parkId);
   const park = getPark(trip.parkId);
   const schedule = currentSchedule(state);
+  const usual = usualWaits(trip.parkId);
   return {
     trip: tripView(trip),
     park: {
@@ -137,6 +164,10 @@ async function dashboard(trip) {
       closingTime: schedule?.closingTime || null,
       lateEvent: schedule?.lateEvent || null,
       lastCloseTime: schedule?.lastCloseTime || null, // when alerts stop for the day
+      // Open or not, by its hours and its rides together (see parkstatus.js),
+      // so the app says what the server mutes by.
+      status: parkStatus(state),
+      counts: rideCounts(state.rides),
     },
     ntfyBase: NTFY_BASE,
     version: APP_VERSION,
@@ -148,6 +179,10 @@ async function dashboard(trip) {
     rides: Object.entries(state.rides || {}).map(([id, r]) => ({
       id,
       ...r,
+      // Its usual posted wait at this hour, where the archive knows one.
+      usual: usual[id] ?? null,
+      // Never posts a wait: listed apart, and never alerted about.
+      ...(isOtherAttraction(trip.parkId, id, r) ? { other: true } : {}),
       trend: r.status === 'OPERATING' ? waitTrend(state.waits?.[id]) : null,
       ...(r.status === 'DOWN' && r.downSince
         ? { outlook: downOutlook(trip.parkId, id, (Date.now() - r.downSince) / 60_000) }
@@ -200,7 +235,7 @@ async function handleApi(req, res, url) {
     if ((wait = limit.create.take(who))) return tooMany(res, wait);
     const body = requireObject(await readBody(req));
     if (typeof body.parkId !== 'string' || !getPark(body.parkId)) return json(res, 400, { error: 'unknown parkId' });
-    const trip = createTrip(body.parkId);
+    const trip = createTrip(body.parkId, { watched: defaultFollows(body.parkId) });
     knownCodes.add(who, trip.code);
     pollPark(trip.parkId); // warm up state so the first dashboard load is instant
     return json(res, 201, { trip: tripView(trip) });
@@ -236,8 +271,7 @@ async function handleApi(req, res, url) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
       return res.end();
     }
-    res.writeHead(200, { 'Content-Type': 'application/json', ETag: etag, 'Cache-Control': 'no-cache' });
-    return res.end(JSON.stringify(body));
+    return sendJson(res, 200, JSON.stringify(body), { ETag: etag, 'Cache-Control': 'no-cache' });
   }
 
   // Everything the ride detail sheet shows: live status, today's changes and
@@ -266,12 +300,8 @@ async function handleApi(req, res, url) {
     const state = parkState[trip.parkId] || {};
     const names = Object.fromEntries(Object.entries(state.rides || {}).map(([id, r]) => [id, r.name]));
     const dayStart = parkDayStart(zoneOf(trip.parkId));
-    const today = (state.recent || []).filter((e) => e.at >= dayStart);
     return json(res, 200, {
-      today: {
-        downs: today.filter((e) => e.type === 'DOWN').length,
-        rides: new Set(today.filter((e) => e.type === 'DOWN').map((e) => e.id)).size,
-      },
+      today: outagesToday(state.recent, state.rides, dayStart),
       week: parkSummary(history.episodes[trip.parkId] || [], history.fetched[trip.parkId] || [], names),
       estimates: scorecard(state.scores),
       crowd: crowdToday(trip.parkId),
@@ -289,7 +319,7 @@ async function handleApi(req, res, url) {
       // hopping back to a park restores it instead of starting over.
       trip.watchedByPark = { ...trip.watchedByPark, [trip.parkId]: trip.watched };
       trip.parkId = patch.parkId;
-      trip.watched = trip.watchedByPark[patch.parkId] ?? null;
+      trip.watched = Object.hasOwn(trip.watchedByPark, patch.parkId) ? trip.watchedByPark[patch.parkId] : defaultFollows(patch.parkId);
       trip.rideMutes = {};
       pollPark(trip.parkId);
     }
@@ -297,6 +327,8 @@ async function handleApi(req, res, url) {
     if (patch.mute !== undefined) trip.mute = patch.mute;
     if (patch.rideMutes !== undefined) trip.rideMutes = patch.rideMutes;
     if (patch.crowdAlerts !== undefined) trip.crowdAlerts = patch.crowdAlerts;
+    // A phone on ntfy said a test arrived: the topic reaches someone.
+    if (patch.ntfyWorking !== undefined) trip.ntfyConfirmedAt = patch.ntfyWorking ? Date.now() : null;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });
   }
@@ -315,6 +347,9 @@ async function handleApi(req, res, url) {
     const alerts = { ...trip.waitAlerts };
     if (req.method === 'PUT') {
       const { max } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      // Only a ride the park has: an alert for anything else could never fire.
+      const known = parkState[trip.parkId]?.rides;
+      if (!known || !Object.hasOwn(known, rideId)) return json(res, 404, { error: 'ride not found' });
       alerts[rideId] = { max, day: today, setAt: Date.now() };
       if (Object.keys(alerts).length > MAX_WAIT_ALERTS) return json(res, 400, { error: 'too many wait alerts' });
     } else delete alerts[rideId];
@@ -339,9 +374,11 @@ async function handleApi(req, res, url) {
     if (req.method === 'POST' && parts.length === 4) {
       const sub = parseSubscription(await readBody(req), isPushEndpoint);
       let device = trip.devices.find((d) => d.endpoint === sub.endpoint);
-      if (device) device.keys = sub.keys;
-      else {
-        device = { id: crypto.randomBytes(9).toString('base64url'), ...sub, mute: null, createdAt: Date.now() };
+      if (device) {
+        device.keys = sub.keys;
+        device.seenAt = Date.now();
+      } else {
+        device = { id: crypto.randomBytes(9).toString('base64url'), ...sub, mute: null, createdAt: Date.now(), seenAt: Date.now() };
         trip.devices.push(device);
         // A phone that reinstalled the app many times leaves old ones behind.
         if (trip.devices.length > MAX_DEVICES) trip.devices.splice(0, trip.devices.length - MAX_DEVICES);
@@ -359,15 +396,23 @@ async function handleApi(req, res, url) {
       saveTrips();
       return json(res, 200, { device: { id: device.id, mute: device.mute } });
     }
+    // The push service replaced this phone's subscription (the service
+    // worker's pushsubscriptionchange): same phone, same pause, new address.
+    if (req.method === 'PUT' && parts.length === 5) {
+      const sub = parseSubscription(await readBody(req), isPushEndpoint);
+      Object.assign(device, { endpoint: sub.endpoint, keys: sub.keys, seenAt: Date.now() });
+      saveTrips();
+      return json(res, 200, { device: { id: device.id, mute: device.mute } });
+    }
     if (req.method === 'DELETE' && parts.length === 5) {
       trip.devices = trip.devices.filter((d) => d !== device);
       saveTrips();
       return json(res, 200, { ok: true });
     }
     if (req.method === 'POST' && parts[5] === 'test') {
-      const ok = await deliver(trip, {
+      const { ok } = await deliver(trip, {
         title: 'ParkAlert is on',
-        message: 'This phone will get an alert when a ride you follow goes down or comes back up.',
+        message: 'This phone will get an alert when a ride with alerts on goes down or comes back up.',
         click: appLink(trip),
       }, { device: device.id, tag: 'test' });
       return json(res, ok ? 200 : 502, { ok });
@@ -376,13 +421,19 @@ async function handleApi(req, res, url) {
   }
 
   if (trip && req.method === 'POST' && parts[3] === 'test') {
-    // It goes to every phone on the trip, not just the one that asked, so it
-    // says what it is rather than "this phone".
-    const ok = await deliver(trip, {
+    // { to: 'ntfy' } from the ntfy setup: the trip's topic only, since the
+    // phone being set up is the one checking. Otherwise every phone on the
+    // trip, asked for behind a confirm, so it says what it is rather than
+    // "this phone".
+    const body = await readBody(req);
+    const ntfyOnly = body?.to === 'ntfy';
+    const { ok } = await deliver(trip, {
       title: `ParkAlert test for trip ${trip.code}`,
-      message: 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
+      message: ntfyOnly
+        ? 'Sent from the ntfy setup. If you can read this, ntfy alerts reach this phone.'
+        : 'Someone on your trip sent a test. If you can read this, alerts reach this phone.',
       click: appLink(trip),
-    }, { tag: 'test' });
+    }, { tag: 'test', ntfyOnly });
     return json(res, ok ? 200 : 502, { ok });
   }
 
@@ -415,10 +466,27 @@ function loadStatic(rel) {
 }
 
 function serveStatic(req, res, url) {
-  let filePath = path.normalize(path.join(PUBLIC_DIR, decodeURIComponent(url.pathname)));
+  let decoded;
+  try {
+    decoded = decodeURIComponent(url.pathname);
+  } catch {
+    // A broken escape ("%E0%A4%A") is the client's mistake, not a crash.
+    return json(res, 400, { error: 'bad escape in the address' });
+  }
+  let filePath = path.normalize(path.join(PUBLIC_DIR, decoded));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     return res.end();
+  }
+  // A trip's own manifest: installed from a trip, the Home Screen app opens
+  // on that trip. On iPhone it has storage of its own, apart from Safari's,
+  // so without this it opened to the first-run screen with no trip.
+  const tripParam = url.searchParams.get('trip');
+  if (url.pathname === '/manifest.webmanifest' && /^[A-Za-z0-9]{6}$/.test(tripParam || '')) {
+    const manifest = JSON.parse(loadStatic('manifest.webmanifest').raw.toString('utf8'));
+    manifest.start_url = `/?trip=${tripParam.toUpperCase()}`;
+    res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify(manifest));
   }
   // Any path that isn't a file is a screen of the app (/, /ride/<id>, a
   // tapped push's link), and gets the page, which routes itself.

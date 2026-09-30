@@ -61,11 +61,16 @@ export function parseTripPatch(body, isPark) {
     if (typeof body.crowdAlerts !== 'boolean') bad('crowdAlerts must be true or false');
     out.crowdAlerts = body.crowdAlerts;
   }
+  if (body.ntfyWorking !== undefined) {
+    if (typeof body.ntfyWorking !== 'boolean') bad('ntfyWorking must be true or false');
+    out.ntfyWorking = body.ntfyWorking;
+  }
   if (body.mute !== undefined) {
     if (body.mute === null || body.mute === false) out.mute = null;
     else {
       const until = isPlainObject(body.mute) ? body.mute.until ?? null : undefined;
       if (until !== null && !Number.isFinite(until)) bad('mute must be null or { until: epoch ms | null }');
+      if (until !== null && !muteTimeOk(until)) bad('mute.until must be a time within the next year');
       out.mute = { until };
     }
   }
@@ -94,12 +99,16 @@ export function parseSubscription(body, isPushEndpoint) {
   return { endpoint: sub.endpoint, keys: { p256dh, auth } };
 }
 
+// A pause ends at a real time: not before 2020 (a negative or zero time is
+// a bug somewhere), and within a year.
+const muteTimeOk = (t) => t > Date.UTC(2020, 0, 1) && t < Date.now() + 366 * 24 * 3600_000;
+
 // PATCH /api/trips/:code/devices/:id: { mute: null | { until: epoch ms | null } }.
 export function parseDeviceMute(body) {
   requireObject(body);
   if (body.mute === null) return null;
   if (!isPlainObject(body.mute)) bad('mute must be null or { until }');
   const { until } = body.mute;
-  if (until !== null && (!Number.isFinite(until) || until < 0)) bad('until must be epoch milliseconds or null');
+  if (until !== null && (!Number.isFinite(until) || !muteTimeOk(until))) bad('until must be a time within the next year, or null');
   return { until };
 }

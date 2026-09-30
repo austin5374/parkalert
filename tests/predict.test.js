@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { remaining, estimate, describe, classifyLive, MIN_SAMPLES } from '../server/predict.js';
-import { applyLiveData, MISSING_POLLS, CLOSED_OUTAGE_MS } from '../server/poller.js';
+import { remaining, estimate, describe, advise, classifyLive, MIN_SAMPLES } from '../server/predict.js';
+import { applyLiveData, MISSING_POLLS, MISSING_DOWN_MS, CLOSED_OUTAGE_MS } from '../server/poller.js';
 
 const ep = (minutes, extra = {}) => ({ rideId: 'a', minutes, endedAs: 'OPERATING', kind: 'breakdown', ...extra });
 const eps = (list, extra) => list.map((m) => ep(m, extra));
@@ -56,34 +56,41 @@ test('holds pool hold episodes only, falling back to every park', () => {
   assert.equal(elsewhere.basis, 'all parks');
 });
 
-test('breakdowns never borrow from other parks', () => {
-  assert.equal(estimate({ P: [], Q: eps([5, 6, 7, 8, 9, 10]) }, 'P', 'a', 0, 'breakdown'), null);
+test("breakdowns never borrow from other parks: with none here, the built-in prior", () => {
+  assert.equal(estimate({ P: [], Q: eps([5, 6, 7, 8, 9, 10]) }, 'P', 'a', 0, 'breakdown').basis, 'prior');
 });
 
-test('down longer than nearly all history says so instead of inventing a number', () => {
+test('down longer than nearly all history says so instead of inventing a number, and advises going', () => {
   const est = estimate({ P: eps([5, 6, 7, 8, 9, 10]) }, 'P', 'a', 120, 'breakdown');
   assert.deepEqual(est, { longerThanUsual: true, kind: 'breakdown' });
-  assert.equal(describe(est), 'Down longer than most outages here');
+  assert.equal(describe(est), 'Down longer than nearly every past outage like it');
+  assert.deepEqual(advise(est), { key: 'long', verdict: 'Ride something else', detail: 'Outages this long rarely end soon.' });
 });
 
-test('no history at all gives no estimate', () => {
-  assert.equal(estimate({}, 'P', 'a', 0, 'breakdown'), null);
+test('no history at all falls back to the built-in prior, which says so', () => {
+  const est = estimate({}, 'P', 'a', 0, 'breakdown');
+  assert.equal(est.basis, 'prior');
+  assert.ok(est.p50 >= 10 && est.p50 <= 20, `a typical breakdown, not ${est.p50}`);
+  assert.ok(estimate({}, 'P', null, 0, 'hold').p50 > est.p50, 'holds run longer');
+  assert.ok(advise(est), 'every down ride says what to do');
+  // Past the prior's long tail, it says so rather than guessing.
+  assert.equal(estimate({}, 'P', 'a', 600, 'breakdown').longerThanUsual, true);
   assert.equal(describe(null), null);
 });
 
 test('describe reads like a person said it', () => {
-  assert.equal(describe({ p25: 4.2, p50: 12, p75: 38, stayedDownShare: 0 }), 'Usually back in 4 to 40 min');
-  assert.equal(describe({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), 'Usually back in about 30 min');
+  assert.equal(describe({ p25: 4.2, p50: 12, p75: 38, stayedDownShare: 0 }), 'Often back in 4 to 40 min');
+  assert.equal(describe({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), 'Often back in about 30 min');
   assert.equal(
     describe({ p25: 30, p50: 60, p75: 120, stayedDownShare: 0.14 }),
-    'Usually back in 30 min to 2 hr. About 14% stay closed for the day'
+    'Often back in 30 min to 2 hr. About 14% stay closed for the day'
   );
 });
 
-test('a live hold needs five running rides down within ten minutes of this one', () => {
+test('a live hold needs five running rides down within three minutes of this one', () => {
   const t = 1_000_000_000;
   const rides = {};
-  for (let i = 0; i < 5; i++) rides[`r${i}`] = { status: 'DOWN', downSince: t + i * 60_000, downFrom: 'OPERATING' };
+  for (let i = 0; i < 5; i++) rides[`r${i}`] = { status: 'DOWN', downSince: t + i * 30_000, downFrom: 'OPERATING' };
   rides.later = { status: 'DOWN', downSince: t + 60 * 60_000, downFrom: 'OPERATING' };
   assert.deepEqual(classifyLive(rides, 'r0'), { kind: 'hold', rides: 5 });
   assert.deepEqual(classifyLive(rides, 'later'), { kind: 'breakdown' });
@@ -117,8 +124,40 @@ test('a ride missing from one response keeps its outage clock, and is dropped if
   ({ rides, events } = applyLiveData(rides, att('DOWN'), 180_000));
   assert.equal(rides.a.downSince, 60_000, 'same outage when it reappears');
   assert.deepEqual(events, []);
+  // Down when it left: kept for half an hour, so its return is still "back up".
   for (let i = 0; i < MISSING_POLLS + 1; i++) ({ rides } = applyLiveData(rides, onlyB, 240_000 + i * 60_000));
-  assert.equal(rides.a, undefined, 'gone after several polls');
+  assert.equal(rides.a.status, 'DOWN', 'a down ride is kept longer than a running one');
+  ({ rides, events } = applyLiveData(rides, att('OPERATING'), 900_000));
+  assert.deepEqual([events[0].type, events[0].downtimeMs], ['UP', 840_000], 'back from the missing: the whole outage');
+  // Down and gone for half an hour: phones hear it is no longer listed.
+  ({ rides } = applyLiveData(rides, att('DOWN'), 960_000));
+  for (const t of [1_020_000, 1_020_000 + MISSING_DOWN_MS]) ({ rides, events } = applyLiveData(rides, onlyB, t));
+  assert.deepEqual(events.map((e) => e.type), ['GONE']);
+  assert.equal(rides.a, undefined);
+  // A running ride that goes missing is simply dropped after a few polls.
+  ({ rides } = applyLiveData({}, att('OPERATING').slice(0, 1), 0));
+  for (let i = 1; i <= MISSING_POLLS + 1; i++) ({ rides, events } = applyLiveData(rides, [], i * 60_000));
+  assert.deepEqual([rides.a, events], [undefined, []]);
+});
+
+test('after a gap in the feed, a change is known only to fall between the two polls', () => {
+  const att = (status) => [{ id: 'a', name: 'A', status, waitTime: null }];
+  let rides, events;
+  ({ rides } = applyLiveData({}, att('OPERATING'), 0, { prevPoll: null, pollMs: 60_000 }));
+  // The feed was down for four minutes; at 5 min the ride is seen down.
+  ({ rides, events } = applyLiveData(rides, att('DOWN'), 5 * 60_000, { prevPoll: 60_000, pollMs: 60_000 }));
+  assert.equal(events[0].after, 60_000);
+  assert.deepEqual([rides.a.downExact, rides.a.downAfter], [false, 60_000]);
+  ({ rides } = applyLiveData(rides, att('DOWN'), 6 * 60_000, { prevPoll: 5 * 60_000, pollMs: 60_000 }));
+  ({ events } = applyLiveData(rides, att('OPERATING'), 7 * 60_000, { prevPoll: 6 * 60_000, pollMs: 60_000 }));
+  // Went down somewhere between 1 and 5 min, seen back up at 7: at least 2 min, at most 6.
+  assert.deepEqual(events[0].downtimeRange, [2 * 60_000, 6 * 60_000]);
+});
+
+test('a ride already down when first seen is marked so, with no start time claimed', () => {
+  const { rides } = applyLiveData({}, [{ id: 'a', name: 'A', status: 'DOWN', waitTime: null }], 0);
+  assert.equal(rides.a.downExact, false);
+  assert.equal(rides.a.downAfter, undefined);
 });
 
 test('estimates pick up newly archived days', () => {
@@ -180,9 +219,10 @@ test('a ride still down when the rest of its hold reopens stays in the hold', as
   const live = (downIds) => Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, name: `R${i}`, status: downIds.includes(i) ? 'DOWN' : 'OPERATING', waitTime: null }));
   let { rides } = applyLiveData({}, live([]), t);
   ({ rides } = applyLiveData(rides, live([0, 1, 2, 3, 4, 5, 6]), t + 60_000));
-  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'hold', rides: 7 });
+  const kindOf = (id) => { const k = classifyLive(rides, id); return [k.kind, k.rides]; };
+  assert.deepEqual(kindOf('r6'), ['hold', 7]);
   ({ rides } = applyLiveData(rides, live([6]), t + 40 * 60_000));
-  assert.deepEqual(classifyLive(rides, 'r6'), { kind: 'hold', rides: 7 });
+  assert.deepEqual(kindOf('r6'), ['hold', 7]);
   // Reopening ends it; going down again later is a new outage.
   ({ rides } = applyLiveData(rides, live([]), t + 50 * 60_000));
   ({ rides } = applyLiveData(rides, live([6]), t + 90 * 60_000));
@@ -190,15 +230,15 @@ test('a ride still down when the rest of its hold reopens stays in the hold', as
 });
 
 test('ranges past an hour read in hours, and the lightning rule says it is a rule', () => {
-  assert.equal(describe({ p25: 45, p50: 60, p75: 92, stayedDownShare: 0 }), 'Usually back in 45 min to 1 hr 30 min');
-  assert.equal(describe({ p25: 70, p50: 80, p75: null, stayedDownShare: 0 }), 'Usually back in about 1 hr 20 min');
-  assert.equal(describe({ p25: 30, p50: 35, p75: 45, stayedDownShare: 0, basis: 'rule' }), 'By the 30-minute rule, back in 30 to 45 min');
+  assert.equal(describe({ p25: 45, p50: 60, p75: 92, stayedDownShare: 0 }), 'Often back in 45 min to 1 hr 30 min');
+  assert.equal(describe({ p25: 70, p50: 80, p75: null, stayedDownShare: 0 }), 'Often back in about 1 hr 20 min');
+  assert.equal(describe({ p25: 30, p50: 35, p75: 45, stayedDownShare: 0, basis: 'rule' }), 'By the 30-minute lightning rule, back in 30 to 45 min');
 });
 
 test('the window is the range as the text states it', async () => {
   const { shownWindow } = await import('../server/predict.js');
   const est = { p25: 11.3, p50: 20, p75: 37.8, stayedDownShare: 0 };
-  assert.equal(describe(est), 'Usually back in 11 to 40 min');
+  assert.equal(describe(est), 'Often back in 11 to 40 min');
   assert.deepEqual(shownWindow(est), { lo: 11, hi: 40 });
   assert.deepEqual(shownWindow({ p25: 20, p50: 30, p75: null, stayedDownShare: 0 }), { lo: 30, hi: null });
   assert.equal(shownWindow({ longerThanUsual: true }), null);
@@ -230,4 +270,57 @@ test('the advice follows the chance, closing time and closed-for-the-day share',
   assert.equal(advise({ p25: 30, p50: 35, p75: 45, basis: 'rule' }).key, 'nearby', 'the lightning rule has no curve');
   assert.equal(advise(null), null);
   assert.equal(advise(est({ 15: 0.7, 30: 0.8, 60: 0.9 })).detail, '70% of outages like this are over within 15 min.');
+});
+
+// Five polls a minute apart at one park: A, then B, then a wave of three.
+const wave = (stormAt) => {
+  const t = 2_000_000_000;
+  const names = ['A', 'B', 'C', 'D', 'E'];
+  const live = (downs) => names.map((n) => ({ id: n, name: n, status: downs.includes(n) ? 'DOWN' : 'OPERATING', waitTime: null }));
+  let { rides } = applyLiveData({}, live([]), t);
+  ({ rides } = applyLiveData(rides, live(['A']), t + 40_000, { stormAt }));
+  ({ rides } = applyLiveData(rides, live(['A', 'B']), t + 70_000, { stormAt }));
+  ({ rides } = applyLiveData(rides, live(['A', 'B', 'C', 'D', 'E']), t + 100_000, { stormAt }));
+  return rides;
+};
+
+test('breakdowns already announced do not turn into a hold when a wave follows', () => {
+  const rides = wave(null);
+  for (const id of ['A', 'B', 'C', 'D', 'E']) assert.equal(classifyLive(rides, id).kind, 'breakdown', id);
+});
+
+test('when the weather reports lightning, rides that went down first join the storm hold', () => {
+  const rides = wave(() => true);
+  const kinds = ['A', 'B', 'C', 'D', 'E'].map((id) => classifyLive(rides, id));
+  assert.ok(kinds.every((k) => k.kind === 'hold' && k.rides === 5));
+  assert.equal(new Set(kinds.map((k) => k.incident)).size, 1, 'one hold, one incident');
+});
+
+test('a hold rolling in over two polls is one incident', () => {
+  const t = 3_000_000_000;
+  const ids = Array.from({ length: 8 }, (_, i) => `h${i}`);
+  const live = (n) => ids.map((id, i) => ({ id, name: id, status: i < n ? 'DOWN' : 'OPERATING', waitTime: null }));
+  let { rides } = applyLiveData({}, live(0), t);
+  ({ rides } = applyLiveData(rides, live(5), t + 60_000));
+  const next = applyLiveData(rides, live(8), t + 120_000);
+  rides = next.rides;
+  const { events } = next;
+  const incidents = new Set(ids.map((id) => rides[id].incident));
+  assert.equal(incidents.size, 1);
+  assert.ok(ids.every((id) => rides[id].liveKind === 'hold' && rides[id].holdSize === 8));
+  assert.ok(events.every((ev) => ev.ride.incident === [...incidents][0]), 'the new rides\' events carry the incident');
+});
+
+test('one card, one set of numbers: the same rounded share everywhere, and no certainties', () => {
+  const est = { p25: 10, p50: 20, p75: 40, stayedDownShare: 0.3, chance: { 15: 0.3, 30: 0.5, 60: 0.7 }, n: 10 };
+  assert.match(describe(est), /About 30% stay closed for the day/);
+  assert.equal(advise(est).detail, "30% of outages like this didn't reopen that day.");
+  // A quarter reads as 25% in both places (it read "3 in 10" beside "25%").
+  const quarter = { ...est, stayedDownShare: 0.25 };
+  assert.match(describe(quarter), /About 25% stay closed/);
+  assert.notEqual(advise(quarter).key, 'closed');
+  const sure = { p25: 2, p50: 5, p75: 9, stayedDownShare: 0, chance: { 15: 1, 30: 1, 60: 1 }, n: 10 };
+  assert.equal(advise(sure).detail, 'Nearly all outages like this are over within 15 min.');
+  const never = { p25: 70, p50: 90, p75: 120, stayedDownShare: 0, chance: { 15: 0, 30: 0, 60: 0 }, n: 10 };
+  assert.equal(advise(never).detail, 'These usually take over an hour.');
 });

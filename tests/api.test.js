@@ -136,6 +136,15 @@ test('the test alert reaches the trip topic with a tap-to-open link', async () =
   assert.equal(fakes.pushes[0].topic, trip.topic);
 });
 
+test("a test from the ntfy setup says so, and an odd body still means everyone", async () => {
+  const trip = await newTrip();
+  fakes.pushes.length = 0;
+  assert.equal((await call('POST', `/api/trips/${trip.code}/test`, { to: 'ntfy' })).status, 200);
+  assert.match(fakes.pushes[0].message, /ntfy setup/);
+  assert.equal((await call('POST', `/api/trips/${trip.code}/test`, 'null')).status, 200);
+  assert.match(fakes.pushes[1].message, /Someone on your trip/);
+});
+
 test('unknown routes are 404', async () => {
   assert.equal((await call('GET', '/api/nope')).status, 404);
   assert.equal((await call('DELETE', '/api/parks')).status, 404);
@@ -192,6 +201,10 @@ test('the page and the dashboard carry the same app version, so an old page can 
 
 test('an unchanged dashboard is a 304 with no body', async () => {
   const trip = await newTrip();
+  // Creating a trip warms its park with a poll; a fresh snapshot is answered
+  // without waiting for it, so let it land before comparing.
+  const { pollPark } = await import('../server/poller.js');
+  await pollPark(MK);
   const first = await fetch(`${base}/api/trips/${trip.code}/dashboard`);
   const etag = first.headers.get('etag');
   assert.ok(etag);
@@ -332,4 +345,73 @@ test('wait alerts can be set, re-set and removed, and bad ones are refused', asy
   r = await call('DELETE', `/api/trips/${trip.code}/wait-alerts/${MK}-1`);
   assert.deepEqual(r.body.trip.waitAlerts, {});
   assert.deepEqual((await call('GET', `/api/trips/${trip.code}`)).body.trip.waitAlerts, {});
+});
+
+test('API JSON over 1 KB is gzipped for clients that take it', async () => {
+  const trip = await newTrip();
+  const res = await fetch(`${base}/api/trips/${trip.code}/dashboard`, { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(res.headers.get('content-encoding'), 'gzip');
+  assert.equal(res.headers.get('vary'), 'Accept-Encoding');
+  assert.ok((await res.json()).rides, 'and reads as the same JSON');
+  const small = await fetch(`${base}/api/trips/${trip.code}`, { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(small.headers.get('content-encoding'), null, 'small answers are not worth it');
+});
+
+test("the page's one inline script is allowed by its hash, and no other", async () => {
+  const res = await fetch(`${base}/`);
+  const csp = res.headers.get('content-security-policy');
+  const html = await res.text();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const { createHash } = await import('node:crypto');
+  const hash = createHash('sha256').update(script).digest('base64');
+  assert.match(csp, new RegExp(`script-src 'self' 'sha256-${hash.replace(/[+/]/g, '\\$&')}'`));
+  assert.doesNotMatch(csp, /unsafe-inline'[^;]*;[^;]*script|script-src[^;]*unsafe-inline/);
+});
+
+test('bad input at the edges is a 400 or 404, never a 500 or a silent accept', async () => {
+  // A broken escape in the address.
+  assert.equal((await fetch(`${base}/%E0%A4%A`)).status, 400);
+  const trip = await newTrip();
+  await call('GET', `/api/trips/${trip.code}/dashboard`);
+  // A wait alert for a ride the park doesn't have could never fire.
+  assert.equal((await call('PUT', `/api/trips/${trip.code}/wait-alerts/no-such-ride`, { max: 30 })).status, 404);
+  assert.equal((await call('PUT', `/api/trips/${trip.code}/wait-alerts/${MK}-1`, { max: 30 })).status, 200);
+  // A pause ends at a real time within the year.
+  for (const until of [-5, 0, Date.now() + 400 * 24 * 3600_000]) {
+    assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { mute: { until } })).status, 400, `until ${until}`);
+  }
+  assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { mute: { until: Date.now() + 3600_000 } })).status, 200);
+});
+
+test("a trip's own manifest opens the installed app on that trip", async () => {
+  const plain = await (await fetch(`${base}/manifest.webmanifest`)).json();
+  assert.equal(plain.start_url, '/');
+  const res = await fetch(`${base}/manifest.webmanifest?trip=mklabs`);
+  assert.match(res.headers.get('content-type'), /manifest\+json/);
+  const own = await res.json();
+  assert.equal(own.start_url, '/?trip=MKLABS');
+  assert.equal(own.id, plain.id, 'still the same app');
+  assert.equal((await (await fetch(`${base}/manifest.webmanifest?trip=<script>`)).json()).start_url, '/', 'only a code');
+});
+
+test('a phone whose push subscription was replaced keeps its place and its pause', async () => {
+  const trip = await newTrip();
+  const { generateKeyPairSync, randomBytes } = await import('node:crypto');
+  const sub = (tag) => {
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    const raw = publicKey.export({ format: 'jwk' });
+    const p256dh = Buffer.concat([Buffer.from([4]), Buffer.from(raw.x, 'base64url'), Buffer.from(raw.y, 'base64url')]).toString('base64url');
+    return { subscription: { endpoint: `https://fcm.googleapis.com/fcm/send/${tag}`, keys: { p256dh, auth: randomBytes(16).toString('base64url') } } };
+  };
+  const made = await call('POST', `/api/trips/${trip.code}/devices`, sub('old'));
+  assert.equal(made.status, 201);
+  const id = made.body.device.id;
+  await call('PATCH', `/api/trips/${trip.code}/devices/${id}`, { mute: { until: null } });
+  const put = await call('PUT', `/api/trips/${trip.code}/devices/${id}`, sub('new'));
+  assert.equal(put.status, 200);
+  assert.deepEqual(put.body.device, { id, mute: { until: null } });
+  const { trips } = await import('../server/store.js');
+  assert.equal(trips[trip.code].devices.length, 1);
+  assert.match(trips[trip.code].devices[0].endpoint, /\/new$/);
+  assert.equal((await call('PUT', `/api/trips/${trip.code}/devices/nope`, sub('x'))).status, 404);
 });

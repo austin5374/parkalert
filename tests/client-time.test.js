@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const ctx = vm.createContext({ Intl, Date, Object, Number, String, Math });
 vm.runInContext(fs.readFileSync(new URL('../public/time.js', import.meta.url), 'utf8'), ctx);
-const { nextLocalHour, localDay } = ctx;
+const { nextLocalHour, localDay, extractTripCode, matchesSearch, localClock } = ctx;
 const NY = 'America/New_York';
 const iso = (t) => new Date(t).toISOString();
 
@@ -60,4 +60,44 @@ test('ride search ignores accents, apostrophes, "the" and word order', () => {
   assert.ok(!matchesSearch('Space Mountain', 'thunder'));
   assert.ok(!matchesSearch('Haunted Mansion', 'haunted pirates'));
   assert.ok(matchesSearch('Anything', '   '));
+});
+
+test('the join field finds the code in whatever was pasted', () => {
+  assert.equal(extractTripCode(' MKLABS'), 'MKLABS');
+  assert.equal(extractTripCode('mklabs '), 'MKLABS');
+  assert.equal(extractTripCode('Join my ParkAlert trip at Magic Kingdom. Code MS3ETN\nhttps://parkalert.app/?join=MS3ETN'), 'MS3ETN');
+  assert.equal(extractTripCode('https://parkalert.app/?join=tmmdt5'), 'TMMDT5');
+  assert.equal(extractTripCode('Code: MS3ETN'), 'MS3ETN');
+  // Typing is left alone until a code is there.
+  assert.equal(extractTripCode('MKL'), null);
+  assert.equal(extractTripCode('Join m'), null);
+});
+
+test('search understands digits, short forms, plurals and ride acronyms', () => {
+  const sdmt = 'Seven Dwarfs Mine Train';
+  const btmr = 'Big Thunder Mountain Railroad';
+  assert.equal(matchesSearch(sdmt, '7 dwarfs'), true);
+  assert.equal(matchesSearch(sdmt, 'seven dwarves'), true);
+  assert.equal(matchesSearch(sdmt, '7DMT'), true);
+  assert.equal(matchesSearch(btmr, 'big thunder mtn'), true);
+  assert.equal(matchesSearch(btmr, 'BTMRR'), true);
+  assert.equal(matchesSearch('Pirates of the Caribbean', 'potc'), true);
+  assert.equal(matchesSearch("Rock 'n' Roller Coaster Starring Aerosmith", 'rnrc'), true);
+  assert.equal(matchesSearch("Rémy's Ratatouille Adventure", 'remys'), true);
+  assert.equal(matchesSearch('Space Mountain', 'mountain space'), true);
+  // Still selective.
+  assert.equal(matchesSearch(sdmt, 'thunder'), false);
+  assert.equal(matchesSearch('Haunted Mansion', 'hmx'), false);
+  assert.equal(matchesSearch('Haunted Mansion', 'h'), true, 'a single letter starts a word');
+});
+
+test("a push's park-clock times are shown in the phone's own format", () => {
+  const nb = '\u00a0';
+  assert.match(localClock(`Went down at 9:44${nb}AM · EPCOT`, 'en-GB'), /^Went down at 0?9:44 · EPCOT$/);
+  assert.equal(localClock(`Rides reopen about 30 min after the last lightning: 7:47 to 8:02${nb}PM`, 'en-GB'), 'Rides reopen about 30 min after the last lightning: 19:47 to 20:02');
+  assert.equal(localClock(`Usually 89 at 4${nb}PM.`, 'de-DE'), 'Usually 89 at 16 Uhr.');
+  assert.match(localClock(`Storm passed at 12:05${nb}AM`, 'en-GB'), /^Storm passed at 0?0:05$/);
+  // A US phone gets the push exactly as sent.
+  const us = `Often back 8:05 to 8:27${nb}AM, usually 50 at 2${nb}PM`;
+  assert.equal(localClock(us, 'en-US'), us);
 });

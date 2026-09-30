@@ -5,11 +5,13 @@
 //   npm run lab -- --auto    also fires a random scenario every 90 seconds
 //   npm run lab -- --keep    reuse .lab-data from the last run instead of reseeding
 //
-// Everything is local: a fake ThemeParks.wiki feed, fake airport weather, a
-// fake ntfy that captures every push, and a throwaway data folder seeded with
-// 30 days of outage history and wait profiles, trips on three parks, one ride
-// already down for five hours, and rides with hostile names. The server polls
-// every 10 seconds. Nothing here talks to production.
+// A fake ThemeParks.wiki feed, fake airport weather, a fake ntfy that captures
+// every push, and a throwaway data folder seeded with 30 days of outage
+// history and wait profiles, trips on three parks, one ride already down for
+// five hours, and rides with hostile names. The server polls every 10
+// seconds. The one call out is for each park's real ride list at start-up
+// (made-up rides if that fails); nothing here talks to production, and pushes
+// to phones go only to phones that signed up to a lab trip.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -70,12 +72,21 @@ function schedule(park) {
   };
 }
 
-// Waits wander a little each tick, around each ride's typical wait.
+// The seeded history's shape of a day: waits low at opening, highest mid-day.
+// k: park-local hours since the lab's park opened, six hours before start-up.
+const localHour = (t, tz) => Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date(t)));
+const openHourOf = (tz) => (localHour(now0, tz) + 18) % 24;
+const dayShape = (k) => (k > 12 ? 0.55 : 0.55 + 0.6 * Math.sin((k / 12) * Math.PI));
+// A ride's wait on a usual day right now, as the seeded history has it (a
+// median day is 1.05 times its base), times the crowd scenario's factor.
+const usualNow = (w, r) => r.base * 1.05 * dayShape((localHour(Date.now(), w.tz) - openHourOf(w.tz) + 24) % 24) * w.crowd;
+
+// Waits wander a little each tick, around each ride's usual wait for now.
 function tick() {
   for (const w of Object.values(world)) {
     for (const r of w.rides.values()) {
       if (r.status !== 'OPERATING' || r.walkOn) continue;
-      const target = r.base * w.crowd;
+      const target = usualNow(w, r);
       r.waitTime = Math.max(5, Math.round((r.waitTime + (target - r.waitTime) * 0.2 + rand(-5, 5)) / 5) * 5);
     }
   }
@@ -85,7 +96,7 @@ setInterval(tick, 10_000);
 const later = (min, fn) => setTimeout(fn, min * MIN);
 const setStatus = (park, r, status) => {
   r.status = status;
-  if (status === 'OPERATING' && !r.walkOn) r.waitTime = Math.round((r.base * world[park.id].crowd) / 5) * 5;
+  if (status === 'OPERATING' && !r.walkOn) r.waitTime = Math.max(5, Math.round(usualNow(world[park.id], r) / 5) * 5);
   if (status !== 'OPERATING') r.waitTime = null;
 };
 const running = (park) => [...world[park.id].rides.values()].filter((r) => r.status === 'OPERATING' && !r.hostile);
@@ -106,6 +117,7 @@ const SCENARIOS = {
   }],
   storm: ['Lightning: outdoor rides close together (a hold)', (park) => {
     const w = world[park.id];
+    if (!w.metar) w.stormBegan = Date.now();
     w.metar = 'TS';
     const outdoor = running(park).filter((r) => r.outdoor);
     for (const r of outdoor) setStatus(park, r, 'DOWN');
@@ -113,7 +125,7 @@ const SCENARIOS = {
   }],
   clear: ['The storm passes; held rides reopen over the next 3 to 6 min', (park) => {
     const w = world[park.id];
-    w.metar = null;
+    endStorm(w);
     log(`${park.name}: storm passed`);
     for (const r of w.rides.values()) if (r.status === 'DOWN' && r.outdoor) later(rand(3, 6), () => { setStatus(park, r, 'OPERATING'); log(`${park.name}: ${r.name} reopened after storm`); });
   }],
@@ -154,7 +166,7 @@ const SCENARIOS = {
     world[park.id].fail = 'error'; log(`${park.name}: feed failing`);
     later(4, () => { world[park.id].fail = null; log(`${park.name}: feed back`); });
   }],
-  slow: ['The ride feed takes 25 s to answer for 3 min', (park) => {
+  slow: ['The ride feed takes 12 s to answer for 3 min (under the server\'s 20 s limit: slow, not down)', (park) => {
     world[park.id].fail = 'slow'; log(`${park.name}: feed slow`);
     later(3, () => { world[park.id].fail = null; log(`${park.name}: feed fast again`); });
   }],
@@ -168,14 +180,33 @@ const SCENARIOS = {
   }],
   recover: ['Everything back to normal now', (park) => {
     const w = world[park.id];
-    w.metar = null; w.fail = null; w.crowd = 1; w.close = Date.now() + 6 * HOUR;
+    endStorm(w); w.fail = null; w.crowd = 1; w.close = Date.now() + 6 * HOUR;
     for (const r of w.rides.values()) { r.hidden = false; setStatus(park, r, 'OPERATING'); }
     log(`${park.name}: all recovered`);
   }],
 };
 
 // ---------- fake upstream + control panel ----------
-const METAR = (station, ts) => `${station} ${new Date().toISOString().slice(8, 10)}${new Date().toISOString().slice(11, 13)}${new Date().toISOString().slice(14, 16)}Z 27012G25KT 5SM ${ts ? '+TSRA ' : ''}SCT030${ts ? 'CB' : ''} 29/22 A2992`;
+function endStorm(w) {
+  if (w.metar) w.stormEnded = Date.now();
+  w.metar = null;
+}
+
+// A station's report, as the real ones read: thunder while any park using
+// the station has its storm on (a storm at EPCOT is lightning at Kissimmee
+// for Magic Kingdom too), with the minute it began in the remarks, and the
+// minute it ended for an hour after, as a special report gives them.
+const hhmm = (t) => new Date(t).toISOString().slice(11, 16).replace(':', '');
+function METAR(station) {
+  const now = new Date().toISOString();
+  const worlds = PARKS.filter((p) => (p.weather || []).includes(station)).map((p) => world[p.id]).filter(Boolean);
+  const on = worlds.filter((w) => w.metar === 'TS');
+  const head = `${station} ${now.slice(8, 10)}${now.slice(11, 13)}${now.slice(14, 16)}Z 27012G25KT 5SM`;
+  if (on.length) return `${head} +TSRA SCT030CB 29/22 A2992 RMK AO2 TSB${hhmm(Math.min(...on.map((w) => w.stormBegan)))}`;
+  const ended = worlds.filter((w) => w.stormEnded && Date.now() - w.stormEnded < HOUR).sort((a, b) => b.stormEnded - a.stormEnded)[0];
+  if (ended) return `${head} SCT030 29/22 A2992 RMK AO2 TSB${hhmm(ended.stormBegan)}E${hhmm(ended.stormEnded)}`;
+  return `${head} SCT030 29/22 A2992 RMK AO2`;
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${LAB_PORT}`);
@@ -196,7 +227,7 @@ const server = http.createServer(async (req, res) => {
     for (const park of PARKS) {
       for (const id of park.weather || []) {
         if (ids.includes(id) && !out.some((m) => m.icaoId === id)) {
-          out.push({ icaoId: id, obsTime: Math.floor(Date.now() / 1000), rawOb: METAR(id, world[park.id]?.metar === 'TS') });
+          out.push({ icaoId: id, obsTime: Math.floor(Date.now() / 1000), rawOb: METAR(id) });
         }
       }
     }
@@ -211,7 +242,7 @@ const server = http.createServer(async (req, res) => {
     if (!w) return json(404, {});
     if (m[2] === 'history') return json(403, { error: { type: 'HISTORY_WINDOW_EXCEEDED', message: 'lab' } });
     if (w.fail === 'error') return json(503, {});
-    if (w.fail === 'slow') await new Promise((r) => setTimeout(r, 25_000));
+    if (w.fail === 'slow') await new Promise((r) => setTimeout(r, 12_000));
     if (m[2] === 'schedule') return json(200, schedule(park));
     return json(200, {
       liveData: [...w.rides.values()].filter((r) => !r.hidden).map((r) => ({
@@ -250,20 +281,20 @@ const PANEL = `<!doctype html><meta charset=utf-8><meta name=viewport content="w
 <style>body{font:15px system-ui;margin:0;padding:16px;background:#111;color:#eee}h1{font-size:20px}a{color:#4da3ff}
 button{font:inherit;margin:3px;padding:8px 10px;border-radius:8px;border:0;background:#2a2a2e;color:#eee;cursor:pointer}button:hover{background:#3a3a40}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}.box{background:#1c1c1e;border-radius:12px;padding:12px}
-li{margin:4px 0}small{color:#999}select{font:inherit;padding:6px;border-radius:8px}</style>
+li{margin:4px 0}small{color:#999}select{font:inherit;padding:6px;border-radius:8px}.msg{white-space:pre-line}</style>
 <h1>ParkAlert stress lab</h1>
 <p>App: <a href="http://localhost:${APP_PORT}/?trip=MKLABS" target=_blank>Magic Kingdom trip MKLABS</a> ·
 <a href="http://localhost:${APP_PORT}/?trip=DLLABS" target=_blank>Disneyland trip DLLABS</a> ·
 <a href="http://localhost:${APP_PORT}/?trip=EPLABS" target=_blank>EPCOT trip EPLABS</a>. The server polls every 10 s.</p>
 <p>Park: <select id=park>${PARKS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}</select></p>
 <div class=box>${Object.entries(SCENARIOS).map(([k, [d]]) => `<button data-s="${k}" title="${d.replace(/"/g, '&quot;')}">${k}</button>`).join('')}<p id=desc><small>Hover a button for what it does.</small></p></div>
-<div class=cols><div class=box><h2>Pushes captured (ntfy)</h2><ul id=pushes></ul></div><div class=box><h2>Lab events</h2><ul id=events></ul></div><div class=box><h2>Parks</h2><ul id=parks></ul></div></div>
+<div class=cols><div class=box><h2>Pushes (ntfy and phones)</h2><ul id=pushes></ul></div><div class=box><h2>Lab events</h2><ul id=events></ul></div><div class=box><h2>Parks</h2><ul id=parks></ul></div></div>
 <script>
 const esc=(s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 const t=(ms)=>new Date(ms).toLocaleTimeString();
 document.querySelectorAll('[data-s]').forEach(b=>{b.onclick=()=>fetch('/lab/scenario',{method:'POST',body:JSON.stringify({park:park.value,name:b.dataset.s})}).then(load);b.onmouseenter=()=>desc.innerHTML='<small>'+esc(b.title)+'</small>';});
 async function load(){const s=await (await fetch('/lab/state')).json();
-pushes.innerHTML=s.pushes.map(p=>'<li><small>'+t(p.at)+' · '+esc(p.topic)+'</small><br><b>'+esc(p.title)+'</b><br>'+esc(p.message)+'</li>').join('');
+pushes.innerHTML=s.pushes.map(p=>'<li><small>'+t(p.at)+' · '+esc(p.phone?'phone '+p.phone+' ('+p.trip+')'+(p.quiet?', quiet':''):p.topic)+(p.click?' · <a href="'+esc(p.click)+'" target=_blank>open</a>':'')+'</small><br><b>'+esc(p.title)+'</b><br><span class=msg>'+esc(p.message)+'</span></li>').join('');
 events.innerHTML=s.events.map(e=>'<li><small>'+t(e.at)+'</small> '+esc(e.text)+'</li>').join('');
 parks.innerHTML=s.parks.map(p=>'<li><b>'+esc(p.name)+'</b> crowd ×'+p.crowd+(p.storm?' · storm':'')+(p.fail?' · feed '+p.fail:'')+'<br><small>down: '+esc(p.down.join(', ')||'none')+'</small></li>').join('');}
 load();setInterval(load,3000);
@@ -279,7 +310,7 @@ function seed() {
   for (const park of PARKS) {
     const w = world[park.id];
     const rides = [...w.rides.values()].filter((r) => !r.hostile);
-    const openHour = (Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: park.timezone }).format(new Date(now0))) + 18) % 24;
+    const openHour = openHourOf(park.timezone);
     history.fetched[park.id] = [];
     history.episodes[park.id] = [];
     history.waits[park.id] = {};
@@ -353,7 +384,33 @@ for (const park of PARKS) {
   }
   world[park.id] = { name: park.name, tz: park.timezone, rides, metar: null, fail: null, crowd: 1, close: now0 + 6 * HOUR };
 }
-if (!KEEP || !fs.existsSync(DATA)) seed();
+// --keep carries the fake world over with the data: each ride's usual wait,
+// whether it is outdoors, and what it is doing now. Re-rolled, the archive's
+// headliners and storm rides no longer matched the park, and rides down
+// before the restart came back as "back up" pushes.
+const WORLD_FILE = path.join(DATA, 'world.json');
+if (KEEP && fs.existsSync(DATA) && fs.existsSync(WORLD_FILE)) {
+  const saved = JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8'));
+  for (const [parkId, w] of Object.entries(saved)) {
+    if (!world[parkId]) continue;
+    Object.assign(world[parkId], { crowd: w.crowd, close: w.close, metar: w.metar, stormBegan: w.stormBegan, stormEnded: w.stormEnded });
+    for (const [id, r] of w.rides) if (world[parkId].rides.has(id)) Object.assign(world[parkId].rides.get(id), r);
+  }
+  log('kept the world from the last run');
+} else if (!KEEP || !fs.existsSync(DATA)) seed();
+function saveWorld() {
+  const out = {};
+  for (const [parkId, w] of Object.entries(world)) {
+    out[parkId] = {
+      crowd: w.crowd, close: w.close, metar: w.metar, stormBegan: w.stormBegan, stormEnded: w.stormEnded,
+      rides: [...w.rides].map(([id, r]) => [id, { base: r.base, walkOn: r.walkOn, outdoor: r.outdoor, status: r.status, waitTime: r.waitTime, hidden: r.hidden }]),
+    };
+  }
+  fs.mkdirSync(DATA, { recursive: true });
+  fs.writeFileSync(WORLD_FILE, JSON.stringify(out));
+}
+saveWorld();
+setInterval(saveWorld, 10_000);
 
 await new Promise((r) => server.listen(LAB_PORT, r));
 const app = spawn(process.execPath, [path.join(ROOT, 'server/index.js')], {
@@ -370,9 +427,27 @@ const app = spawn(process.execPath, [path.join(ROOT, 'server/index.js')], {
     NTFY_BASE: `http://127.0.0.1:${LAB_PORT}/ntfy`,
     PUBLIC_URL: `http://localhost:${APP_PORT}`,
     HEALTH_TOKEN: 'lab',
+    LOG_PUSHES: '1',
   },
 });
-app.stdout.on('data', (d) => process.stdout.write(`[app] ${d}`));
+// Pushes to phones, which the server logs for the lab (LOG_PUSHES), join the
+// ntfy ones in the panel.
+let appOut = '';
+app.stdout.on('data', (d) => {
+  process.stdout.write(`[app] ${d}`);
+  appOut += d;
+  const lines = appOut.split('\n');
+  appOut = lines.pop();
+  for (const line of lines) {
+    const m = line.match(/^\[phone-push\] (.+)$/);
+    if (!m) continue;
+    try {
+      const p = JSON.parse(m[1]);
+      pushes.unshift({ at: Date.now(), phone: p.device, trip: p.trip, title: p.title, message: p.body, click: p.url, quiet: p.quiet });
+      pushes.length = Math.min(pushes.length, 300);
+    } catch {}
+  }
+});
 app.stderr.on('data', (d) => process.stderr.write(`[app] ${d}`));
 app.on('exit', (code) => { console.log(`[lab] app exited (${code})`); process.exit(code ?? 0); });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { app.kill('SIGTERM'); });
@@ -385,5 +460,7 @@ if (AUTO) {
     const name = pick(names);
     log(`auto: ${name} at ${park.name}`);
     SCENARIOS[name][1](park);
+    // A closed park would stay dead for the rest of the run.
+    if (name === 'closing') later(6, () => { log(`auto: reopen at ${park.name}`); SCENARIOS.reopen[1](park); });
   }, 90_000);
 }

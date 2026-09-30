@@ -7,8 +7,10 @@
 //   profile: { [rideId]: (number | null)[24] }
 //
 // The crowd level is relative, never absolute: 45 minutes on the big rides
-// is a quiet afternoon at one park and a busy one at another. It ranks the
-// park's headliner waits right now against the same hour on past days.
+// is a quiet afternoon at one park and a busy one at another. It compares
+// each headliner's posted wait now with that ride's own usual wait at this
+// hour, so a ride that closes (in a storm, say) drops out of both sides
+// instead of dragging the average down.
 
 const HOUR_MS = 3600_000;
 const MIN_MINUTES_IN_HOUR = 10;
@@ -91,43 +93,6 @@ export function headliners(profiles, n = HEADLINERS) {
     .map(([rideId]) => rideId);
 }
 
-// The crowd index: the average posted wait across the headliners that are
-// posting one. Needs at least three of them, or it's one ride's mood.
-export function crowdIndex(waits, ids) {
-  const vals = ids.map((id) => waits[id]).filter((v) => v != null);
-  return vals.length >= 3 ? Math.round(mean(vals)) : null;
-}
-
-// The index for each hour of one archived day.
-export function hourlyIndex(profile, ids) {
-  return Array.from({ length: 24 }, (_, h) => crowdIndex(Object.fromEntries(ids.map((id) => [id, profile[id]?.[h] ?? null])), ids));
-}
-
-const LEVEL_WORDS = [
-  [3, 'Quieter than usual'],
-  [6, 'About usual'],
-  [8, 'Busier than usual'],
-  [10, 'Much busier than usual'],
-];
-
-// 1 to 10: where `index` falls among the same hour's index on past days,
-// with ties counted half. Null without MIN_BASELINE_DAYS days to compare.
-export function crowdLevel(index, past) {
-  if (index == null) return null;
-  const vals = past.filter((v) => v != null);
-  if (vals.length < MIN_BASELINE_DAYS) return null;
-  const below = vals.filter((v) => v < index).length + vals.filter((v) => v === index).length / 2;
-  const share = below / vals.length;
-  const level = Math.max(1, Math.min(10, Math.round(1 + share * 9)));
-  return {
-    level,
-    label: LEVEL_WORDS.find(([max]) => level <= max)[1],
-    index,
-    typical: Math.round(median(vals)),
-    days: vals.length,
-  };
-}
-
 // Typical wait for each hour across days (median), where at least
 // MIN_BASELINE_DAYS days have a value.
 export function typicalByHour(series) {
@@ -148,19 +113,92 @@ export function bestTimes(profiles, rideId) {
   return { typical, best: { hour: best[0], wait: best[1] }, worst: { hour: worst[0], wait: worst[1] }, days: days.length };
 }
 
-// Lines building: the index up by at least a third and 10 minutes over the
-// last half hour, and busier than usual now.
-//   samples: [t, index] pairs, oldest first
-export const BUILD_WINDOW_MS = 30 * 60_000;
-export function linesBuilding(samples, now, level) {
-  if (!level || level.level < 7) return null;
-  const last = samples[samples.length - 1];
-  let then = null;
-  for (const [t, v] of samples) {
-    if (t > now - BUILD_WINDOW_MS) break;
-    then = v;
+// Each ride's typical posted wait for each hour: the median across the
+// archived days that have one.
+//   profiles: { [date]: profile } -> { [rideId]: (number | null)[24] }
+export function rideTypicals(profiles) {
+  const days = new Map();
+  for (const profile of Object.values(profiles)) {
+    for (const [rideId, hours] of Object.entries(profile)) {
+      if (!days.has(rideId)) days.set(rideId, []);
+      days.get(rideId).push(hours);
+    }
   }
-  if (!last || then == null || last[1] == null) return null;
-  const rise = last[1] - then;
-  return rise >= 10 && rise >= then / 3 ? { from: then, to: last[1] } : null;
+  return Object.fromEntries([...days].map(([rideId, series]) => [rideId, typicalByHour(series)]));
+}
+
+// How many headliners must post a wait for the crowd to be read: half of
+// them, and never fewer than three, or it is a few rides' mood.
+export const minPosting = (n) => Math.max(3, Math.ceil(n / 2));
+
+// The park's usual big-ride wait for each hour: the average of its
+// headliners' typical waits, where enough of them have one.
+export function usualIndex(ids, typicals) {
+  return Array.from({ length: 24 }, (_, h) => {
+    const vals = ids.map((id) => typicals[id]?.[h]).filter((v) => v != null);
+    return vals.length >= minPosting(ids.length) ? Math.round(mean(vals)) : null;
+  });
+}
+
+// The crowd ratio: the posted waits of the headliners posting one, against
+// the same rides' typical waits at this hour. 1 is a usual day.
+//   waits: { [rideId]: minutes | null }, typicals: from rideTypicals
+export function crowdRatio(waits, ids, typicals, hour) {
+  let live = 0;
+  let usual = 0;
+  let n = 0;
+  for (const id of ids) {
+    const w = waits[id];
+    const u = typicals[id]?.[hour];
+    if (w == null || !u) continue;
+    live += w;
+    usual += u;
+    n++;
+  }
+  return n >= minPosting(ids.length) ? live / usual : null;
+}
+
+// What a ratio reads as. The bands are wide on purpose: posted waits wobble
+// by 10% from minute to minute on an ordinary day.
+export const BUSIER = 1.15;
+const CROWD_WORDS = [
+  [0.85, 'Quieter than usual'],
+  [BUSIER, 'About usual'],
+  [1.4, 'Busier than usual'],
+  [Infinity, 'Much busier than usual'],
+];
+export const crowdLabel = (ratio) => CROWD_WORDS.find(([max]) => ratio < max)[1];
+
+// The crowd over the 15 minutes up to t, from readings [t, ratio, usual]
+// (usual: the park's usual big-ride wait at that reading's hour), oldest
+// first. index: the big-ride average that ratio stands for, in minutes.
+export const SMOOTH_MS = 15 * 60_000;
+export function smoothedCrowd(samples, t) {
+  const recent = samples.filter(([at]) => at <= t && at > t - SMOOTH_MS);
+  if (!recent.length) return null;
+  return {
+    ratio: mean(recent.map((x) => x[1])),
+    index: Math.round(mean(recent.map((x) => x[1] * x[2]))),
+  };
+}
+
+// The label shown changes only once two readings in a row agree on a new
+// one, so it doesn't flick between two words at a boundary.
+//   shown: { label, next } from the reading before, or null
+export function settleLabel(shown, label) {
+  if (!shown?.label || shown.label === label || shown.next === label) return { label, next: null };
+  return { label: shown.label, next: label };
+}
+
+// Lines building: the big rides running at least a fifth further over their
+// usual than half an hour ago, at least 10 minutes longer, and busier than
+// usual now. The ratio already allows for waits that rise every day at this
+// time, so an ordinary morning never counts. Both readings are smoothed.
+export const BUILD_WINDOW_MS = 30 * 60_000;
+export function linesBuilding(samples, now) {
+  const cur = smoothedCrowd(samples, now);
+  const then = smoothedCrowd(samples, now - BUILD_WINDOW_MS);
+  if (!cur || !then) return null;
+  const built = cur.ratio >= BUSIER && cur.ratio - then.ratio >= 0.2 && cur.index - then.index >= 10;
+  return built ? { from: then.index, to: cur.index, ratio: cur.ratio } : null;
 }

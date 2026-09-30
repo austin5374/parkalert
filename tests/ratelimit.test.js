@@ -22,7 +22,10 @@ test('wait checks without spending', () => {
 
 test("the client is the proxy's last X-Forwarded-For entry, which it cannot forge", () => {
   const req = (xff, remote = '10.0.0.1') => ({ headers: xff ? { 'x-forwarded-for': xff } : {}, socket: { remoteAddress: remote } });
-  assert.equal(clientKey(req('1.2.3.4')), '1.2.3.4');
-  assert.equal(clientKey(req('6.6.6.6, 1.2.3.4')), '1.2.3.4');
-  assert.equal(clientKey(req(null)), '10.0.0.1');
+  const behindProxy = { trustProxy: true };
+  assert.equal(clientKey(req('1.2.3.4'), behindProxy), '1.2.3.4');
+  assert.equal(clientKey(req('6.6.6.6, 1.2.3.4'), behindProxy), '1.2.3.4');
+  assert.equal(clientKey(req(null), behindProxy), '10.0.0.1');
+  // With no proxy in front, the header is the client's own claim.
+  assert.equal(clientKey(req('1.2.3.4'), { trustProxy: false }), '10.0.0.1');
 });

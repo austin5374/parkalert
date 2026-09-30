@@ -17,8 +17,10 @@ export const BLIP_MINUTES = 1;
 // each other. In Florida that is nearly always lightning (two September 2026
 // storms at Magic Kingdom each closed 11 outdoor rides inside 2 min), but a
 // fireworks or power hold looks identical in the data, so it is called a hold,
-// not weather. Breakdowns are independent, so five together is the tell.
-export const CLUSTER_WINDOW_MS = 10 * 60_000;
+// not weather. Breakdowns are independent, so five within three minutes is
+// the tell; a ten-minute window let a few coincidental breakdowns and a small
+// wave pass for a storm.
+export const CLUSTER_WINDOW_MS = 3 * 60_000;
 export const CLUSTER_MIN_RIDES = 5;
 
 // A ride still down after an hour that never came back that day (it went to

@@ -3,11 +3,14 @@
 // run a script from another, which a per-file network/cache race allowed on
 // slow park Wi-Fi. The server stamps the version in, so each deploy is a
 // changed worker the browser picks up on its own.
+// localClock, to write pushes' times the phone's way, as the app does.
+importScripts('/time.js');
+
 const VERSION = '__APP_VERSION__';
 const CACHE = `parkalert-${VERSION}`;
 const ASSETS = [
   '/', '/style.css', '/time.js', '/app.js', '/manifest.webmanifest',
-  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon.svg', '/icons/apple-touch-icon.png',
+  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon.svg', '/icons/apple-touch-icon.png', '/icons/badge-96.png',
 ];
 
 self.addEventListener('install', (e) => {
@@ -30,7 +33,8 @@ self.addEventListener('message', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('parkalert-') && k !== CACHE).map((k) => caches.delete(k))))
+      // Old versions' files go; the phone left for pushsubscriptionchange stays.
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('parkalert-') && k !== CACHE && k !== 'parkalert-phone').map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -42,7 +46,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   const key = e.request.mode === 'navigate' ? '/' : url.pathname;
-  if (key !== '/' && !ASSETS.includes(key)) return;
+  // A file asked for with a query (a trip's own manifest) is not the cached one.
+  if (key !== '/' && (!ASSETS.includes(key) || url.search)) return;
   e.respondWith(
     caches.open(CACHE)
       .then((c) => c.match(key))
@@ -50,18 +55,30 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// The app's own notifications. The server sends { title, body, url, tag };
-// a newer notification with the same tag (the same ride) replaces the older.
+// The app's own notifications. The server sends { title, body, url, tag,
+// quiet, badge, ride }; a newer notification with the same tag (the same
+// ride, or the same storm) replaces the older. A quiet one replaces it
+// without a sound. ride: { id, status, downSince } for a one-ride push.
 self.addEventListener('push', (e) => {
   let d;
   try { d = e.data.json(); } catch { d = { title: 'ParkAlert', body: e.data?.text() || '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'ParkAlert', {
-    body: d.body || '',
+  // The Home Screen badge follows the rides down, even with the app closed.
+  if (Number.isInteger(d.badge)) {
+    try { (d.badge ? self.navigator.setAppBadge?.(d.badge) : self.navigator.clearAppBadge?.())?.catch?.(() => {}); } catch {}
+  }
+  // An open app refreshes at once, so what it shows matches what just
+  // arrived, and patches the ride the push is about straight away.
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then((ws) => ws.forEach((w) => w.postMessage({ type: 'refresh', ride: d.ride || null }))).catch(() => {}));
+  e.waitUntil(self.registration.showNotification(localClock(d.title) || 'ParkAlert', {
+    body: localClock(d.body) || '',
     tag: d.tag || undefined,
-    renotify: !!d.tag,
+    renotify: !!d.tag && !d.quiet,
+    silent: !!d.quiet,
     icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
-    data: { url: d.url || '/' },
+    // Android draws the badge from its alpha alone: a full-colour square
+    // came out as a solid white block in the status bar.
+    badge: '/icons/badge-96.png',
+    data: { url: d.url || '/', ride: d.ride || null },
   }));
 });
 
@@ -76,9 +93,34 @@ self.addEventListener('notificationclick', (e) => {
     const open = windows.find((w) => new URL(w.url).origin === self.location.origin);
     if (open) {
       await open.focus();
-      open.postMessage({ type: 'open', url: target });
+      open.postMessage({ type: 'open', url: target, ride: e.notification.data?.ride || null });
       return;
     }
     await self.clients.openWindow(target);
   })());
+});
+
+// The push service can replace a subscription while the app is closed.
+// Left alone, the old address stops working, the server drops the phone
+// and it hears nothing until the app is next opened, while it still says
+// "Alerts on". So the worker subscribes again and tells the server itself,
+// using the trip and phone the page left it (it can't read the page's
+// storage).
+self.addEventListener('pushsubscriptionchange', (e) => {
+  e.waitUntil((async () => {
+    const saved = await (await caches.open('parkalert-phone')).match('/phone');
+    if (!saved) return;
+    const { trip, id } = await saved.json();
+    let sub = e.newSubscription;
+    if (!sub) {
+      const { publicKey } = await (await fetch('/api/push-key')).json();
+      const key = Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    await fetch(`/api/trips/${encodeURIComponent(trip)}/devices/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON() }),
+    });
+  })().catch(() => {}));
 });

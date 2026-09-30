@@ -10,6 +10,7 @@
 //   scores: [{ at, stage, cause, hit, width, miss }]  (minutes), newest first
 
 export const SCORE_KEEP_MS = 14 * 24 * 3600_000;
+export const MIN_SCORED = 10;
 // A call whose ride never reopened (closed for the night, left the feed) is
 // forgotten after this; it was not wrong, it just never got its answer.
 const CALL_KEEP_MS = 12 * 3600_000;
@@ -73,13 +74,13 @@ export function scoreCalls(calls = {}, scores = [], events, now = Date.now()) {
   const nextCalls = { ...calls };
   const added = [];
   for (const ev of events) {
-    if (ev.type !== 'UP' && ev.type !== 'CLOSED') continue;
+    if (ev.type !== 'UP' && ev.type !== 'CLOSED' && ev.type !== 'GONE') continue;
     const list = nextCalls[ev.ride.id];
     delete nextCalls[ev.ride.id];
     if (ev.late || !list) continue;
     for (const c of list) {
       const width = Math.round((c.hi - c.lo) / MIN);
-      if (ev.type === 'CLOSED') {
+      if (ev.type !== 'UP') {
         if (now > c.hi) added.push({ at: now, stage: c.stage, cause: c.cause, hit: false, width, miss: null, closed: true });
         continue;
       }
@@ -124,7 +125,8 @@ export function scorecard(scores = [], now = Date.now()) {
       id: g.id,
       label: g.label,
       n: rows.length,
-      inRange: Math.round((rows.filter((s) => s.hit).length / rows.length) * 100),
+      // A share of one or two reopenings is noise ("0% in range" after one).
+      inRange: rows.length >= MIN_SCORED ? Math.round((rows.filter((s) => s.hit).length / rows.length) * 100) : null,
       width: Math.round(median(rows.map((s) => s.width))),
       within15: Math.round((rows.filter((s) => s.miss != null && s.miss <= 7.5).length / rows.length) * 100),
       closed: rows.filter((s) => s.closed).length,

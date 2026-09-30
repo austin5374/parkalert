@@ -104,16 +104,18 @@ function everywhere(history, kind) {
   return list;
 }
 
-// Which kind of outage is this live DOWN ride? Same rules the history
-// classifier uses, applied to current park state (rides: parkState[p].rides).
-// Returns { kind, rides } where rides is the hold size for a 'hold'.
-// A ride the poller has already seen in a hold stays in it (ride.liveKind)
-// until it reopens: once the others come back, the last ones still down are
-// the same storm, not a fresh breakdown with a shorter estimate.
+// Which kind of outage is this live DOWN ride? The poller settles it the
+// first poll the ride is seen down (ride.liveKind, see rememberHolds in
+// poller.js) and it stays that way until the ride reopens: once the others
+// come back, the last ones still down are the same storm, and a breakdown
+// already announced as one keeps its advice. A snapshot without that falls
+// back to the same rule the history classifier uses.
+// Returns { kind, rides, incident } where rides is the hold size for a 'hold'.
 export function classifyLive(rides, rideId) {
   const ride = rides[rideId];
   if (isLateOpening({ from: ride?.downFrom })) return { kind: 'opening' };
-  if (ride?.liveKind === 'hold') return { kind: 'hold', rides: ride.holdSize };
+  if (ride?.liveKind === 'hold') return { kind: 'hold', rides: ride.holdSize, incident: ride.incident ?? null };
+  if (ride?.liveKind === 'breakdown') return { kind: 'breakdown' };
   return clusterLive(rides, rideId);
 }
 
@@ -134,11 +136,30 @@ export function clusterLive(rides, rideId) {
   return { kind: 'breakdown' };
 }
 
+// Before any park has enough history (a new server, a new park), a built-in
+// prior stands in, and says so: outage lengths shaped like Walt Disney
+// World's (breakdowns a median of 14 min, holds 49, delayed openings 20),
+// as 60 evenly spread outages, the longest few breakdowns closing for the
+// day. [median minutes, spread, share closed for the day]
+const PRIOR_SHAPE = { breakdown: [14, 0.9, 0.05], hold: [49, 0.5, 0], opening: [20, 0.6, 0] };
+const PRIOR_N = 60;
+const PRIOR = Object.fromEntries(Object.entries(PRIOR_SHAPE).map(([kind, [median, spread, closed]]) => {
+  const eps = Array.from({ length: PRIOR_N }, (_, i) => {
+    const q = (i + 0.5) / PRIOR_N;
+    // A logistic stand-in for the normal quantile: close enough for a prior.
+    const minutes = Math.round(median * Math.exp(spread * 0.5513 * Math.log(q / (1 - q))) * 10) / 10;
+    const stayed = i >= PRIOR_N * (1 - closed);
+    return { rideId: null, kind, minutes: stayed ? Math.max(minutes, 90) : minutes, endedAs: stayed ? 'CLOSED' : 'OPERATING' };
+  });
+  return [kind, eps.sort(byMinutes)];
+}));
+
 // Pick the most specific history that has enough data, and estimate from it.
 //   history: { [parkId]: episode[] }, kind: 'breakdown' | 'opening' | 'hold'
 // Breakdowns and late openings use the ride's own record when it has enough,
 // else the park's. A hold is a park-wide event, so it pools the park. Rarer
 // kinds fall back to every park when this one has not seen enough of them.
+// With no history to go on at all, the built-in prior, labelled as such.
 export function estimate(history, parkId, rideId, elapsedMin, kind) {
   const park = byKind(history[parkId] || [], kind);
   // Pools are built only if reached: most estimates stop at the ride or park.
@@ -159,7 +180,12 @@ export function estimate(history, parkId, rideId, elapsedMin, kind) {
     if (r && r.p50 !== null) return { ...r, basis, kind };
   }
   // Enough history exists, but almost nothing in it ran this long.
-  return sawHistory ? { longerThanUsual: true, kind } : null;
+  if (sawHistory) return { longerThanUsual: true, kind };
+  const prior = PRIOR[kind];
+  if (!prior) return null;
+  if (prior.length - firstAbove(prior, elapsedMin) < MIN_SAMPLES) return { longerThanUsual: true, kind };
+  const r = remainingSorted(prior, elapsedMin);
+  return r && r.p50 !== null ? { ...r, basis: 'prior', kind } : { longerThanUsual: true, kind };
 }
 
 // Weather outages are timed from when the weather cleared, not from when the
@@ -234,59 +260,76 @@ function spoken(m) {
 }
 
 // One short line for a push notification or the dashboard, or null.
-// From the 30-minute lightning rule rather than this park's history, it
-// says so instead of "usually", which would claim a record it doesn't have.
+// The range is the middle half of past outages like it, so it says "often",
+// not "usually" or "likely". From the 30-minute lightning rule rather than
+// this park's history, it says so instead of claiming a record.
+export const LONG_TEXT = 'Down longer than nearly every past outage like it';
 export function describe(est) {
   if (!est) return null;
-  if (est.longerThanUsual) return 'Down longer than most outages here';
+  if (est.longerThanUsual) return LONG_TEXT;
   const w = shownWindow(est);
   const span = w.hi !== null
     ? (w.hi < 60 ? `${w.lo} to ${w.hi} min` : `${spoken(w.lo)} to ${spoken(w.hi)}`)
     : `about ${spoken(w.lo)}`;
-  let text = est.basis === 'rule' ? `By the 30-minute rule, back in ${span}` : `Usually back in ${span}`;
-  const pct = Math.round(est.stayedDownShare * 100);
+  let text = est.basis === 'rule' ? `By the 30-minute lightning rule, back in ${span}` : `Often back in ${span}`;
+  const pct = closedPct(est);
   if (pct >= 10) text += `. About ${pct}% stay closed for the day`;
   return text;
+}
+
+// The share closed for the day, as the one rounded percentage every line uses.
+const closedPct = (est) => Math.round((est.stayedDownShare || 0) * 100);
+export const CLOSED_PCT = 30;
+
+// "Check back in about 20 min": soon, said as a time.
+const checkBack = (p50) => (p50 != null ? `Check back in about ${spoken(roundMin(p50))}` : 'Check back in half an hour');
+
+// A chance as people say it. Ten or twenty outages can't make anything
+// certain, so the ends are words, never 0% or 100%.
+//   "Nearly all outages like this", "62% of outages like this"
+export function shareOf(p, what = 'outages like this') {
+  if (p >= 0.955) return `Nearly all ${what}`;
+  if (p < 0.045) return `Almost no ${what}`;
+  return `${Math.round(p * 100)}% of ${what}`;
 }
 
 // Wait nearby, or go ride something else? The question a guest actually has
 // at a down ride, answered from the same curve as the range. The rules, in
 // order, each with the reason it wins:
-//   1. Past nearly every outage like it: nothing to go on but "long".
-//   2. Often closed for the day (3 in 10 or more): that dominates.
+//   1. Past nearly every outage like it: ride something else.
+//   2. Often closed for the day (30% or more): that dominates.
 //   3. The park closes before half of these reopen: say so.
 //   4. The chance it's back soon decides:
 //        6 in 10 or more within 15 min  -> worth waiting nearby
-//        half or more within 30 min      -> check back soon
-//        half or more within the hour    -> ride something nearby
+//        half or more within 30 min      -> check back (in about the median)
+//        half or more within the hour    -> stay close
 //        otherwise                        -> ride something else
 // A weather estimate from the 30-minute rule has no curve; its range stands in.
 //   est: from estimate()/afterClearing(); minutesToClose: or null
 export function advise(est, { minutesToClose = null } = {}) {
   if (!est) return null;
   if (est.longerThanUsual) {
-    return { key: 'long', verdict: 'Running long', detail: 'Down longer than nearly every past outage like it.' };
+    return { key: 'long', verdict: 'Ride something else', detail: 'Outages this long rarely end soon.' };
   }
-  const stayed = Math.round((est.stayedDownShare || 0) * 10);
-  if (stayed >= 3) {
-    return { key: 'closed', verdict: 'Often closed for the day', detail: `${stayed} in 10 outages like this didn't reopen that day.` };
+  const closed = closedPct(est);
+  if (closed >= CLOSED_PCT) {
+    return { key: 'closed', verdict: 'Often closed for the day', detail: `${closed}% of outages like this didn't reopen that day.` };
   }
   const p50 = est.p50 ?? est.p25;
   if (minutesToClose != null && p50 != null && p50 > minutesToClose) {
     return { key: 'closing', verdict: 'May not reopen before close', detail: `The park closes in ${spoken(Math.max(1, Math.round(minutesToClose)))}, and half of these take longer.` };
   }
   const c = est.chance;
-  // Percentages, the same numbers the card's legend shows beneath.
-  const pct = (p) => `${Math.round(p * 100)}%`;
+  // The same numbers the card's legend shows beneath, in the same words.
   if (c) {
-    if (c[15] >= 0.6) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `${pct(c[15])} of outages like this are over within 15 min.` };
-    if (c[30] >= 0.5) return { key: 'soon', verdict: 'Check back soon', detail: `${pct(c[30])} of outages like this are over within 30 min.` };
-    if (c[60] >= 0.5) return { key: 'nearby', verdict: 'Ride something nearby', detail: `${pct(c[60])} of outages like this are over within the hour.` };
-    return { key: 'go', verdict: 'Ride something else', detail: c[60] > 0 ? `Only ${pct(c[60])} of outages like this are over within the hour.` : 'These usually take over an hour.' };
+    if (c[15] >= 0.6) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `${shareOf(c[15])} are over within 15 min.` };
+    if (c[30] >= 0.5) return { key: 'soon', verdict: checkBack(est.p50), detail: `${shareOf(c[30])} are over within 30 min.` };
+    if (c[60] >= 0.5) return { key: 'nearby', verdict: 'Stay close', detail: `${shareOf(c[60])} are over within the hour.` };
+    return { key: 'go', verdict: 'Ride something else', detail: c[60] >= 0.045 ? `Only ${shareOf(c[60])} are over within the hour.` : 'These usually take over an hour.' };
   }
   if (p50 == null) return null;
-  if (p50 <= 12) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `Usually back within ${spoken(Math.round(p50))}.` };
-  if (p50 <= 30) return { key: 'soon', verdict: 'Check back soon', detail: `Usually back within ${spoken(Math.round(p50))}.` };
-  if (p50 <= 60) return { key: 'nearby', verdict: 'Ride something nearby', detail: `Usually back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 12) return { key: 'wait', verdict: 'Worth waiting nearby', detail: `Often back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 30) return { key: 'soon', verdict: checkBack(p50), detail: `Often back within ${spoken(Math.round(p50))}.` };
+  if (p50 <= 60) return { key: 'nearby', verdict: 'Stay close', detail: `Often back within ${spoken(Math.round(p50))}.` };
   return { key: 'go', verdict: 'Ride something else', detail: 'These usually take over an hour.' };
 }

@@ -1,8 +1,8 @@
 // Lightning and rain near each park, from the nearest airport weather
 // stations (see server/metar.js for what the reports say and why they are the
 // right signal). Two feeds, both free and keyless:
-//   live:    NOAA's Aviation Weather Center, every 5 minutes, for the parks
-//            someone is watching
+//   live:    NOAA's Aviation Weather Center, every 5 minutes (every minute
+//            during a hold), for the parks someone is watching
 //   archive: Iowa State's ASOS archive, for the same days as the outage
 //            archive, so estimates can learn how long after a storm each
 //            ride really reopens
@@ -14,6 +14,9 @@ import { parseMetar, spells, mergeSpells } from './metar.js';
 
 const USER_AGENT = 'ParkAlert/1.0 (personal ride-status notifier)';
 const LIVE_INTERVAL_MS = 5 * 60_000;
+// While a hold is on, the storm's end is the news everyone is waiting for,
+// and the stations report it the minute it happens.
+const LIVE_INTERVAL_HOLD_MS = 60_000;
 const ARCHIVE_INTERVAL_MS = 60 * 60_000;
 const KEEP_MS = 365 * 24 * 3600_000;
 // The archive is asked for a whole run of days per station in one request,
@@ -42,9 +45,20 @@ export function addObservations(station, list, now = Date.now()) {
     byTime.set(o.at, o);
   }
   weather.obs[station] = [...byTime.values()].filter((o) => now - o.at < KEEP_MS).sort((a, b) => a.at - b.at);
-  if (added) timelineCache.clear();
+  if (added) {
+    // Only the parks this station reports for have new timelines; the rest
+    // keep theirs (and the models built on them).
+    const parks = PARKS.filter((p) => (p.weather || []).includes(station)).map((p) => p.id);
+    for (const id of parks) timelineCache.delete(id);
+    for (const fn of reportListeners) fn(parks);
+  }
   return added;
 }
+
+// Told which parks a batch of new reports touches (weatheroutlook.js
+// rebuilds their models then, rather than in the next request).
+const reportListeners = [];
+export const onNewReports = (fn) => reportListeners.push(fn);
 
 async function get(url, timeout = 20_000) {
   const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(timeout) });
@@ -88,13 +102,15 @@ export async function fetchArchiveRange(station, from, to) {
 }
 
 // Called on every poll of a park: fetches its stations' latest reports at
-// most every 5 minutes, so a park gets weather the moment someone starts
-// watching it, and none once nobody does.
+// most every 5 minutes (every minute while a hold is on: urgent), so a park
+// gets weather the moment someone starts watching it, and none once nobody
+// does.
 const lastLive = new Map(); // station list -> epoch ms of the last fetch
-export async function refreshWeather(parkId, now = Date.now()) {
+export async function refreshWeather(parkId, now = Date.now(), { urgent = false } = {}) {
   const stations = stationsFor(parkId);
   const key = stations.join(',');
-  if (!stations.length || now - (lastLive.get(key) ?? -Infinity) < LIVE_INTERVAL_MS) return;
+  const every = urgent ? LIVE_INTERVAL_HOLD_MS : LIVE_INTERVAL_MS;
+  if (!stations.length || now - (lastLive.get(key) ?? -Infinity) < every) return;
   lastLive.set(key, now);
   try {
     const byStation = await fetchLive(stations);

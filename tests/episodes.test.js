@@ -83,10 +83,12 @@ const cluster = (n, gapMin, from = 'OPERATING') =>
     endedAs: 'OPERATING',
   }));
 
-test('five running rides down within ten minutes is a park-wide hold; four is not', () => {
-  assert.ok(classify(cluster(5, 2)).every((ep) => ep.kind === 'hold'));
-  assert.ok(classify(cluster(4, 2)).every((ep) => ep.kind === 'breakdown'));
-  // Five rides, but spread over an hour: independent breakdowns.
+test('five running rides down within three minutes is a park-wide hold; four is not', () => {
+  assert.ok(classify(cluster(5, 0.5)).every((ep) => ep.kind === 'hold'));
+  assert.ok(classify(cluster(4, 0.5)).every((ep) => ep.kind === 'breakdown'));
+  // Five rides, but two minutes apart (eight minutes end to end), or spread
+  // over an hour: independent breakdowns, not a storm.
+  assert.ok(classify(cluster(5, 2)).every((ep) => ep.kind === 'breakdown'));
   assert.ok(classify(cluster(5, 15)).every((ep) => ep.kind === 'breakdown'));
 });
 

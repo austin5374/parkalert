@@ -13,7 +13,7 @@ export const PARKS = [
     weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.4177,
     lng: -81.5812,
-    radiusKm: 2.0,
+    radiusKm: 0.65,
   },
   {
     id: '47f90d2c-e191-4239-a466-5892ef59a88b',
@@ -23,7 +23,7 @@ export const PARKS = [
     weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.3747,
     lng: -81.5494,
-    radiusKm: 2.0,
+    radiusKm: 1.3,
   },
   {
     id: '288747d1-8b4f-4a64-867e-ea7c9b27bad8',
@@ -33,7 +33,7 @@ export const PARKS = [
     weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.3575,
     lng: -81.5583,
-    radiusKm: 1.5,
+    radiusKm: 0.9,
   },
   {
     id: '1c84a229-8862-4648-9c71-378ddd2c7693',
@@ -43,7 +43,7 @@ export const PARKS = [
     weather: ['KISM', 'KMCO'], // Kissimmee Gateway, Orlando International
     lat: 28.3553,
     lng: -81.5901,
-    radiusKm: 2.0,
+    radiusKm: 1.3,
   },
   {
     id: '7340550b-c14d-4def-80bb-acdb51d49a66',
@@ -53,7 +53,7 @@ export const PARKS = [
     weather: ['KFUL', 'KSNA'], // Fullerton Municipal, John Wayne
     lat: 33.8121,
     lng: -117.919,
-    radiusKm: 1.0,
+    radiusKm: 0.5,
   },
   {
     id: '832fcd51-ea19-4e77-85c7-75d5843b127c',
@@ -63,7 +63,7 @@ export const PARKS = [
     weather: ['KFUL', 'KSNA'], // Fullerton Municipal, John Wayne
     lat: 33.806,
     lng: -117.9223,
-    radiusKm: 1.0,
+    radiusKm: 0.5,
   },
 ];
 

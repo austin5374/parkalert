@@ -89,20 +89,26 @@
         </button>
       </div>
 
+      <!-- Where location put you: a suggestion to confirm, never a trip made unasked. -->
+      <div id="setup-found" class="btn-stack hidden"></div>
+
       <div id="setup-parks"></div>
 
       <h2 class="section-label">Joining someone's trip?</h2>
       <form id="join-form" class="group join" autocomplete="off">
         <input id="join-code" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false"
-               maxlength="6" placeholder="Trip code" aria-label="Trip code">
+               placeholder="Trip code" aria-label="Trip code">
         <button class="btn-inline" type="submit">Join</button>
       </form>
-      <p class="footnote" id="join-note" aria-live="polite">Ask them for the 6-letter code on their Trip tab. You'll see their rides and get the same alerts.</p>
+      <p class="footnote" id="join-note" aria-live="polite">Ask them for the 6-character code on their Trip tab, or paste their invite. You'll see their rides and get the same alerts.</p>
     </div>
   </div>
 
   <!-- Main app -->
   <div id="app" class="screen hidden">
+    <!-- Once the large title scrolls away, the park's name in a compact bar,
+         as iOS does. A tap goes back to the top. -->
+    <div class="nav-bar" id="nav-bar" aria-hidden="true"><span id="nav-bar-title"></span></div>
     <header class="nav" id="nav">
       <div class="nav-inner">
         <!-- The heading stays a heading; one transparent button over the whole
@@ -110,7 +116,7 @@
         <div class="nav-titles">
           <button class="cover-btn" id="btn-park" type="button" aria-haspopup="dialog" aria-labelledby="park-name park-meta"></button>
           <h1 id="park-name" class="large-title">ParkAlert</h1>
-          <p class="nav-meta"><span id="park-meta" aria-live="polite"></span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
+          <p class="nav-meta"><span id="park-meta">Loading…</span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
         </div>
         <button id="btn-alerts" class="pill pressable hidden" type="button" aria-haspopup="dialog">
           <svg><use href="#i-bell"/></svg><span>Alerts on</span>
@@ -121,7 +127,11 @@
     <main>
       <div id="ptr" class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>
       <section id="view-down" class="view" aria-label="Down now">
-        <div id="down-list"></div>
+        <!-- What shows before app.js has run: the same skeleton it draws while loading. -->
+        <div id="down-list"><div class="cards" data-key="skeleton">
+          <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>
+          <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>
+        </div></div>
         <div id="recent-block"></div>
       </section>
 
@@ -138,7 +148,7 @@
           <button type="button" data-filter="all" aria-pressed="true">All</button>
           <button type="button" data-filter="open" aria-pressed="false">Open</button>
           <button type="button" data-filter="down" aria-pressed="false">Down</button>
-          <button type="button" data-filter="following" aria-pressed="false">With alerts</button>
+          <button type="button" data-filter="following" aria-pressed="false">Alerts</button>
         </div>
         <div class="list-header">
           <span id="follow-summary"></span>
@@ -146,6 +156,7 @@
         </div>
         <div class="group" id="rides-list"></div>
         <p class="footnote" id="rides-foot">Tap a ride for its wait times and outage history. The switch controls whether you get alerts about it.</p>
+        <div id="other-block"></div>
       </section>
 
       <section id="view-trip" class="view hidden" aria-label="Trip">
@@ -183,7 +194,7 @@
             <button id="switch-crowd" class="switch" type="button" role="switch" aria-checked="false" aria-label="Alert me when lines are building"></button>
           </div>
         </div>
-        <p class="footnote">Pause just this phone or everyone on the trip. Alerts stop on their own once the park closes. The lines-building alert goes to everyone on the trip, at most every two hours.</p>
+        <p class="footnote">Pause just this phone or everyone on the trip. Alerts stop on their own when the park closes, and after two months with nobody opening this trip (phones hear the day before). The lines-building alert goes to everyone on the trip, at most every two hours.</p>
 
         <h2 class="section-label">Park</h2>
         <div class="group">
@@ -232,6 +243,8 @@
   <!-- Bottom sheet: one at a time, dragged down or tapped outside to dismiss. -->
   <!-- Detail screens (a ride, the park, a hold) push in from the right. -->
   <div id="pages" class="pages hidden"><div class="page-shade"></div></div>
+  <!-- What a screen reader should hear when the header's status changes. -->
+  <p id="announce" class="vh" aria-live="polite"></p>
 
   <div id="sheet-layer" class="sheet-layer hidden">
     <div class="scrim" id="scrim"></div>
@@ -243,6 +256,19 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script>
+    // On a slow connection app.js takes seconds to arrive. Until it does, show
+    // the right screen: the app's frame and its loading skeleton for a phone
+    // with a trip (or a link to one), else the first-run screen, which needs
+    // no script to read. The server allows this one inline script by its hash.
+    (function () {
+      var trip = null;
+      try { trip = localStorage.getItem('parkalert.trip'); } catch (e) {}
+      var app = !!trip || /[?&](trip|join)=/.test(location.search);
+      document.getElementById(app ? 'app' : 'setup').classList.remove('hidden');
+      if (!app) document.body.classList.add('no-tabbar');
+    })();
+  </script>
   <script src="/time.js"></script>
   <script src="/app.js"></script>
 </body>

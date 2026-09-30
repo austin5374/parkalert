@@ -4,12 +4,12 @@ import assert from 'node:assert/strict';
 import { startFakes } from './fakes.js';
 
 const PARK = '75ea578a-adc8-4116-a54d-dccb60765ef9';
-let fakes, trips, parkState, pollPark, MAX_GAP_MS;
+let fakes, trips, parkState, pollPark, freshPark, MAX_GAP_MS;
 
 before(async () => {
   fakes = await startFakes();
   ({ trips, parkState } = await import('../server/store.js'));
-  ({ pollPark, MAX_GAP_MS } = await import('../server/poller.js'));
+  ({ pollPark, freshPark, MAX_GAP_MS } = await import('../server/poller.js'));
 });
 after(() => fakes.close());
 
@@ -134,7 +134,7 @@ test('an estimate is written down when a ride goes down and scored when it reope
     assert.equal(parkState[PARK].scores.length, 1);
     // Back almost at once: well short of the range.
     assert.equal(parkState[PARK].scores[0].hit, false);
-    assert.deepEqual(scorecard(parkState[PARK].scores).groups.map((g) => [g.id, g.n, g.inRange]), [['other', 1, 0]]);
+    assert.deepEqual(scorecard(parkState[PARK].scores).groups.map((g) => [g.id, g.n, g.inRange]), [['other', 1, null]], 'too few to give a share');
   } finally {
     history.episodes[PARK] = saved;
   }
@@ -158,4 +158,51 @@ test('single rider and Lightning Lane come through from the live queues', async 
   assert.equal(plain.lightningLane, null);
   const paid = parseAttraction({ id: 'z', name: 'Z', status: 'OPERATING', queue: { PAID_RETURN_TIME: { state: 'TEMP_FULL' } } });
   assert.equal(paid.lightningLane.paid, true);
+});
+
+test('a fresh snapshot is answered at once, even while a slow poll is under way', async () => {
+  const now = Date.now();
+  setup({ p1: ride('Ride P1', 'OPERATING', now - 3600_000) }, now - 5_000);
+  fakes.upstream.live[PARK] = [{ id: 'p1', name: 'Ride P1', status: 'OPERATING', waitTime: 10 }];
+  fakes.upstream.delayMs = 2000;
+  const polling = pollPark(PARK);
+  const t0 = Date.now();
+  await freshPark(PARK);
+  const took = Date.now() - t0;
+  fakes.upstream.delayMs = 0;
+  await polling;
+  assert.ok(took < 500, `took ${took} ms`);
+});
+
+test('ten minutes of the ride feed failing tells phones once, and its return quietly', async () => {
+  const now = Date.now();
+  setup({ p1: ride('Ride P1', 'OPERATING', now - 3600_000) }, now - 11 * 60_000);
+  parkState[PARK].feedDown = { since: now - 10.5 * 60_000, toldAt: null };
+  fakes.upstream.live[PARK] = [{ id: 'p1', name: 'Ride P1', status: 'OPERATING', waitTime: 10 }];
+  fakes.upstream.fail = true;
+  try {
+    await pollPark(PARK);
+    await pollPark(PARK);
+  } finally {
+    fakes.upstream.fail = false;
+  }
+  assert.deepEqual(fakes.pushes.map((p) => p.title), ['Ride alerts paused at Magic Kingdom']);
+  assert.match(fakes.pushes[0].message, /ride feed hasn't answered since \d{1,2}:\d{2}\s[AP]M/);
+  await pollPark(PARK);
+  assert.deepEqual(fakes.pushes.map((p) => p.title), ['Ride alerts paused at Magic Kingdom', 'Ride alerts are back on']);
+  assert.equal(fakes.pushes[1].priority, 2, 'quietly');
+  assert.equal(parkState[PARK].feedDown, null);
+});
+
+test('a single failed poll is not a feed outage: nobody hears of it', async () => {
+  const now = Date.now();
+  setup({ p1: ride('Ride P1', 'OPERATING', now - 3600_000) }, now - 60_000);
+  fakes.upstream.fail = true;
+  try {
+    await pollPark(PARK);
+  } finally {
+    fakes.upstream.fail = false;
+  }
+  assert.equal(fakes.pushes.length, 0);
+  assert.ok(parkState[PARK].feedDown.since >= now);
 });
