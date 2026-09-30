@@ -42,9 +42,11 @@ export const HEALTH_TOKEN = env.HEALTH_TOKEN || null;
 // the client's address). Without one, any client could name its own address
 // and pick its own rate-limit bucket, so it is ignored unless running on
 // Railway or TRUST_PROXY=1 says there is a proxy in front.
+// Any of Railway's own variables will do: missing it would put every visitor
+// in the proxy's one bucket.
 export const TRUST_PROXY = env.TRUST_PROXY != null
   ? env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true'
-  : !!(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PUBLIC_DOMAIN);
+  : ['RAILWAY_SERVICE_ID', 'RAILWAY_ENVIRONMENT_NAME', 'RAILWAY_ENVIRONMENT', 'RAILWAY_PUBLIC_DOMAIN', 'RAILWAY_VOLUME_MOUNT_PATH'].some((k) => env[k]);
 
 // The stress lab (npm run lab) sets this to list each push to a phone in its
 // panel; nothing else should.
