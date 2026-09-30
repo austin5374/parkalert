@@ -307,6 +307,9 @@ function patchNode(a, b) {
   for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
   if (a.hasAttribute('data-chart')) {
     // Same data: keep the drawn chart, with its scrub position and listeners.
+    // While a finger is on it, keep it even if the data moved; the next
+    // refresh after the finger lifts redraws it.
+    if (a._busy) return;
     if (a._drawn !== a.getAttribute('data-sig')) a.replaceChildren();
     return;
   }
@@ -560,11 +563,13 @@ const pages = (() => {
     if (below) below.el.style.transform = `translate3d(${(-0.3 * width() * progress).toFixed(1)}px,0,0)`;
     else shade.style.opacity = String(progress);
   };
-  let anim = null;
+  // Each page has its own animation. One shared animation let a page opened
+  // right after a Back cancel the old page's slide-out halfway, so its
+  // removal never ran and it stayed on screen as a ghost duplicate.
   function animate(p, to, velocity = 0, done) {
-    anim?.stop();
+    p.anim?.stop();
     if (reducedMotion() || document.hidden) { paint(p, to); done?.(); return; }
-    anim = spring({ from: p.x, to, velocity, damping: 1, response: 0.38, onUpdate: (x) => paint(p, x), onDone: done });
+    p.anim = spring({ from: p.x, to, velocity, damping: 1, response: 0.38, onUpdate: (x) => { if (p.el.isConnected) paint(p, x); }, onDone: done });
   }
 
   function syncInert() {
@@ -615,6 +620,8 @@ const pages = (() => {
   }
 
   function remove(p) {
+    p.anim?.stop();
+    if (!stack.includes(p)) return;
     p.el.remove();
     stack.splice(stack.indexOf(p), 1);
     const below = stack[stack.length - 1];
@@ -624,6 +631,10 @@ const pages = (() => {
     p.returnFocus?.focus?.({ preventScroll: true });
   }
   function slideOut(p, velocity = 0) {
+    // Safari's own swipe-back already slid the page away on screen; animating
+    // it out again showed it twice. Such a Back lands just after a touch at
+    // the left edge, so that one is removed at once.
+    if (performance.now() - edgeTouchAt < 900) { remove(p); return; }
     animate(p, width(), velocity, () => remove(p));
   }
   function back() {
@@ -634,13 +645,18 @@ const pages = (() => {
   // Swipe back from the left edge, 1:1 with the finger; release past the
   // middle (or with a flick) completes it, otherwise it springs home.
   let swipe = null;
+  let edgeTouchAt = -Infinity;
+  // In Safari itself (not the Home Screen app), iOS has its own edge swipe
+  // for Back; ours on top of it fought it. There, only Safari's runs.
+  const nativeSwipe = platform === 'ios' && !(matchMedia('(display-mode: standalone)').matches || navigator.standalone === true);
+  addEventListener('touchstart', (e) => { if (e.touches[0]?.clientX < 30) edgeTouchAt = performance.now(); }, { passive: true, capture: true });
   host.addEventListener('touchstart', (e) => {
     const p = stack[stack.length - 1];
     const t = e.touches[0];
-    swipe = p && e.touches.length === 1 && t.clientX < 28
+    swipe = !nativeSwipe && p && e.touches.length === 1 && t.clientX < 28
       ? { p, x0: t.clientX, y0: t.clientY, mode: null, samples: [{ t: e.timeStamp, v: 0 }] }
       : null;
-    if (swipe) anim?.stop();
+    if (swipe) p.anim?.stop();
   }, { passive: true });
   host.addEventListener('touchmove', (e) => {
     if (!swipe) return;
@@ -665,7 +681,8 @@ const pages = (() => {
     const v = releaseVelocity(samples, e.timeStamp);
     if (p.x + project(v, 0.995) > width() * 0.5) {
       haptic();
-      leave(p.entry, () => slideOut(p, v));
+      edgeTouchAt = -Infinity; // our own swipe: finish it with its momentum
+      leave(p.entry, () => animate(p, width(), v, () => remove(p)));
     } else {
       animate(p, 0, v);
     }
@@ -2243,16 +2260,6 @@ const KIND_NOTE = {
   opening: 'This ride did not open on time. Delayed openings are estimated from past delayed openings, not breakdowns.',
 };
 
-function statusLine(r) {
-  if (r.status === 'DOWN' && r.downSince) {
-    const when = downWhen(r);
-    return r.downExact !== false && r.outlook?.kind !== 'opening' ? `Down ${downFor(r)} · since ${fmtTime(r.downSince)}` : [when, downFor(r)].filter(Boolean).join(' · ');
-  }
-  const t = r.status === 'OPERATING' && r.trend;
-  const trend = t ? `${t.direction === 'up' ? 'up' : 'down'} ${Math.abs(t.change)} min in the last half hour` : '';
-  return [rideMeta(r) + (trend ? `, ${trend}` : ''), ...queueTags(r)].join(' · ');
-}
-
 // What a range rests on, in a few words for the card.
 function basisLine(o) {
   if (!o?.basis) return '';
@@ -2306,8 +2313,9 @@ function openRide(rideId, { fresh = false } = {}) {
     title: () => liveRide(rideId)?.name || known.name,
     render() {
       if (fresh && !this.detail && !this.failed) return skeleton('ride');
-      return rideHtml(freshestRide(liveRide(rideId) || known, this.detail), this.detail, this.failed);
+      return rideHtml(freshestRide(liveRide(rideId) || known, this.detail), this.detail, this.failed, this.tab);
     },
+    tab: 'today',
     charts() { return this.detail ? rideCharts(this.detail) : null; },
     async load() {
       try {
@@ -2362,15 +2370,13 @@ function waitAlertHtml(r) {
           ? `Now ${posted} min. Alert me when the wait is at or under:`
           : 'When it reopens, alert me if the wait is at or under:';
   return `
-    <h2 class="section-label" data-key="wait-label">Wait alert</h2>
     <div class="group padded wait-alert" data-key="wait-alert">
       <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
       ${choices.length ? `<div class="segmented wait-limits" role="group" aria-label="Wait alert limit">
         ${armed ? '<button class="chip" type="button" data-act="wait-off" data-key="off" aria-pressed="false">Off</button>' : ''}
         ${choices.map((m) => `<button class="chip" type="button" data-act="wait-${m}" data-key="${m}" aria-pressed="${armed && alert.max === m}" aria-label="${m} minutes">${m}</button>`).join('')}
       </div>` : ''}
-    </div>
-    <p class="footnote" data-key="wait-foot">Goes to everyone on this trip, once, and only today.</p>`;
+    </div>`;
 }
 
 async function setWaitAlert(rideId, max) {
@@ -2403,37 +2409,14 @@ function rideCharts(detail) {
   };
 }
 
-function rideHtml(r, detail, failed) {
+// A ride's page, built to be read top down and not all at once: one card
+// that answers "can I ride it, and when", two actions, then one section at
+// a time (Today, Best times, History) behind a switcher, instead of every
+// chart and list stacked up. How an estimate is worked out folds away.
+function rideHtml(r, detail, failed, tab = 'today') {
   const o = (r.status === 'DOWN' ? r.outlook : null) || (detail?.ride?.status === 'DOWN' ? detail.outlook : null);
   const down = r.status === 'DOWN' && r.downSince;
-  const parts = [`<p class="page-sub ${down ? 'tint-red' : ''}" data-key="status">${esc(statusLine(r))}</p>`];
-
-  if (down) {
-    const clock = backClock(r, o);
-    parts.push(`
-      <div class="group padded outlook-block" data-key="outlook">
-        ${o?.cause ? `<p class="kind-tag hold">${icon('bolt')}${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}${o.kind === 'hold' ? ' · storm hold' : ''}</p>`
-          : o?.kind === 'hold' ? `<p class="kind-tag hold">${icon('pause')}Paused with other rides</p>` : ''}
-        ${o?.kind === 'opening' ? '<p class="kind-tag">Delayed opening</p>' : ''}
-        <p class="big-outlook">${esc(o?.advice?.verdict || o?.text || 'Not enough history to estimate yet')}</p>
-        ${o?.advice ? `<p class="advice-detail">${esc(o.advice.detail)}${o.advice && isFollowing(r.id) && alertsReady() ? " You'll get an alert when it's back." : ''}</p>` : ''}
-        ${o?.chance ? chanceHtml(o) : timeline({ ...r, outlook: o })}
-        ${o?.advice && o?.text ? `<p class="clock">${esc(o.text)}</p>` : ''}
-        ${clock ? `<p class="clock">${esc(clock)}</p>` : ''}
-        ${o?.text ? `<p class="explain">${esc(estimateExplainer(o))}</p>` : ''}
-        ${o?.cause ? `<p class="explain">${esc(WEATHER_NOTE[o.cause])}</p>` : KIND_NOTE[o?.kind] ? `<p class="explain">${esc(KIND_NOTE[o.kind])}</p>` : ''}
-      </div>`);
-  }
-
-  parts.push(r.other
-    ? `<p class="footnote" data-key="follow">This attraction never posts a wait, so it doesn't send alerts.</p>`
-    : `
-    <div class="group ${down ? 'spaced-sm' : ''}" data-key="follow"><div class="row">
-      ${icon('bell', 'row-icon tint-accent')}
-      <span class="row-label">Alerts for this ride</span>
-      <button class="switch" type="button" role="switch" aria-checked="${isFollowing(r.id)}" aria-label="Alerts for ${esc(r.name)}" data-act="follow"></button>
-    </div></div>`);
-  parts.push(waitAlertHtml(r));
+  const parts = [heroHtml(r, o, detail), actionsHtml(r)];
 
   if (!detail) {
     parts.push(failed
@@ -2443,75 +2426,145 @@ function rideHtml(r, detail, failed) {
     return parts.join('');
   }
 
-  // Wait times today
-  if (detail.waits.some(([, v]) => v != null)) {
-    parts.push(`<h2 class="section-label" data-key="waits-label">Wait times, last six hours</h2>
-      <div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
-      <p class="footnote" data-key="waits-foot">The last six hours of posted waits. Drag across the chart to see any time. Gaps are when it was down or closed.</p>`);
+  const tabs = [['today', 'Today'], ...(detail.bestTimes ? [['best', 'Best times']] : []), ...(detail.history?.archivedDays ? [['history', 'History']] : [])];
+  if (!tabs.some(([k]) => k === tab)) tab = 'today';
+  parts.push(`<div class="segmented page-tabs" role="tablist" aria-label="Ride detail" data-key="tabs">${tabs.map(([k, label]) =>
+    `<button type="button" role="tab" data-act="tab-${k}" data-key="${k}" aria-selected="${k === tab}" aria-pressed="${k === tab}">${label}</button>`).join('')}</div>`);
+
+  if (tab === 'today') {
+    if (detail.waits.some(([, v]) => v != null)) {
+      parts.push(`<div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
+        <p class="footnote" data-key="waits-foot">Posted waits over the last six hours. Drag across to see any time.</p>`);
+    }
+    const today = [...detail.today];
+    if (down && !today.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) {
+      today.push({ type: 'DOWN', at: r.downSince, opening: o?.kind === 'opening' });
+      today.sort((a, b) => a.at - b.at);
+    }
+    parts.push('<h2 class="section-label" data-key="today-label">Outages today</h2>');
+    parts.push(today.length
+      ? `<div class="group" data-key="today">${today.map((e) => `
+        <div class="row" data-key="${e.type}-${e.at}">
+          ${e.type === 'CLOSED' ? icon('moon', 'row-icon tint-orange') : icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
+          <span class="row-label">${e.type === 'CLOSED' ? 'Closed' : e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${
+            e.type === 'UP' && e.downtimeMs && !e.late ? `<small>after ${fmtDuration(e.downtimeMs)}</small>`
+            : e.type === 'CLOSED' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)} down</small>` : ''}</span>
+          <span class="row-detail">${fmtTime(e.at)}</span>
+        </div>`).join('')}</div>`
+      : '<div class="group plain" data-key="today"><div class="row"><span class="row-label muted">None so far today</span></div></div>');
   }
 
-  // When the line is usually shortest: in what is left of today, which is
-  // the choice a guest still has; on a usual day once today is over.
-  const bt = detail.bestTimes;
-  if (bt) {
+  if (tab === 'best') {
+    const bt = detail.bestTimes;
     const left = bestLeftToday(bt.typical);
-    parts.push(`<h2 class="section-label" data-key="best-label">${left ? 'Best time left today' : 'Best time to ride'}</h2>
-      <div class="group padded" data-key="best">
+    parts.push(`<div class="group padded" data-key="best">
         <p class="best-line">${left
-    ? left.hour === parkHour() ? `Now is about as short as it gets today (usually ${left.wait} min).`
-      : `Usually shortest around <strong>${fmtHour(left.hour)}</strong> (${left.wait} min) for the rest of today.`
-    : `On a usual day, shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait} min), longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait} min).`}</p>
+    ? left.hour === parkHour() ? `Now is about as short as it gets today, usually ${left.wait} min.`
+      : `Shortest for the rest of today around <strong>${fmtHour(left.hour)}</strong>, usually ${left.wait} min.`
+    : `On a usual day, shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait} min) and longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait} min).`}</p>
         <div data-chart="hours" data-key="hours-chart" data-sig="${sigOf(bt.typical)}"></div>
       </div>
-      <p class="footnote" data-key="best-foot">Typical posted wait each hour, from ${bt.days} day${bt.days === 1 ? '' : 's'} of history. Tap an hour.</p>`);
+      <p class="footnote" data-key="best-foot">The usual posted wait for each hour, from ${bt.days} day${bt.days === 1 ? '' : 's'} of history. Tap an hour.</p>`);
   }
 
-  // Today. If the ride went down before today's log begins, the live
-  // down-since time still says when, so show that rather than nothing.
-  const today = [...detail.today];
-  if (down && !today.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) {
-    today.push({ type: 'DOWN', at: r.downSince, opening: o?.kind === 'opening' });
-    today.sort((a, b) => a.at - b.at);
-  }
-  parts.push('<h2 class="section-label" data-key="today-label">Today</h2>');
-  parts.push(today.length
-    ? `<div class="group" data-key="today">${today.map((e) => `
-      <div class="row" data-key="${e.type}-${e.at}">
-        ${e.type === 'CLOSED' ? icon('moon', 'row-icon tint-orange') : icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
-        <span class="row-label">${e.type === 'CLOSED' ? 'Closed' : e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${
-          e.type === 'UP' && e.downtimeMs && !e.late ? `<small>after ${fmtDuration(e.downtimeMs)}</small>`
-          : e.type === 'CLOSED' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)} down</small>` : ''}</span>
-        <span class="row-detail">${fmtTime(e.at)}</span>
-      </div>`).join('')}</div>`
-    : '<div class="group plain" data-key="today"><div class="row"><span class="row-label muted">No outages so far today</span></div></div>');
-
-  // History
-  const h = detail.history;
-  if (h?.archivedDays) {
-    parts.push(`<h2 class="section-label" data-key="hist-label">Last ${h.days.length} days</h2>
-      <div class="group padded" data-key="hist">
+  if (tab === 'history') {
+    const h = detail.history;
+    parts.push(`<div class="group padded" data-key="hist">
         <div class="stats">
           <div><p class="stat-label">Outages</p><p class="stat-value">${h.days.reduce((n, d) => n + d.outages, 0)}</p></div>
-          <div><p class="stat-label">Typical breakdown</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'n/a'}</p></div>
-          <div><p class="stat-label">Longest breakdown</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'n/a'}</p></div>
+          <div><p class="stat-label">Typical</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'None'}</p></div>
+          <div><p class="stat-label">Longest</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'None'}</p></div>
         </div>
         <div data-chart="days" data-key="days-chart" data-sig="${sigOf(h.days)}"></div>
       </div>`);
     if (h.last.length) {
       parts.push(`<h2 class="section-label" data-key="last-label">Recent outages</h2>
-        <div class="group plain" data-key="last">${h.last.map((ep) => `
+        <div class="group plain" data-key="last">${h.last.slice(0, 5).map((ep) => `
         <div class="row" data-key="${ep.start}">
           <span class="row-label">${esc(fmtDay(ep.start))}<small>${esc([
-            `Went down at ${fmtTime(ep.start)}`,
+            fmtTime(ep.start),
             { hold: 'park-wide hold', opening: 'delayed opening' }[ep.kind],
             ep.reopened ? '' : "didn't reopen that day",
           ].filter(Boolean).join(' · '))}</small></span>
           <span class="row-detail">${ep.reopened ? fmtDuration(ep.minutes * 60000) : ''}</span>
         </div>`).join('')}</div>`);
     }
-    parts.push(`<p class="footnote" data-key="hist-foot">Outage history comes from the ThemeParks.wiki archive, ${h.archivedDays} days so far and growing nightly.</p>`);
+    parts.push(`<p class="footnote" data-key="hist-foot">Breakdowns over the last ${h.days.length} days, from the ThemeParks.wiki archive.</p>`);
   }
   return parts.join('');
+}
+
+// The top card: what a guest wants first. Down: whether to wait and when it
+// is likely back. Open: the wait, where it's heading, and how it compares
+// with usual for this hour. Closed: when it opens.
+function heroHtml(r, o, detail) {
+  if (r.status === 'DOWN' && r.downSince) {
+    const clock = backClock(r, o);
+    const tag = o?.cause ? `${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}`
+      : o?.kind === 'hold' ? 'Down with other rides' : o?.kind === 'opening' ? 'Delayed opening' : '';
+    const how = [o?.text ? estimateExplainer(o) : '', o?.cause ? WEATHER_NOTE[o.cause] : KIND_NOTE[o?.kind] || ''].filter(Boolean);
+    return `<div class="group padded hero down" data-key="hero">
+      <p class="hero-kicker tint-red">${icon('down', 'inline-icon')}Down ${fmtDuration(Date.now() - r.downSince)}${tag ? ` · ${esc(tag)}` : ''}</p>
+      <p class="hero-title">${esc(o?.advice?.verdict || 'Not enough history to say yet')}</p>
+      ${clock ? `<p class="hero-sub">${esc(clock)}</p>` : o?.text ? `<p class="hero-sub">${esc(o.text)}</p>` : ''}
+      ${o?.chance ? chanceHtml(o) : ''}
+      ${how.length ? `<details class="how"><summary>How is this worked out?</summary>${how.map((t) => `<p>${esc(t)}</p>`).join('')}</details>` : ''}
+    </div>`;
+  }
+  if (r.status === 'OPERATING') {
+    const usual = detail?.bestTimes?.typical?.[parkHour()] ?? r.usual ?? null;
+    const cmp = r.waitTime == null || usual == null ? ''
+      : r.waitTime <= usual - 10 ? `Shorter than usual for ${fmtHour(parkHour())} (usually ${usual} min)`
+        : r.waitTime >= usual + 10 ? `Longer than usual for ${fmtHour(parkHour())} (usually ${usual} min)`
+          : `About usual for ${fmtHour(parkHour())}`;
+    const t = r.trend;
+    const trend = t ? `${t.direction === 'up' ? 'Up' : 'Down'} ${Math.abs(t.change)} min in the last half hour` : '';
+    const tags = queueTags(r);
+    return `<div class="group padded hero" data-key="hero">
+      <p class="hero-kicker tint-green">${icon('check-circle', 'inline-icon')}Open</p>
+      <p class="hero-title">${r.waitTime != null ? `${r.waitTime} min wait` : 'No posted wait'}${t ? trendHtml(r) : ''}</p>
+      ${cmp || trend ? `<p class="hero-sub">${esc([cmp, trend].filter(Boolean).join(' · '))}</p>` : ''}
+      ${tags.length ? `<p class="hero-tags">${tags.map((x) => `<span class="tag">${esc(x)}</span>`).join('')}</p>` : ''}
+    </div>`;
+  }
+  return `<div class="group padded hero" data-key="hero">
+    <p class="hero-kicker">${icon('moon', 'inline-icon')}${r.status === 'REFURBISHMENT' ? 'Refurbishment' : 'Closed'}</p>
+    <p class="hero-title">${r.status === 'REFURBISHMENT' ? 'Closed for refurbishment' : dash.park.openingTime && Date.now() < Date.parse(dash.park.openingTime) ? `Opens at ${fmtTime(Date.parse(dash.park.openingTime))}` : 'Closed right now'}</p>
+  </div>`;
+}
+
+// Two actions under the card, as a row of buttons rather than two forms.
+function actionsHtml(r) {
+  if (r.other) return '<p class="footnote" data-key="actions">This attraction never posts a wait, so it has no alerts.</p>';
+  const on = isFollowing(r.id);
+  const alert = dash.trip.waitAlerts?.[r.id];
+  const armed = alert && !alert.sentAt;
+  return `<div class="actions" data-key="actions">
+    <button class="action pressable ${on ? 'on' : ''}" type="button" data-act="follow" aria-pressed="${on}">
+      ${icon(on ? 'bell' : 'bell-off')}<span>${on ? 'Alerts on' : 'Alerts off'}</span></button>
+    <button class="action pressable ${armed ? 'on' : ''}" type="button" data-act="wait-sheet" aria-haspopup="dialog">
+      ${icon('timer')}<span>${armed ? `Wait ≤ ${alert.max} min` : 'Wait alert'}</span></button>
+  </div>`;
+}
+
+// The wait alert's limits, in a small sheet of their own.
+function openWaitAlert(rideId) {
+  const r = liveRide(rideId);
+  if (!r) return;
+  const content = el(`<div data-sheet="wait">${sheetHead(`Wait alert: ${r.name}`, 'One alert, to everyone on this trip, when the posted wait drops to your limit. Today only.')}${waitAlertHtml(r)}
+    <div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Done</button></div></div>`);
+  content.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'done') return sheet.close();
+    if (!act?.startsWith('wait-')) return;
+    haptic();
+    const alert = dash.trip.waitAlerts?.[rideId];
+    const armed = alert && !alert.sentAt;
+    const m = act.slice(5);
+    sheet.close();
+    setWaitAlert(rideId, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
+  });
+  sheet.open(content);
 }
 
 function fmtDay(ts) {
@@ -2651,6 +2704,8 @@ $('#pages').addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (!page || !act) return;
   if (act === 'follow' && page.rideId) toggleFollow(page.rideId);
+  else if (act.startsWith('tab-')) { haptic(); page.tab = act.slice(4); pages.draw(page); }
+  else if (act === 'wait-sheet' && page.rideId) openWaitAlert(page.rideId);
   else if (act === 'retry') { page.failed = false; pages.draw(page); page.load?.(); }
   else if (act.startsWith('wait-') && page.rideId) {
     haptic();
@@ -2695,7 +2750,7 @@ function mountCharts(root, data) {
   if (!data) return;
   for (const box of root.querySelectorAll('[data-chart]')) {
     const d = data[box.dataset.chart];
-    if (!d || box._drawn === box.dataset.sig) continue;
+    if (!d || box._drawn === box.dataset.sig || box._busy) continue;
     box.replaceChildren();
     box._drawn = box.dataset.sig;
     if (box.dataset.chart === 'wait') waitChart(box, d);
@@ -2765,12 +2820,9 @@ function waitChart(box, { waits, now }) {
     while (i + 1 < pts.length && pts[i + 1].t <= t) i++;
     return pts[i];
   };
-  let lastShown = null;
   const show = (t, fromUser) => {
     const p = at(t);
     // A tick each time the finger crosses onto a different reading.
-    if (fromUser && lastShown !== null && p !== lastShown) haptic();
-    lastShown = fromUser ? p : null;
     readout.textContent = `${fromUser ? fmtTime(t) : 'Now'} · ${p.w == null ? 'not running' : `${p.w} min wait`}`;
     cross.setAttribute('x1', x(t)); cross.setAttribute('x2', x(t));
     cross.setAttribute('visibility', fromUser ? 'visible' : 'hidden');
@@ -2789,14 +2841,14 @@ function waitChart(box, { waits, now }) {
     const r = svg.getBoundingClientRect();
     return t0 + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (t1 - t0);
   };
-  svg.addEventListener('pointerdown', (e) => { svg.setPointerCapture(e.pointerId); cursor = fromEvent(e); show(cursor, true); });
+  svg.addEventListener('pointerdown', (e) => { box._busy = true; svg.setPointerCapture(e.pointerId); cursor = fromEvent(e); show(cursor, true); });
   svg.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) { cursor = fromEvent(e); show(cursor, true); }
   });
   svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') show(t1, false); });
   // Lifting the finger goes back to "Now", as Stocks and Weather do.
   for (const type of ['pointerup', 'pointercancel']) {
-    svg.addEventListener(type, (e) => { if (e.pointerType !== 'mouse') { cursor = t1; show(t1, false); } });
+    svg.addEventListener(type, (e) => { box._busy = false; if (e.pointerType !== 'mouse') { cursor = t1; show(t1, false); } });
   }
   svg.addEventListener('keydown', (e) => {
     const step = (t1 - t0) / 40;
@@ -2950,10 +3002,10 @@ function crowdChart(box, { today, typical, hour }) {
     return Math.round(h0 + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (h1 - h0));
   };
   let last = null;
-  const scrub = (e) => { const h = hourAt(e); if (h !== last) { if (last !== null) haptic(); last = h; show(h, true); } };
-  svg.addEventListener('pointerdown', (e) => { svg.setPointerCapture(e.pointerId); scrub(e); });
+  const scrub = (e) => { const h = hourAt(e); if (h !== last) { last = h; show(h, true); } };
+  svg.addEventListener('pointerdown', (e) => { box._busy = true; svg.setPointerCapture(e.pointerId); scrub(e); });
   svg.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) scrub(e); });
-  for (const t of ['pointerup', 'pointercancel']) svg.addEventListener(t, (e) => { if (e.pointerType !== 'mouse') { last = null; show(nowH, false); } });
+  for (const t of ['pointerup', 'pointercancel']) svg.addEventListener(t, (e) => { box._busy = false; if (e.pointerType !== 'mouse') { last = null; show(nowH, false); } });
   svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { last = null; show(nowH, false); } });
   const legend = el(`<p class="chart-legend"><span><i class="lg-today"></i>Today</span><span><i class="lg-usual"></i>Usual day</span><span class="lg-max">up to ${max} min</span></p>`);
   const axis = el(`<div class="chart-x"><span>${fmtHour(h0)}</span><span>${fmtHour(h1)}</span></div>`);
