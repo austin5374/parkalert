@@ -30,7 +30,7 @@ export function outlookLine(outlook, timezone = null, now = Date.now()) {
   const key = outlook.advice?.key;
   if (key === 'closed') return 'Often closed for the rest of the day';
   if (key === 'closing') return 'May not reopen before the park closes';
-  if (key === 'long' || (w?.lo != null && w.lo >= 60)) return 'Back in over an hour';
+  if (key === 'long' || key === 'go' || (w?.lo != null && w.lo >= 60)) return 'Back in over an hour';
   if (timezone && w?.lo != null) {
     if (outlook.cause) return `Likely back ${clockIn(w.lo, timezone, now)} or later`;
     return `Back at about ${clockIn(w.hi != null ? Math.round((w.lo + w.hi) / 2) : w.lo, timezone, now)}`;
@@ -62,7 +62,8 @@ export function downMessage(ride, outlook, parkName, timezone, now = Date.now())
   const lines = [outlookLine(outlook, timezone, now)];
   if (outlook?.kind === 'hold') {
     const others = Math.max(0, (outlook.rides ?? 1) - 1);
-    lines.push(isStorm(outlook) ? `Stopped, likely for ${outlook.cause === 'rain' ? 'rain' : 'lightning'}, with ${others} other rides` : `Down with ${others} other rides`);
+    const n = `${others} other ride${others === 1 ? '' : 's'}`;
+    lines.push(isStorm(outlook) ? `Stopped, likely for ${outlook.cause === 'rain' ? 'rain' : 'lightning'}, with ${n}` : `Down with ${n}`);
   }
   lines.push(`${wentDown(ride, timezone)} · ${parkName}`);
   return { title: `${ride.name} is down`, message: lines.filter(Boolean).join('\n'), priority: 3, urgency: 'high' };

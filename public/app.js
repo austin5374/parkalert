@@ -1336,8 +1336,9 @@ function backAt(r, o = r.outlook) {
   if (stormGoingOn(o)) return { kind: 'storm' };
   const a = o.advice?.key;
   if (a === 'closed') return { kind: 'closed' };
+  if (a === 'closing') return { kind: 'closing' };
   const w = o.window;
-  if (a === 'long' || (w?.lo != null && w.lo >= 60)) return { kind: 'hour' };
+  if (a === 'long' || a === 'go' || (w?.lo != null && w.lo >= 60)) return { kind: 'hour' };
   if (w?.lo == null) return { kind: 'none' };
   const now = Date.now();
   const mid = o.cause || w.hi == null ? w.lo : (w.lo + w.hi) / 2;
@@ -1355,7 +1356,7 @@ const backEnd = (b) => `<span class="back-end"><span class="back-label">Likely b
 function backCell(b) {
   if (b.kind === 'time') return `<span class="tile">${esc(pillTime(b.at))}</span>`;
   if (b.kind === 'later') return `<span class="when2"><span class="tile">${esc(pillTime(b.at))}</span><small>or later</small></span>`;
-  const words = { storm: 'After the storm', hour: 'In over an hour', closed: 'Maybe not today', none: 'No estimate yet' }[b.kind];
+  const words = { storm: 'After the storm', hour: 'In over an hour', closed: 'Maybe not today', closing: 'Maybe not before close', none: 'No estimate yet' }[b.kind];
   return `<span class="notsoon">${words}</span>`;
 }
 // The same, as a screen reader hears it.
@@ -1365,6 +1366,7 @@ const backWords = (b) => ({
   storm: () => 'back after the storm passes',
   hour: () => 'back in over an hour',
   closed: () => 'often closed for the rest of the day',
+  closing: () => 'may not reopen before the park closes',
   none: () => 'no estimate yet',
 }[b.kind])();
 
@@ -1394,11 +1396,10 @@ function boardRow(r, { theirs = false } = {}) {
   const what = o?.cause ? `Stopped, likely ${causeWord(o)}`
     : o?.kind === 'opening' ? 'Late to open'
       : since ? `down ${since}` : 'down';
-  const sub = [r.land, what].filter(Boolean).join(' · ');
   const said = [r.name, o?.cause ? `stopped, likely for ${causeWord(o)}` : o?.kind === 'opening' ? 'late to open' : since ? `down ${since}` : 'down', backWords(b)].join(', ');
   return `<button class="slim pressable${theirs ? ' theirs' : ''}" type="button" data-ride="${esc(r.id)}" data-key="r-${esc(r.id)}" aria-label="${esc(said)}">
     <span class="mk">${statusMark(r, theirs)}</span>
-    <span class="rl"><span class="nm">${esc(listName(r))}</span><small>${keepTogether(sub)}</small></span>
+    <span class="rl"><span class="nm">${esc(listName(r))}</span><small>${r.land ? `${esc(r.land)} · ` : ''}${keepTogether(what)}</small></span>
     ${backEnd(b)}${theirs ? '' : icon('chevron', 'chevron')}
   </button>`;
 }
@@ -1409,7 +1410,8 @@ function boardRow(r, { theirs = false } = {}) {
 // ("16 rides closed, likely lightning, includes Big Thunder Mountain and 15
 // more of yours").
 function holdRow(held, mine) {
-  const first = mine[0];
+  // The ride most people would name first: the one with the longest usual wait.
+  const first = [...mine].sort((a, b) => (b.usual ?? 0) - (a.usual ?? 0))[0];
   const o = first.outlook;
   const b = backAt(first);
   const what = o?.cause ? `stopped, likely ${causeWord(o)}` : 'down together';
@@ -1642,9 +1644,9 @@ function waitBar(r) {
 function waitRow(r, { sub = null, following = false } = {}) {
   const usual = r.usual != null ? `usually ${r.usual}\u00a0min` : null;
   const small = sub ?? [r.land, usual].filter(Boolean).join(' · ');
-  const said = `${r.name}, ${r.waitTime} minute wait, ${small.replace(/\u00a0/g, ' ').replace(/ · /g, ', ')}${following ? ', alerts on' : ''}`;
+  const said = [`${r.name}, ${r.waitTime} minute wait`, small.replace(/\u00a0/g, ' ').replace(/ · /g, ', '), following ? 'alerts on' : ''].filter(Boolean).join(', ');
   return `<button class="barrow pressable" type="button" data-ride="${esc(r.id)}" data-key="w-${esc(r.id)}" aria-label="${esc(said)}">
-    <span class="top2"><span class="rl">${esc(listName(r))}${small ? `<small>${esc(small)}</small>` : ''}</span>
+    <span class="top2"><span class="rl">${esc(listName(r))}${following ? icon('bell', 'bell-mark') : ''}${small ? `<small>${esc(small)}</small>` : ''}</span>
     <span class="wait-num${isGood(r) ? ' good' : ''}">${r.waitTime}<small>min</small></span></span>
     ${waitBar(r)}</button>`;
 }
@@ -1737,7 +1739,7 @@ function rideRow(r) {
     ...queueTags(r),
     alert && !alert.sentAt ? `wait alert at ${alert.max}\u00a0min` : null,
   ].filter(Boolean).join(' · ');
-  return waitRow(r, { sub: extras, following }).replace(`${esc(listName(r))}<small>`, `${esc(listName(r))}${following ? icon('bell', 'bell-mark') : ''}<small>`);
+  return waitRow(r, { sub: extras, following });
 }
 
 function renderRides() {
@@ -1923,8 +1925,14 @@ $('#app').addEventListener('click', (e) => {
   }
 });
 
+let myTagFor = null;
 function renderAll() {
   if (!dash) return renderNoData();
+  // Which wait alerts are this phone's own, worked out once per trip and phone.
+  if (myTagFor !== `${tripCode}:${phone.id}`) {
+    myTagFor = `${tripCode}:${phone.id}`;
+    syncMyTag().then(() => pages.refresh(), () => {});
+  }
   renderHeader();
   renderDown();
   renderRides();
@@ -2527,6 +2535,7 @@ function downAnswer(r, o) {
       storm: [o?.cause === 'rain' ? 'Waiting for the rain to stop' : 'Waiting for the storm to pass', "Once the weather clears, outdoor rides usually reopen 30\u00a0min or more later. You'll get an alert when there's a time."],
       hour: ['Back in over an hour', o?.advice?.detail || 'Closures this long rarely end soon.'],
       closed: ['May not reopen today', o?.advice?.detail || ''],
+      closing: ['May not reopen before close', o?.advice?.detail || ''],
       none: ['No estimate yet', "ParkAlert hasn't seen enough closures like this one to say."],
     }[b.kind];
     parts.push(`<p class="big-wait" style="font-size:min(1.5rem,34px)">${esc(big)}</p>`, text ? `<p class="range">${esc(text)}</p>` : '');
@@ -2546,7 +2555,7 @@ function downKicker(r, o) {
     return `<p class="kicker weather">${icon('bolt')}Stopped, likely ${causeWord(o)} · ${esc(cleared)}</p>`;
   }
   const what = o?.kind === 'opening' ? 'Late to open' : `Down ${downFor(r)}`;
-  const extra = o?.kind === 'hold' && o.rides > 1 ? ` · with ${o.rides - 1} other rides` : '';
+  const extra = o?.kind === 'hold' && o.rides > 1 ? ` · with ${o.rides - 1} other ride${o.rides === 2 ? '' : 's'}` : '';
   return `<p class="kicker down">${icon('down')}${keepTogether(what)}${esc(extra)}</p>`;
 }
 
@@ -2634,7 +2643,7 @@ function rideHtml(r, detail, failed) {
   if (!r.other) {
     const alert = dash.trip.waitAlerts?.[r.id];
     const armed = alert && !alert.sentAt;
-    const who = armed && alert.device ? (alert.device === phone.id ? 'Just me' : 'Another phone') : 'Everyone';
+    const who = { me: 'Just me', other: 'Another phone', all: 'Everyone' }[alertOwner(alert)];
     rows.push(`<button class="row pressable" type="button" data-act="wait-sheet" data-key="wait" aria-haspopup="dialog">
       <span class="row-label">Wait alert${armed ? `<small>${esc(who)}, at ${alert.max}\u00a0min or less</small>` : alert?.sentAt ? `<small>Sent at ${fmtTime(alert.sentAt)}</small>` : ''}</span>
       <span class="row-detail">${armed ? 'On' : 'Off'}</span>${icon('chevron', 'chevron')}</button>`);
@@ -2717,6 +2726,17 @@ function openRideSection(rideId, section) {
   });
 }
 
+// This phone's fingerprint, as the server tags its own wait alerts with.
+// Needs a secure page (as the app always is); elsewhere nothing is "mine".
+let myTag = null;
+async function syncMyTag() {
+  myTag = null;
+  if (!phone.id || !crypto.subtle) return;
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${tripCode}:${phone.id}`));
+  myTag = btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').slice(0, 16);
+}
+const alertOwner = (a) => (!a?.owner ? 'all' : a.owner === myTag ? 'me' : 'other');
+
 // A wait alert: a few limits under the posted wait, for this phone only or
 // for everyone on the trip. It starts on "Just me", as pausing does, so one
 // person's alert never buzzes the whole family by surprise.
@@ -2730,9 +2750,11 @@ function openWaitAlert(rideId) {
   if (armed && !choices.includes(alert.max)) choices = [...choices, alert.max].sort((a, b) => a - b);
   let pick = armed ? alert.max : choices[choices.length - 1] ?? null;
   const perPhone = !!phone.id;
-  let scope = perPhone && !(armed && !alert.device) ? 'me' : 'all';
+  const owner = armed ? alertOwner(alert) : null;
+  let scope = perPhone && owner !== 'all' ? 'me' : 'all';
   const state = armed
-    ? `On: ${alert.device ? (alert.device === phone.id ? 'just this phone' : 'another phone') : 'everyone on the trip'}, at ${alert.max}\u00a0min or less.`
+    ? owner === 'other' ? `Another phone on the trip has an alert here at ${alert.max}\u00a0min. Setting one replaces it.`
+      : `On: ${owner === 'me' ? 'just this phone' : 'everyone on the trip'}, at ${alert.max}\u00a0min or less.`
     : alert?.sentAt ? `Sent at ${fmtTime(alert.sentAt)}, when the wait was ${alert.sentWait}\u00a0min.`
       : posted != null ? `The wait is ${posted}\u00a0min now.` : 'It is not posting a wait right now.';
   const content = el(`<div data-sheet="wait">
@@ -2745,7 +2767,7 @@ function openWaitAlert(rideId) {
       <p class="note">minutes or less</p>` : `<p class="note">The wait is already short. Nothing to set.</p>`}
     <div class="btn-stack">
       ${choices.length ? `<button class="btn-primary pressable" type="button" data-act="set">Set alert at ${pick}\u00a0min</button>` : ''}
-      ${armed ? '<button class="btn-ghost pressable" type="button" data-act="off">Turn off this alert</button>' : '<button class="btn-ghost pressable" type="button" data-act="done">Cancel</button>'}
+      ${armed && owner !== 'other' ? '<button class="btn-ghost pressable" type="button" data-act="off">Turn off this alert</button>' : '<button class="btn-ghost pressable" type="button" data-act="done">Cancel</button>'}
     </div></div>`);
   const sync = () => {
     content.querySelectorAll('[data-m]').forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.m) === pick)));

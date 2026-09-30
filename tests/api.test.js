@@ -450,7 +450,10 @@ test('a wait alert can be kept to one phone on the trip, and only a phone that i
   const put = (body) => call('PUT', `/api/trips/${trip.code}/wait-alerts/${MK}-1`, body);
   const r = await put({ max: 15, device: id });
   assert.equal(r.status, 200);
-  assert.equal(r.body.trip.waitAlerts[`${MK}-1`].device, id);
+  const a = r.body.trip.waitAlerts[`${MK}-1`];
+  assert.equal(a.device, undefined, "the phone's id never goes out to the trip");
+  const { ownerTag } = await import('../server/index.js');
+  assert.equal(a.owner, ownerTag(trip.code, id));
   assert.equal((await put({ max: 15, device: 'someone-else' })).status, 400);
 });
 

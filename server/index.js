@@ -154,9 +154,16 @@ function onlyOnThisTrip(trip, endpoint) {
   }
 }
 
+// A phone's id is what lets it pause or leave, so it never goes out to
+// the rest of the trip: a phone's own wait alert shows only a one-way
+// fingerprint of it, which that phone can recognise and no one can use.
+export const ownerTag = (code, deviceId) => crypto.createHash('sha256').update(`${code}:${deviceId}`).digest('base64url').slice(0, 16);
+const alertsView = (trip) => Object.fromEntries(Object.entries(currentWaitAlerts(trip, parkToday(trip.parkId)))
+  .map(([id, { device, ...a }]) => [id, device ? { ...a, owner: ownerTag(trip.code, device) } : a]));
+
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
-  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts, ntfy: ntfyOn(trip) };
+  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: alertsView(trip), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts, ntfy: ntfyOn(trip) };
 }
 
 

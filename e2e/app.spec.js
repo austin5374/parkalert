@@ -88,6 +88,8 @@ test('Pausing everyone means no alerts while rides break down', async ({ page })
   await page.locator('.tab[data-view=trip]').click();
   await page.locator('#row-pause').click();
   await page.locator('#sheet [data-sheet=pause] .row', { hasText: 'For 1 hour' }).click();
+  // Pausing the whole trip asks first; Cancel is the big button.
+  await page.locator('#sheet [data-sheet=pause-all] [data-act=all]').click();
   await settle(page, 1500);
   const before = (await labState()).pushes.filter((p) => p.topic === 'lab-mklabs').length;
   await scenario('wave');

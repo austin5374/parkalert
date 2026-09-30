@@ -28,6 +28,8 @@ test('pushes say when a ride is likely back as a clock time', () => {
   assert.equal(outlookLine({ window: { lo: 70, hi: 120 } }, tz, now), 'Back in over an hour');
   assert.equal(outlookLine({ advice: { key: 'long' }, window: null }, tz, now), 'Back in over an hour');
   assert.equal(outlookLine({ advice: { key: 'closed' } }, tz, now), 'Often closed for the rest of the day');
+  assert.equal(outlookLine({ advice: { key: 'go' }, window: { lo: 20, hi: 50 } }, tz, now), 'Back in over an hour', 'unlikely within the hour: no clock time');
+  assert.equal(outlookLine({ advice: { key: 'closing' }, window: { lo: 20, hi: 50 } }, tz, now), 'May not reopen before the park closes');
   assert.equal(outlookLine(null), null);
 });
 
@@ -48,4 +50,12 @@ test('a wait alert can belong to one phone, and then it says "you"', () => {
   const ride = { name: 'Haunted Mansion', waitTime: 10 };
   assert.match(waitAlertMessage(ride, { max: 10, device: 'abc' }, 'Magic Kingdom').message, /^You asked for 10 min/);
   assert.match(waitAlertMessage(ride, { max: 10 }, 'Magic Kingdom').message, /^Alert set for 10 min/);
+});
+
+test("the phone fingerprint the app computes matches the server's", async () => {
+  const { ownerTag } = await import('../server/index.js');
+  const { webcrypto } = await import('node:crypto');
+  const hash = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode('ABCDEF:phone-1'));
+  const client = btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').slice(0, 16);
+  assert.equal(client, ownerTag('ABCDEF', 'phone-1'));
 });
