@@ -384,6 +384,7 @@ main {
   -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 -0.5px 0 var(--separator);
 }
+body.paging .tabbar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .tab {
   flex: 1; max-width: 10rem; height: var(--tabbar-h);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.15rem;
@@ -725,8 +726,7 @@ main { position: relative; transition: none; }
 .chance-key i { width: 0.55rem; height: 0.55rem; border-radius: 2px; background: var(--accent); display: inline-block; }
 .chance-key .k30 { opacity: 0.55; }
 .chance-key .k60 { opacity: 0.25; }
-.chance-key i.none { background: transparent; box-shadow: inset 0 0 0 1px var(--accent); opacity: 1; }
-.chance-key .chance-label { flex-basis: 100%; }
+.chance-key .chance-label { font-weight: 500; }
 .outlook-block .chance { margin-top: 0.8rem; }
 
 /* ---- Best time to ride, and the crowd chart ---- */
@@ -787,3 +787,7 @@ main { position: relative; transition: none; }
 .action:active { transform: scale(0.97); }
 .page-tabs { margin: 1.4rem var(--gutter) 0.8rem; }
 .page-body > .page-tabs { margin-left: max(var(--gutter), calc((100% - 40rem) / 2 + var(--gutter))); margin-right: max(var(--gutter), calc((100% - 40rem) / 2 + var(--gutter))); }
+
+/* Focus moved by the app (a page or sheet opening), not by a keyboard: no ring. */
+.quiet-focus:focus, .quiet-focus:focus-visible { outline: none; box-shadow: none; }
+.hold-ride.hold-all .row-label { color: var(--accent); }

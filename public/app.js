@@ -236,6 +236,22 @@ const haptic = (() => {
   };
 })();
 
+// Moving focus for screen readers when a page or sheet opens, without the
+// keyboard focus ring: iOS drew a heavy blue box round every page's back
+// button, which read as a glitch. A keyboard user (last input a key) still
+// gets the ring.
+let keyboardUser = false;
+addEventListener('keydown', (e) => { if (e.key === 'Tab') keyboardUser = true; }, true);
+addEventListener('pointerdown', () => { keyboardUser = false; }, true);
+function quietFocus(node) {
+  if (!node) return;
+  if (!keyboardUser) {
+    node.classList.add('quiet-focus');
+    node.addEventListener('blur', () => node.classList.remove('quiet-focus'), { once: true });
+  }
+  node.focus({ preventScroll: true });
+}
+
 /* ---------- In-place updates ---------- */
 // Refreshes patch what is on screen instead of replacing it. Replacing the
 // nodes every 15 seconds was the root of most of the jank: a tap landing
@@ -363,12 +379,19 @@ function releaseVelocity(samples, t) {
 // Android's, or a page's own chevron) closes the top one instead of leaving
 // the app. Closing one any other way (a swipe, the scrim, a button) closes it
 // at once and then takes its entry back off, quietly.
-const backStack = []; // { onBack, done }
+const backStack = []; // { onBack, done, queued }
 let quietPops = 0;
+// history.back() and go() land later, in a popstate. A layer opened before
+// that lands must not push its entry yet, or the pending jump takes that
+// entry instead, history ends up a step short, and a later Back walks out of
+// the app (found by the random-tap test: switch tab with a page open, then
+// open a ride at once). Entries wait here until our own jumps have landed.
+const queued = [];
 function addBack(onBack, url) {
-  const entry = { onBack, done: false };
+  const entry = { onBack, done: false, queued: false };
   backStack.push(entry);
-  history.pushState({ parkalert: backStack.length }, '', url || location.pathname + location.search);
+  const push = () => { entry.queued = false; history.pushState({ parkalert: backStack.length }, '', url || location.pathname + location.search); };
+  if (quietPops) { entry.queued = true; queued.push({ entry, push }); } else push();
   return entry;
 }
 function leave(entry, closeNow) {
@@ -377,14 +400,20 @@ function leave(entry, closeNow) {
   const i = backStack.indexOf(entry);
   if (i !== -1) backStack.splice(i, 1);
   closeNow?.();
+  // Its entry was never pushed: drop it, nothing to take back.
+  if (entry.queued) {
+    queued.splice(queued.findIndex((q) => q.entry === entry), 1);
+    return;
+  }
   quietPops++;
   history.back();
 }
 addEventListener('popstate', () => {
   // Our own history.back()/go(): the layers are already closed and their
-  // entries already off backStack.
+  // entries already off backStack. Once the last lands, queued entries go in.
   if (quietPops) {
     quietPops--;
+    if (!quietPops) while (queued.length) queued.shift().push();
     return;
   }
   const entry = backStack.pop();
@@ -456,7 +485,7 @@ const sheet = (() => {
     isOpen = true;
     entry = addBack(() => slideAway());
     animateTo(0);
-    panel.focus({ preventScroll: true });
+    quietFocus(panel);
   }
   function close(velocity = 0) {
     if (!isOpen) return;
@@ -577,6 +606,9 @@ const pages = (() => {
     for (const sel of ['#nav', '#nav-bar', '#app main']) $(sel).inert = stack.length > 0;
     stack.forEach((p, i) => { p.el.inert = i < stack.length - 1; });
     host.classList.toggle('hidden', !stack.length);
+    // The tab bar goes solid over a page, or the list under the page shows
+    // through it.
+    document.body.classList.toggle('paging', stack.length > 0);
   }
 
   function draw(p) {
@@ -614,7 +646,7 @@ const pages = (() => {
     paint(p, width());
     p.entry = addBack(() => slideOut(p), p.url);
     animate(p, 0);
-    p.el.querySelector('.page-back').focus({ preventScroll: true });
+    quietFocus(p.el.querySelector('.page-back'));
     p.load?.();
     return p;
   }
@@ -702,11 +734,22 @@ const pages = (() => {
     // Everything off at once, no animation (the trip changed underneath).
     clear() {
       if (!stack.length) return;
-      const n = stack.length;
-      for (const p of [...stack]) { p.entry.done = true; remove(p); }
-      backStack.splice(backStack.length - n, n);
+      // Only entries already in history are taken back; queued ones are dropped.
+      let pushed = 0;
+      for (const p of [...stack]) {
+        // Already on its way out (Back taken, sliding away): its entry is
+        // gone from history. Counting it again walked out of the app.
+        if (p.entry.done) { remove(p); continue; }
+        p.entry.done = true;
+        const i = backStack.indexOf(p.entry);
+        if (i !== -1) backStack.splice(i, 1);
+        if (p.entry.queued) queued.splice(queued.findIndex((q) => q.entry === p.entry), 1);
+        else pushed++;
+        remove(p);
+      }
+      if (!pushed) return;
       quietPops++;
-      history.go(-n);
+      history.go(-pushed);
     },
   };
 })();
@@ -1285,7 +1328,9 @@ function fmtHour(h) {
 // Old data is greyed and dated, like the rest of the screen.
 function crowdRowHtml() {
   const c = dash.crowd;
-  if (!c || alertState().kind === 'closed') return '';
+  // Paused, it would only take a whole card to say it can't say anything;
+  // the park page carries the reason.
+  if (!c || c.paused || alertState().kind === 'closed') return '';
   const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
   const [title, detail] = c.paused === 'hold'
     ? ['Crowd level paused', "Waits during a hold and just after it don't show how busy the park is"]
@@ -1312,16 +1357,23 @@ function crowdRowHtml() {
 // as its fill on the bar is.
 function chanceHtml(o, id = '') {
   const c = o?.chance;
-  if (!c) return '';
+  // Nothing likely within the hour: an empty bar and three "<5%" say less
+  // than the verdict above it ("these usually take over an hour").
+  if (!c || c[60] < 0.045) return '';
   const pct = (p) => Math.round(p * 100);
   const say = (p) => (p >= 0.955 ? '>95%' : p < 0.045 ? '<5%' : `${pct(p)}%`);
-  const key = (m, label) => `<span><i class="k${m}${c[m] < 0.045 ? ' none' : ''}"></i>${label} ${say(c[m])}</span>`;
+  // Only the chances worth reading: "15 min <5%" beside "1 hr 50%" is noise.
+  const keys = [[15, '15 min'], [30, '30 min'], [60, '1 hr']].filter(([m]) => c[m] >= 0.045);
+  const key = ([m, label]) => `<span><i class="k${m}"></i>${label} ${say(c[m])}</span>`;
+  const text = keys.length === 1
+    ? `<span><i class="k${keys[0][0]}"></i>${say(c[keys[0][0]])} chance it's back within ${keys[0][1] === '1 hr' ? 'the hour' : keys[0][1]}</span>`
+    : `<span class="chance-label">Back within</span>${keys.map(key).join('')}`;
   return `<div class="chance" aria-hidden="true">
       <span class="c60" style="width:${pct(c[60])}%"></span>
       <span class="c30" style="width:${pct(c[30])}%"></span>
       <span class="c15" style="width:${pct(c[15])}%"></span>
     </div>
-    <p class="chance-key"${id ? ` id="${id}"` : ''}><span class="chance-label">Chance it's back within</span>${key(15, '15 min')}${key(30, '30 min')}${key(60, '1 hr')}</p>`;
+    <p class="chance-key"${id ? ` id="${id}"` : ''}>${text}</p>`;
 }
 
 function adviceHtml(o, cls = 'card-advice', id = '') {
@@ -1360,10 +1412,8 @@ function downCard(r) {
   const o = r.outlook || {};
   const following = isFollowing(r.id);
   const since = downWhen(r);
-  const foot = [
-    basisLine(o),
-    following ? '' : 'Alerts off',
-  ].filter(Boolean).join(' · ');
+  // How the estimate was made lives on the ride's page, not on every card.
+  const foot = following ? '' : 'Alerts off';
   // A link to the ride's page that reads as the whole card: its name, then
   // when it went down, the advice, the chances and the clock.
   const id = `card-${r.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
@@ -1480,17 +1530,20 @@ function downHtml() {
       parts.push(`
         <div class="cards" data-key="hold"><div class="card hold-card">
           <button class="hold-header pressable" type="button" data-act="open-hold">${icon(o.cause ? 'bolt' : 'pause')}<span>${esc(holdName(o, holds.length))}</span>${icon('chevron', 'chevron')}</button>
-          <p class="card-sub">${esc([downWhen(first).replace(/^Down s/, 'S'), downFor(first)].filter(Boolean).join(' · '))}</p>
+          <p class="card-sub">${esc(downWhen(first).replace(/^Down s/, 'S'))}</p>
           ${adviceHtml(o)}
           ${o.chance ? chanceHtml(o) : timeline(first)}
           ${o.text && o.advice ? `<p class="card-clock">${esc(o.text)}</p>` : ''}
-          ${basisLine(o) ? `<p class="card-foot">${esc(basisLine(o))}</p>` : ''}
-          <div class="hold-rides">${holds.map((r) => `
+          <div class="hold-rides">${holds.slice(0, holds.length > 4 ? 3 : 4).map((r) => `
             <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
               <span class="row-label">${esc(r.name)}</span>
               <span class="row-detail">${downFor(r)}</span>
               ${icon('chevron', 'chevron')}
-            </button>`).join('')}</div>
+            </button>`).join('')}${holds.length > 4 ? `
+            <button class="hold-ride hold-all pressable" type="button" data-act="open-hold" data-key="more">
+              <span class="row-label">All ${holds.length} rides in this hold</span>
+              ${icon('chevron', 'chevron')}
+            </button>` : ''}</div>
         </div></div>`);
     }
     if (rest.length) {
@@ -1841,7 +1894,7 @@ function renderTrip() {
   $('#trip-code').textContent = tripCode;
   const ready = alertsReady();
   const d = $('#setup-detail');
-  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Through the ntfy app' : 'Not set up';
+  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Via ntfy' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
   // Nothing when not paused, as Settings shows no value for an unset row;
@@ -1934,7 +1987,7 @@ function openPause({ fresh = false } = {}) {
     ['For 1 hour', Date.now() + 3600_000],
     ['For 3 hours', Date.now() + 3 * 3600_000],
     ...(close && close > Date.now() + 15 * 60_000 && st.kind !== 'closed' ? [['Until the park closes', close]] : []),
-    [thisMorning ? 'Until this morning' : 'Until tomorrow morning', morning],
+    [thisMorning ? 'Until this morning' : 'Until tomorrow morning', morning, true],
     ['Until I turn them back on', null],
   ];
   const tripPaused = st.kind === 'paused' && st.scope === 'trip';
@@ -1983,8 +2036,10 @@ function openPause({ fresh = false } = {}) {
     if (ntfyLive) content.appendChild(el('<p class="footnote">This phone only pauses ParkAlert\'s own notifications, not the ntfy app. To stop everything, pause everyone, or turn off ntfy on the Trip tab.</p>'));
   }
   const list = el('<div class="group plain spaced-sm"></div>');
-  for (const [label, until] of options) {
-    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${until ? `<span class="row-detail">${esc(`Until ${fmtUntil(until)}`)}</span>` : ''}</button>`);
+  // The morning row already names the day; its detail is just the time.
+  for (const [label, until, timeOnly] of options) {
+    const detail = until && (timeOnly ? fmtTime(until) : `Until ${fmtUntil(until)}`);
+    const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${detail ? `<span class="row-detail">${esc(detail)}</span>` : ''}</button>`);
     row.onclick = () => { sheet.close(); if (scope === 'phone') setPhoneMute({ until }); else setMute({ until }); };
     list.appendChild(row);
   }
@@ -2260,19 +2315,6 @@ const KIND_NOTE = {
   opening: 'This ride did not open on time. Delayed openings are estimated from past delayed openings, not breakdowns.',
 };
 
-// What a range rests on, in a few words for the card.
-function basisLine(o) {
-  if (!o?.basis) return '';
-  if (o.basis.from === 'prior') return 'From typical theme park outages, until ParkAlert knows this park';
-  if (o.cause) {
-    if (o.basis.from === 'rule') return 'From the 30-minute lightning rule';
-    return `From ${o.basis.outages} past ${o.cause === 'rain' ? 'rain closures' : 'storms'} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}`;
-  }
-  const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
-  const what = { hold: 'holds', opening: 'delayed openings' }[o.kind] || 'outages';
-  return `From ${o.basis.outages} past ${what} ${where}`;
-}
-
 const WEATHER_NOTE = {
   lightning: "Outdoor rides close while there's lightning nearby and reopen about 30 minutes after the last of it, once they've been checked. The storm's end comes from the automated weather stations nearest the park.",
   rain: 'This ride closes in rain as well as lightning and reopens once the rain has stopped and the track has dried. The rain comes from the automated weather stations nearest the park.',
@@ -2283,6 +2325,12 @@ function estimateExplainer(o) {
     if (!o.basis) return 'ParkAlert has not seen enough weather closures here to put a range on this one yet.';
     if (o.basis.from === 'rule') return 'Until ParkAlert has seen enough storms here to learn how this ride really goes, this uses the 30-minute rule: most reopen 30 to 45 minutes after the storm passes.';
     const what = o.cause === 'rain' ? 'rain closures' : 'storms';
+    // Still going on: the range is how long it lasts plus the reopening
+    // after. Saying "timed from when it passed" here contradicted the
+    // "still nearby" right above it.
+    if (o.weather !== 'passed') {
+      return `The ${o.cause === 'rain' ? 'rain' : 'storm'} is still going on, so this is how long ${what} here usually last plus the time rides take to reopen afterwards, from ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. It tightens once the ${o.cause === 'rain' ? 'rain stops' : 'storm passes'}.`;
+    }
     return `Timed from when the ${o.cause === 'rain' ? 'rain stopped' : 'storm passed'}, not from when the ride went down: based on ${o.basis.outages} past ${what} ${o.basis.from === 'ride' ? 'for this ride' : 'at this park'}. The middle half of them reopened within the range above.`;
   }
   if (!o?.basis) return o?.text ? 'This outage is already longer than nearly every past outage like it, so there is no honest range to give.' : '';
@@ -2841,7 +2889,7 @@ function waitChart(box, { waits, now }) {
     const r = svg.getBoundingClientRect();
     return t0 + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (t1 - t0);
   };
-  svg.addEventListener('pointerdown', (e) => { box._busy = true; svg.setPointerCapture(e.pointerId); cursor = fromEvent(e); show(cursor, true); });
+  svg.addEventListener('pointerdown', (e) => { box._busy = true; try { svg.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ } cursor = fromEvent(e); show(cursor, true); });
   svg.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) { cursor = fromEvent(e); show(cursor, true); }
   });
@@ -2975,7 +3023,8 @@ function crowdChart(box, { today, typical, hour }) {
   const readout = el('<p class="chart-readout" aria-live="polite"></p>');
   const say = (h, user) => {
     const t = today[h], u = typical[h];
-    readout.textContent = `${user ? fmtHour(h) : `Now (${fmtHour(h)})`} · ${t != null ? `today ${t} min` : 'no reading today'}${u != null ? `, usually ${u}` : ''}`;
+    const value = t != null ? `${t} min${u != null ? `, usually ${u}` : ''}` : u != null ? `usually ${u} min` : 'no reading';
+    readout.textContent = `${user ? fmtHour(h) : 'Now'} · ${value}`;
   };
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: '0', role: 'img',
     'aria-label': `Average big-ride wait by hour, today against a usual day` });
@@ -3003,7 +3052,7 @@ function crowdChart(box, { today, typical, hour }) {
   };
   let last = null;
   const scrub = (e) => { const h = hourAt(e); if (h !== last) { last = h; show(h, true); } };
-  svg.addEventListener('pointerdown', (e) => { box._busy = true; svg.setPointerCapture(e.pointerId); scrub(e); });
+  svg.addEventListener('pointerdown', (e) => { box._busy = true; try { svg.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ } scrub(e); });
   svg.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' || svg.hasPointerCapture(e.pointerId)) scrub(e); });
   for (const t of ['pointerup', 'pointercancel']) svg.addEventListener(t, (e) => { box._busy = false; if (e.pointerType !== 'mouse') { last = null; show(nowH, false); } });
   svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { last = null; show(nowH, false); } });
