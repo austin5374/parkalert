@@ -37,7 +37,7 @@ test('rides down together are never said to have broken, and weather is only lik
   const now = Date.parse('2026-09-21T14:55:00Z');
   const m = downMessage({ name: 'Space Mountain', downSince: now - 12 * 60_000 }, { kind: 'breakdown', window: { lo: 5, hi: 25 } }, 'Magic Kingdom', 'America/New_York', now);
   assert.equal(m.title, 'Space Mountain is down');
-  assert.match(m.message, /^Back at about 11:10 AM\nWent down at 10:43/);
+  assert.match(m.message, /^Back at about 11:10\u00a0AM\nWent down at 10:43/);
   assert.doesNotMatch(JSON.stringify(m), /broke/);
 });
 
