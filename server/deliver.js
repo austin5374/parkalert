@@ -24,7 +24,11 @@ export const deviceMuted = (device, now = Date.now()) =>
 // ntfy setup's test).
 export async function deliver(trip, push, { tag = null, device = null, ntfyOnly = false, now = Date.now(), badge = null } = {}) {
   const jobs = [];
-  if (!device) jobs.push(publish(trip.topic, push.quiet ? { ...push, priority: 2 } : push));
+  // The trip's ntfy topic, unless the trip turned ntfy off (phones on the
+  // app's own notifications would otherwise get everything twice, and a
+  // per-phone pause couldn't silence the ntfy copy).
+  const toNtfy = !device && ntfyOn(trip);
+  if (toNtfy) jobs.push(publish(trip.topic, push.quiet ? { ...push, priority: 2 } : push));
   const targets = ntfyOnly ? [] : (trip.devices || []).filter((d) => (device ? d.id === device : !deviceMuted(d, now)));
   const data = {
     title: push.title, body: push.message, url: push.click || '/', tag,
@@ -50,15 +54,20 @@ export async function deliver(trip, push, { tag = null, device = null, ntfyOnly 
   if (gone) saveTrips();
   // Who it reached: phones on the app's own notifications, and the trip's
   // ntfy topic (which accepts a message whether or not anyone subscribes).
-  const ntfy = device ? false : results[0];
-  const devices = (device ? results : results.slice(1)).filter(Boolean).length;
+  const ntfy = toNtfy ? results[0] : false;
+  const devices = (toNtfy ? results.slice(1) : results).filter(Boolean).length;
   return { ok: ntfy || devices > 0, ntfy, devices };
 }
 
 // Does the ntfy topic count as reaching someone? For a trip with no phones on
 // the app's own notifications, ntfy is how it gets alerts. Once it has some,
 // only if a phone on ntfy has said a test arrived.
-export const ntfyCounts = (trip) => !trip.devices?.length || !!trip.ntfyConfirmedAt;
+export const ntfyCounts = (trip) => ntfyOn(trip) && (!trip.devices?.length || !!trip.ntfyConfirmedAt);
+
+// Whether alerts go to the trip's ntfy topic at all. On unless someone on
+// the trip turned it off (Trip tab); never assumed off, since a phone on
+// ntfy may never have said so.
+export const ntfyOn = (trip) => trip.ntfy !== false;
 
 // Whether a push that went out reached someone who will see it.
 export const reachedSomeone = (trip, result) => result.devices > 0 || (result.ntfy && ntfyCounts(trip));
