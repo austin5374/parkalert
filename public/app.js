@@ -1408,7 +1408,7 @@ function holdRow(held, mine) {
   const b = backAt(first);
   const name = listName(first);
   const sub = mine.length > 1
-    ? `${o?.cause ? `${held.length} closed, likely ${causeWord(o)}` : `${held.length} rides down together`}, ${mine.length === held.length ? 'all yours' : `${mine.length} yours`}`
+    ? o?.cause ? `${held.length} closed, likely ${causeWord(o)}` : `${held.length} rides down together`
     : o?.cause ? `Closed, likely ${causeWord(o)}` : `Down with ${held.length - 1} other ride${held.length === 2 ? '' : 's'}`;
   const said = `${name}${mine.length > 1 ? ` and ${mine.length - 1} more of yours` : ''}, ${o?.cause ? `closed, likely for ${causeWord(o)}, with ${held.length - 1} other rides` : `down with ${held.length - 1} other rides`}, ${backWords(b)}. Show all ${held.length}`;
   return `<button class="slim pressable" type="button" data-act="open-hold" data-key="hold" aria-label="${esc(said)}">

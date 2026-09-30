@@ -23,7 +23,7 @@ export default [
       globals: {
         ...globals.node, ...globals.browser,
         dash: 'readonly', pages: 'readonly', openRide: 'readonly', openParkInfo: 'readonly', openPause: 'readonly',
-        refresh: 'readonly', switchView: 'readonly',
+        refresh: 'readonly', switchView: 'readonly', openHold: 'readonly', renderAll: 'readonly',
       },
     },
   },

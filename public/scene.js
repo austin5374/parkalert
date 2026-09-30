@@ -43,10 +43,10 @@ const SCENE_PARKS = {
 
 const SCENE_STATES = {
   morning: { sky: [['0', '#2a64a3'], ['.5', '#5f9bd0'], ['1', '#f1cf9f']], far: '#8aaed0', trees: '#46658a', ground: '#3a5676', sun: [300, 140, 12, '#ffe3a3'], clouds: [], cloud: '#ffffff', cloudOp: 0.55, stars: 0, rain: false, scrim: 0.62 },
-  day: { sky: [['0', '#1f6fbf'], ['.55', '#5aa2e4'], ['1', '#b7dcfa']], far: '#78aad6', trees: '#31567c', ground: '#284866', clouds: [[330, 120, 0.6]], cloud: '#ffffff', cloudOp: 0.75, stars: 0, rain: false, scrim: 0.62 },
+  day: { sky: [['0', '#1f6fbf'], ['.55', '#5aa2e4'], ['1', '#b7dcfa']], far: '#78aad6', trees: '#31567c', ground: '#284866', clouds: [[300, 166, 0.6]], cloud: '#ffffff', cloudOp: 0.75, stars: 0, rain: false, scrim: 0.62 },
   dusk: { sky: [['0', '#0a1a33'], ['.45', '#17406b'], ['.7', '#2f6a8f'], ['.86', '#e98a4a'], ['1', '#ff9f55']], far: '#3a5d84', trees: '#132641', ground: '#0e1e36', sun: [122, 236, 20, '#ffb772'], clouds: [], cloud: '#f3a26c', cloudOp: 0.4, stars: 6, rain: false, scrim: 0 },
   night: { sky: [['0', '#040b18'], ['.55', '#0a1a33'], ['1', '#17406b']], far: '#193355', trees: '#071325', ground: '#050e1d', moon: [362, 124], clouds: [], cloud: '#9fb4d0', cloudOp: 0.12, stars: 12, rain: false, scrim: 0 },
-  storm: { sky: [['0', '#1f252f'], ['.55', '#343d4b'], ['1', '#56606f']], far: '#4a5465', trees: '#222934', ground: '#1a2029', clouds: [[318, 118, 0.9], [352, 150, 0.6]], cloud: '#161b23', cloudOp: 0.6, stars: 0, rain: true, scrim: 0 },
+  storm: { sky: [['0', '#1f252f'], ['.55', '#343d4b'], ['1', '#56606f']], far: '#4a5465', trees: '#222934', ground: '#1a2029', clouds: [[296, 166, 0.8]], cloud: '#161b23', cloudOp: 0.6, stars: 0, rain: true, scrim: 0 },
 };
 
 // The same shapes every time for the same seed, so a redraw never shuffles
