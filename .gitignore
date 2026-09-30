@@ -2,3 +2,6 @@ data/
 node_modules/
 .DS_Store
 .lab-data/
+e2e/results/
+e2e/gallery/
+.lab-data-e2e/

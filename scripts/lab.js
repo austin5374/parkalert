@@ -22,7 +22,7 @@ import { PARKS } from '../server/parks.js';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LAB_PORT = Number(process.env.LAB_PORT) || 4100;
 const APP_PORT = Number(process.env.APP_PORT) || 3000;
-const DATA = path.join(ROOT, '.lab-data');
+const DATA = process.env.LAB_DATA || path.join(ROOT, '.lab-data');
 const AUTO = process.argv.includes('--auto');
 const KEEP = process.argv.includes('--keep');
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;

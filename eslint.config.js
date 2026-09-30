@@ -4,7 +4,7 @@ import js from '@eslint/js';
 import globals from 'globals';
 
 export default [
-  { ignores: ['node_modules/', 'data/'] },
+  { ignores: ['node_modules/', 'data/', 'e2e/results/', 'e2e/gallery/', '.lab-data*/'] },
   js.configs.recommended,
   {
     rules: {
@@ -12,6 +12,19 @@ export default [
       'no-empty': ['error', { allowEmptyCatch: true }],
       eqeqeq: ['error', 'smart'],
       'prefer-const': 'error',
+    },
+  },
+  {
+    // Playwright specs: Node for the runner, the browser (and the app's own
+    // globals) for code passed to page.evaluate.
+    files: ['e2e/**/*.js', 'playwright.config.js'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        ...globals.node, ...globals.browser,
+        dash: 'readonly', pages: 'readonly', openRide: 'readonly', openParkInfo: 'readonly', openPause: 'readonly',
+        refresh: 'readonly', switchView: 'readonly',
+      },
     },
   },
   {
