@@ -1031,3 +1031,4 @@ body:not(.view-down) #nav { display: none; }
 .how-wrap[open] .chevron { transform: rotate(90deg); }
 .ax-type .sky-top { flex-wrap: wrap; row-gap: 0.4rem; }
 .ax-type .parkline { flex-basis: 100%; }
+.page-body > .spaced-sm { margin-top: 0.9rem; }
