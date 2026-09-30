@@ -29,7 +29,7 @@ const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..',
 // deploy can tell it is running old code and reload.
 export const APP_VERSION = (() => {
   const h = crypto.createHash('sha1');
-  for (const f of ['index.html', 'app.js', 'time.js', 'style.css', 'sw.js']) {
+  for (const f of ['index.html', 'app.js', 'time.js', 'scene.js', 'style.css', 'sw.js']) {
     try { h.update(fs.readFileSync(path.join(PUBLIC_DIR, f))); } catch {}
   }
   return h.digest('hex').slice(0, 12);

@@ -26,7 +26,7 @@ for (const [phone, device] of Object.entries(PHONES)) {
       const page = await context.newPage();
       await page.addInitScript(() => localStorage.setItem('parkalert.alertsReady.MKLABS', '1'));
       await page.goto('http://127.0.0.1:3210/?trip=MKLABS');
-      await page.waitForFunction(() => typeof dash !== 'undefined' && dash && document.querySelector('#down-list [data-ride], #down-list .empty'));
+      await page.waitForFunction(() => typeof dash !== 'undefined' && dash && document.querySelector('#down-list [data-key]:not([data-key=skeleton])'));
       await page.emulateMedia({ reducedMotion: 'reduce' });
       const snap = async (label) => {
         await page.waitForTimeout(400);

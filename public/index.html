@@ -39,7 +39,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="view-down">
   <!-- Icons: one stroke family, drawn on a 24px grid, currentColor. -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
@@ -74,20 +74,21 @@
   <!-- First run: pick a park or join a trip. Nothing is asked for until tapped. -->
   <div id="setup" class="screen hidden">
     <div id="setup-ptr" class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>
-    <div class="setup">
-      <img class="app-icon" src="/icons/icon-192.png" alt="" width="72" height="72">
-      <h1 class="large-title">ParkAlert</h1>
-      <p class="lede">Know the moment a ride goes down, and when it is likely back.</p>
-
-      <p id="setup-status" class="status-line" role="status" aria-live="polite"></p>
-
-      <div class="group">
-        <button id="btn-locate" class="row pressable" type="button">
-          <svg class="row-icon tint-accent"><use href="#i-pin"/></svg>
-          <span class="row-label">Use my location</span>
-          <svg class="chevron"><use href="#i-chevron"/></svg>
-        </button>
+    <div class="setup-sky" id="setup-sky">
+      <div class="sky-art" id="setup-art" aria-hidden="true"></div>
+      <div class="inner">
+        <img class="app-icon" src="/icons/icon-192.png" alt="" width="64" height="64">
+        <h1 class="large-title">ParkAlert</h1>
+        <p class="lede">Know the moment a ride goes down, and when it is likely back.</p>
       </div>
+    </div>
+    <div class="setup">
+      <div class="btn-stack first">
+        <button id="btn-locate" class="btn-primary pressable" type="button"><svg aria-hidden="true"><use href="#i-pin"/></svg><span>Use my location</span></button>
+        <button id="btn-join-jump" class="btn-primary btn-outline pressable" type="button">Join a family trip with a code</button>
+      </div>
+
+      <p id="setup-status" class="status-line" role="status" aria-live="polite" style="padding-top:0.8rem"></p>
 
       <!-- Where location put you: a suggestion to confirm, never a trip made unasked. -->
       <div id="setup-found" class="btn-stack hidden"></div>
@@ -101,6 +102,7 @@
         <button class="btn-inline" type="submit">Join</button>
       </form>
       <p class="footnote" id="join-note" aria-live="polite">Ask them for the 6-character code on their Trip tab, or paste their invite. You'll see their rides and get the same alerts.</p>
+      <p class="unofficial">An unofficial fan app, not affiliated with Disney.</p>
     </div>
   </div>
 
@@ -109,18 +111,19 @@
     <!-- Once the large title scrolls away, the park's name in a compact bar,
          as iOS does. A tap goes back to the top. -->
     <div class="nav-bar" id="nav-bar" aria-hidden="true"><span id="nav-bar-title"></span></div>
-    <header class="nav" id="nav">
+    <header class="nav sky" id="nav">
+      <!-- The park's coaster under a sky lit for the time of day and the weather. -->
+      <div class="sky-art" id="sky-art" aria-hidden="true"></div>
       <div class="nav-inner">
-        <!-- The heading stays a heading; one transparent button over the whole
-             block (name and hours) opens the park sheet. -->
-        <div class="nav-titles">
-          <button class="cover-btn" id="btn-park" type="button" aria-haspopup="dialog" aria-labelledby="park-name park-meta"></button>
-          <h1 id="park-name" class="large-title">ParkAlert</h1>
-          <p class="nav-meta"><span id="park-meta">Loading…</span><svg class="meta-chevron" aria-hidden="true"><use href="#i-chevron"/></svg></p>
+        <div class="sky-top">
+          <!-- The park's name opens the park page: its hours, crowds and other parks. -->
+          <button class="parkline" id="btn-park" type="button" aria-haspopup="dialog"><span id="park-name">ParkAlert</span><svg aria-hidden="true"><use href="#i-chevron"/></svg></button>
+          <button id="btn-alerts" class="pill glass pressable hidden" type="button" aria-haspopup="dialog">
+            <svg><use href="#i-bell"/></svg><span>Alerts on</span>
+          </button>
         </div>
-        <button id="btn-alerts" class="pill pressable hidden" type="button" aria-haspopup="dialog">
-          <svg><use href="#i-bell"/></svg><span>Alerts on</span>
-        </button>
+        <h1 id="status-title" class="status-title">Loading…</h1>
+        <p class="nav-meta"><span id="park-meta"></span></p>
       </div>
     </header>
 
@@ -128,38 +131,40 @@
       <div id="ptr" class="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/></svg></div>
       <section id="view-down" class="view" aria-label="Down now">
         <!-- What shows before app.js has run: the same skeleton it draws while loading. -->
-        <div id="down-list"><div class="cards" data-key="skeleton">
-          <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>
-          <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>
+        <div id="down-list"><div class="group lift sk-group" data-key="skeleton" aria-hidden="true">
+          <div class="slim"><span class="rl"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>
+          <div class="slim"><span class="rl"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>
+          <div class="slim"><span class="rl"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>
         </div></div>
         <div id="recent-block"></div>
       </section>
 
       <section id="view-rides" class="view hidden" aria-label="Rides">
+        <div class="view-title-wrap"><h1 class="large-title view-title">Rides</h1></div>
         <div class="search-row">
           <form class="search" id="search-form" role="search" action="#">
             <svg aria-hidden="true"><use href="#i-search"/></svg>
             <input id="ride-search" type="search" placeholder="Search rides" aria-label="Search rides" autocomplete="off" enterkeyhint="search">
           </form>
-          <!-- One sort toggle beside search, as Mail keeps its filter, rather than a second full-width control. -->
-          <button id="btn-sort" class="sort-btn pressable" type="button"></button>
         </div>
-        <div class="segmented" role="group" aria-label="Show">
-          <button type="button" data-filter="all" aria-pressed="true">All</button>
-          <button type="button" data-filter="open" aria-pressed="false">Open</button>
-          <button type="button" data-filter="down" aria-pressed="false">Down</button>
-          <button type="button" data-filter="following" aria-pressed="false">Alerts</button>
+        <div class="filter-chips" role="group" aria-label="Show rides">
+          <button class="chip pressable" type="button" data-filter="land" aria-pressed="true">By land</button>
+          <button class="chip pressable" type="button" data-filter="name" aria-pressed="false">A to Z</button>
+          <button class="chip pressable" type="button" data-filter="wait" aria-pressed="false">Shortest</button>
+          <button class="chip pressable" type="button" data-filter="coasters" aria-pressed="false">Coasters</button>
+          <button class="chip pressable" type="button" data-filter="following" aria-pressed="false">My alerts</button>
         </div>
-        <div class="list-header">
+        <div class="alerts-line">
           <span id="follow-summary"></span>
-          <button id="btn-follow-all" class="text-btn" type="button"></button>
+          <button id="btn-choose" class="text-btn" type="button">Choose</button>
         </div>
-        <div class="group" id="rides-list"></div>
-        <p class="footnote" id="rides-foot">Tap a ride for its wait times and outage history. The switch controls whether you get alerts about it.</p>
+        <div id="rides-list"></div>
+        <p class="footnote" id="rides-foot">Each bar is the posted wait; the mark is that ride's usual wait at this hour. Green means at least 5 minutes shorter than usual.</p>
         <div id="other-block"></div>
       </section>
 
       <section id="view-trip" class="view hidden" aria-label="Trip">
+        <div class="view-title-wrap"><h1 class="large-title view-title">Trip</h1></div>
         <div class="group code-card">
           <p class="caption-label">Trip code</p>
           <p class="trip-code" id="trip-code"></p>
@@ -190,8 +195,8 @@
           </button>
           <div class="row">
             <svg class="row-icon tint-accent"><use href="#i-trend-up"/></svg>
-            <span class="row-label">Lines building<small>When waits on the big rides jump at a busy time</small></span>
-            <button id="switch-crowd" class="switch" type="button" role="switch" aria-checked="false" aria-label="Alert me when lines are building"></button>
+            <span class="row-label">Lines getting longer<small>An alert when big-ride lines grow much longer than usual</small></span>
+            <button id="switch-crowd" class="switch" type="button" role="switch" aria-checked="false" aria-label="Alert me when lines get longer"></button>
           </div>
           <div class="row" id="row-ntfy">
             <svg class="row-icon tint-accent"><use href="#i-send"/></svg>
@@ -199,7 +204,7 @@
             <button id="switch-ntfy" class="switch" type="button" role="switch" aria-checked="true" aria-label="Also send alerts to the ntfy app"></button>
           </div>
         </div>
-        <p class="footnote">Pause just this phone or everyone on the trip. Alerts stop on their own when the park closes, and after two months with nobody opening this trip (phones hear the day before). The lines-building alert goes to everyone on the trip, at most every two hours.</p>
+        <p class="footnote">Pause just this phone or everyone on the trip. Alerts stop on their own when the park closes, and after two months with nobody opening this trip (phones hear the day before). The alert for lines getting longer goes to everyone on the trip, at most every two hours.</p>
 
         <h2 class="section-label">Park</h2>
         <div class="group">
@@ -226,11 +231,12 @@
             <span class="row-label">Leave this trip</span>
           </button>
         </div>
+        <p class="unofficial">ParkAlert is an unofficial fan app, not affiliated with Disney. Ride times come from ThemeParks.wiki.</p>
       </section>
     </main>
 
     <nav class="tabbar" aria-label="Sections">
-      <button data-view="down" class="tab active pressable" type="button" aria-current="page">
+      <button data-view="down" id="tab-down" class="tab active pressable" type="button" aria-current="page">
         <span class="tab-icon"><svg><use href="#i-down"/></svg><span class="badge hidden" id="down-badge"></span></span>
         <span>Down now</span>
       </button>
@@ -275,6 +281,7 @@
     })();
   </script>
   <script src="/time.js"></script>
+  <script src="/scene.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

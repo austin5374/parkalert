@@ -15,7 +15,7 @@ test.beforeEach(async ({ page }) => {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   await page.addInitScript(() => localStorage.setItem('parkalert.alertsReady.MKLABS', '1'));
   await page.goto('/?trip=MKLABS');
-  await page.waitForFunction(() => typeof dash !== 'undefined' && dash && document.querySelector('#down-list [data-ride], #down-list .empty'));
+  await page.waitForFunction(() => typeof dash !== 'undefined' && dash && document.querySelector('#down-list [data-key]:not([data-key=skeleton])'));
 });
 test.afterEach(async ({ page }) => {
   await scenario('recover');
@@ -46,14 +46,18 @@ test('Back then quickly opening another ride leaves exactly one page, fully in p
 });
 
 test('A double tap on a ride opens it once', async ({ page }) => {
-  const card = page.locator('#down-list [data-ride]').first();
+  await scenario('breakdown');
+  await page.waitForSelector('#view-down [data-ride]', { timeout: 30_000 });
+  const card = page.locator('#view-down [data-ride]').first();
   await card.dblclick();
   await settle(page);
   expect((await pageState(page)).count).toBe(1);
 });
 
 test('Back closes the page and the address returns to the app', async ({ page }) => {
-  await page.locator('#down-list [data-ride]').first().click();
+  await scenario('breakdown');
+  await page.waitForSelector('#view-down [data-ride]', { timeout: 30_000 });
+  await page.locator('#view-down [data-ride]').first().click();
   await settle(page);
   expect((await pageState(page)).count).toBe(1);
   await page.goBack();
@@ -63,7 +67,7 @@ test('Back closes the page and the address returns to the app', async ({ page })
 });
 
 test('A swipe from the left edge closes the page', async ({ page }) => {
-  await page.locator('#down-list [data-ride]').first().click();
+  await page.evaluate(() => openRide(dash.rides.find((r) => !r.other).id));
   await settle(page);
   const swiped = await page.evaluate(async () => {
     const host = document.querySelector('#pages');
@@ -112,16 +116,37 @@ test('A chart being scrubbed is not rebuilt by a refresh', async ({ page }) => {
   expect(same).toBe(true);
 });
 
-test('The ride page sections switch and each shows its content', async ({ page }) => {
+test('A ride page opens its best times and past closures as pages of their own', async ({ page }) => {
   const id = await page.evaluate(() => dash.rides.find((r) => !r.other && r.status === 'OPERATING').id);
   await page.evaluate((i) => openRide(i), id);
-  await page.waitForSelector('.page .page-tabs');
-  for (const tab of ['best', 'history', 'today']) {
-    const btn = page.locator(`.page [data-act=tab-${tab}]`);
+  await page.waitForSelector('.page [data-key=rows]');
+  for (const act of ['open-best', 'open-history']) {
+    const btn = page.locator(`.page:last-of-type [data-act=${act}]`);
     if (!(await btn.count())) continue;
     await btn.click();
-    await expect(btn).toHaveAttribute('aria-selected', 'true');
+    await settle(page, 700);
+    expect((await pageState(page)).count).toBe(2);
+    await page.goBack();
+    await settle(page, 700);
+    expect((await pageState(page)).count).toBe(1);
   }
+});
+
+test('Every ride row names a land, and the Rides list groups by it', async ({ page }) => {
+  await page.evaluate(() => switchView('rides'));
+  await page.locator('[data-filter=land]').click();
+  const labels = await page.locator('#rides-list .section-label').allTextContents();
+  expect(labels).toContain('Tomorrowland');
+  expect(labels[labels.length - 1] === 'Other rides' || !labels.includes('Other rides')).toBe(true);
+});
+
+test('Nothing on screen says a ride broke down', async ({ page }) => {
+  await scenario('breakdown');
+  await scenario('wave');
+  await settle(page, 25_000);
+  await page.evaluate(() => { document.querySelector('[data-act=toggle-others]')?.click(); });
+  await settle(page, 500);
+  expect(await page.locator('body').innerText()).not.toMatch(/broke/i);
 });
 
 test('Two minutes of an impatient guest: random taps, backs and scenarios', async ({ page }) => {
@@ -137,7 +162,7 @@ test('Two minutes of an impatient guest: random taps, backs and scenarios', asyn
       const sheetUp = !document.querySelector('#sheet-layer').classList.contains('hidden');
       if (sheetUp) { document.querySelector('#scrim').click(); return 'scrim'; }
       if (n % 7 === 0 && pages.depth) { pages.back(); return 'back'; }
-      const pick = [...document.querySelectorAll('#pages .page:last-of-type [data-act^=tab-], #pages .page:last-of-type [data-ride], #app [data-ride], .tab, #btn-sort, [data-filter]')]
+      const pick = [...document.querySelectorAll('#pages .page:last-of-type [data-act^=open-], #pages .page:last-of-type [data-ride], #app [data-ride], .tab, [data-filter], [data-act=toggle-others]')]
         .filter((el) => el.offsetParent !== null && !el.closest('[inert]'));
       const el = pick[Math.floor(Math.random() * pick.length)];
       el?.click();

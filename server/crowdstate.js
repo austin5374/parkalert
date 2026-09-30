@@ -5,7 +5,7 @@ import { parkDayStart } from './time.js';
 import { getPark } from './parks.js';
 import {
   headliners, rideTypicals, usualIndex, crowdRatio, crowdLabel, smoothedCrowd, settleLabel,
-  profileFromSamples, bestTimes, SMOOTH_MS, MIN_BASELINE_DAYS,
+  profileFromSamples, bestTimes, linesBuilding, SMOOTH_MS, MIN_BASELINE_DAYS,
 } from './crowds.js';
 
 const zone = (parkId) => parkState[parkId]?.timezone || getPark(parkId)?.timezone || 'America/New_York';
@@ -110,6 +110,9 @@ export function parkCrowd(parkId, now = Date.now()) {
     typical,
     hour,
     paused: null,
+    // Lines building right now, as the alert for it reads them: the big
+    // rides' average wait half an hour ago and now.
+    building: linesBuilding(state.crowd || [], now),
   };
 }
 

@@ -55,7 +55,7 @@ test('waits outpacing a usual day alert each trip that asked, once, with rides w
   assert.equal(await notifyCrowds(PARK, now), 2);
   const byTopic = Object.fromEntries(received.map((m) => [m.topic, m]));
   assert.deepEqual(Object.keys(byTopic).sort(), ['picky', 'yes']);
-  assert.match(byTopic.yes.title, /Lines are building at Magic Kingdom/);
+  assert.match(byTopic.yes.title, /Lines are getting longer at Magic Kingdom/);
   assert.match(byTopic.yes.message, /average about 54 min, up from 31 half an hour ago/);
   assert.match(byTopic.yes.message, /Shorter than usual now: Ride g 20 min \(usually 40\)/);
   assert.doesNotMatch(byTopic.picky.message, /Shorter than usual/, 'only rides the trip follows');

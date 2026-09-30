@@ -5,3 +5,4 @@ node_modules/
 e2e/results/
 e2e/gallery/
 .lab-data-e2e/
+.shots*.mjs

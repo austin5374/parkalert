@@ -209,7 +209,7 @@ export function linesMessage(building, crowd, parkName, shorter = []) {
   const usual = crowd?.typical != null ? ` Usually ${crowd.typical} at ${hourLabel(crowd.hour)}.` : '';
   const tip = shorter.length ? ` Shorter than usual now: ${shorter.map((r) => `${r.name} ${r.wait} min (usually ${r.usual})`).join(', ')}.` : '';
   return {
-    title: `Lines are building at ${parkName}`,
+    title: `Lines are getting longer at ${parkName}`,
     message: `The big rides average about ${building.to} min, up from ${building.from} half an hour ago.${usual}${tip}`,
     priority: 3,
   };
