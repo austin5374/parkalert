@@ -1,6 +1,79 @@
 # ParkAlert review 4: the stress lab
 
-Date: 2026-09-29. `main` at `173226b` (after the stress lab, PR #9). Branch `qa-review`. Written before any app code changed; nothing here has been fixed.
+Date: 2026-09-29. `main` at `173226b` (after the stress lab, PR #9). Branch `qa-review`. Written before any app code changed; every finding was then fixed on the same branch (see [Resolution](#resolution)).
+
+## Resolution
+
+Every finding below was then fixed on this branch, one commit per group, each with tests, lint and a check in the stress lab. The review text is left as it was written; this table says where each finding went. `npm run check`: lint clean, **246 of 246 tests pass** (200 before).
+
+| Finding | Commit | What changed |
+|---|---|---|
+| C1 | `6fb591f` | A page opened from an alert shows its skeleton until its own fresh detail is in; every ride page shows the newer of the dashboard and its detail; pushes carry the ride's new state, and the service worker tells an open app to patch it and refresh. Lab: the tapped page read "Down <1 min · since 7:14 PM" with advice, and the new card appeared as the push landed. |
+| H1 | `d3ae9b8` | "Down" goes out at once; only "back up" waits, until the ride has stayed up a minute. No time cooldown. |
+| H2 | `b24aa0a` | An outage's kind is settled the first poll it is seen and kept; a hold needs 5 rides within 3 minutes; a breakdown joins a hold only with lightning reported; one outlook per hold. |
+| H3 | `0a9a334` | A hold (or 3+ rides in one poll) is one incident: one push down, then quiet "6 of 18 rides are back up" updates and a final "All 18 rides are back up". Lab: storm and clearing, 2 pushes where there were 14. |
+| H4 | `0a9a334` | Incident pushes share a tag, so each update replaces the last; a ride back after an hour or more gets its own push. |
+| H5 | `7d79f4b` | Each headliner against its own usual wait for the hour, at least half of them posting, 15-minute smoothing, a label that changes only when two readings agree, and "Crowd level paused" during a hold and 30 minutes after. Lab: a storm paused it; a surge moved it smoothly to "Much busier than usual". |
+| H6 | `a474024` | Open or closed is judged by the posted hours and the rides together ("Most rides are closed", "Open past its posted hours"); the schedule is fetched again when they disagree. |
+| H7 | `b04beaa` | At 200% text no tab scrolls sideways (375 of 375 px), the trip code always shows whole, margins stay 16 px. |
+| H8 | `7d79f4b` | New trips follow the park's ten headliners; attractions that never post a wait are listed apart and never alert; suggestions rank by wait against each ride's usual. |
+| H9 | `9479d89` | A wait alert is used up only when a phone could see it. |
+| H10 | `bbfcb34` | A trip with phones signed up stays active 60 days after anyone opened it, and its phones hear the day before it stops. Asking for trip dates at setup was not built. |
+| H11 | `a474024` | Rides running outside the posted hours keep alerts on and the app open. |
+| M1 | `c86b78f`, `f53905e`, `7d79f4b` | Stale by data age only; "Ride feed not answering"; one push after 10 minutes of feed failure and a quiet one when it is back; the crowd row greys and says "as of". |
+| M2 | `f53905e` | A fresh snapshot is answered at once even with a slow poll under way; pull to refresh reports the data's age. |
+| M3 | `04011c1` | A joining phone's own sign-up finishes before the setup sheet is considered; "Done", not "Set up later", once set up. |
+| M4 | `9501190` | "Often back in"; chances never read 0% or 100% (">95%", "Nearly all"); no scorecard share under 10 reopenings. |
+| M5 | `9501190` | One rounded percentage for "closed for the day"; one phrase for "past nearly every outage"; no invented upper bound; a clock start that never moves earlier. |
+| M6 | `9501190`, `7d79f4b` | The chance legend is labelled; the crowd level is a sentence, with no 1 to 10 scale to misread. |
+| M7 | `9501190` | A very long outage says "Ride something else"; with no history anywhere, a built-in prior labelled as such. |
+| M8 | `c86b78f`, `161ea9a` | "Down since before 9:11 AM" and "12 min+" for rides already down when first seen, and "went down between" after a gap, in pushes and the app. |
+| M9 | `842e0fb` | A scrolled reader keeps their place; at the top a new card grows in. Lab: the card being read stayed at the same 147 px with zero layout shift. |
+| M10 | `14efce5` | Weather every minute during a hold; "Storm passed at 3:12 PM" with the reopening times; the lab's reports carry begin and end remarks. Lab: pushed 57 s after the clearing, with the exact minute. |
+| M11 | `0a9a334` | The storm push leads with the hold, the range and what to do, then the names. |
+| M12 | `134d801` | A hold's returns are one row that opens in place; single returns stay half an hour. |
+| M13 | `5be7f3c` | API JSON gzipped (30 KB to 4 KB); the loading skeleton and the right screen show before app.js arrives; no extra round trip on a tapped alert with nothing to lose. |
+| M14 | `842e0fb` | Pages stop above the tab bar, which stays usable; the large title scrolls away and a compact bar takes over. |
+| M15 | `91818bd` | The join field takes a code with spaces, an invite link or the whole invite message. |
+| M16 | `3b66683` | Leaving says to unsubscribe in ntfy too, naming the topic. |
+| M17 | `4d321af` | "Send a test alert" tests this phone; every phone is behind a confirm; the ntfy setup's test goes to ntfy only. |
+| M18 | `aba979b` | Wait limits step down from the current (or usual) wait, up to 180; "Alert set for", not "You asked for". |
+| M19 | `aba979b` | "Best time left today", from now to today's close. |
+| M20 | `7da1fd3`, `042d663` | Cards are links described by their verdict and times; headings in order; contrast fixed (filter counts, tab labels); the meta line no longer re-announces each minute. axe-core: no violations on Down now, Rides or Trip. |
+| M21 | `c86b78f` | A down ride that leaves the feed is kept 30 minutes; gone longer, "is no longer listed". |
+| L1 to L4 | `55d2a37` | "Alerts" filter label; no break before AM/PM; plain separators; a right chevron. |
+| L5 | `fa7d56f` | Search takes digits, short forms, plurals, initials and fan acronyms. |
+| L6, L9, L10, L14, L24 | `87476ad` | Tabs tell each other about saves; a tap on a fading toast does nothing; the update offer never replaces Undo; the pause sheet redraws fresh; sharing falls back to copying; resume redraws everything. |
+| L7, L21, L22 | `696bec7` | Breakdown-only typical and longest; outages that began today; a relative trend threshold. |
+| L8 | `161ea9a` | "Late to open · noticed 8:19 AM"; "Opened at 8:23 AM" with no lateness claimed. |
+| L11 | `7d79f4b` | The crowd row greys and says "as of" when old. |
+| L12 | `bd48628` | 400 for broken escapes; 404 for wait alerts on unknown rides; pause times within a year; X-Forwarded-For trusted only behind a known proxy (`TRUST_PROXY`). |
+| L13 | `7823a6c`, `042d663` | Location suggests a park to confirm; tighter geofences (Magic Kingdom 0.65 km leaves the Contemporary out). |
+| L15 | `ef9bec6` | Times written the phone's way, in the app and (through the service worker) in its pushes. |
+| L16 | `55d2a37`, `91818bd` | "6-character code"; "a ride with alerts on" everywhere. |
+| L17 | `2f6b121` | The install sheet leads with "Needed for alerts on iPhone" and names the trip. |
+| L18 | `105fc89` | A new weather report rebuilds only its parks' models, off the request path (a dashboard after a report: 194 ms to 2 ms in the year benchmark). |
+| L19 | `a4b8282` | One pause list under This phone / Everyone, with "Until the park closes". |
+| L20 | `134d801` | Rides in a hold: this trip's first, then A to Z. |
+| L23 | `7d79f4b` | Lines building is limited per trip, after a push reached a phone. |
+| L25 | `919c38b`, `14efce5` | Honest lab docs; a 12 s slow feed; phone pushes, links and line breaks in the panel; `--keep` keeps the world; `--auto` reopens what it closes; storms shared by stations. |
+| P1, P5 | `84ab9b5` | The icon set's check; a wait chart of the last six hours, scaled to them. |
+| P2 | `84ab9b5`, `d8745d9` | Two columns of cards on iPad from 768 px. A list and detail side by side was not built. |
+| P3 | `aba979b` | "Alert me when the wait is at or under". |
+| P4 | `55d2a37` | "No ride alerts". |
+| P6 | `b04beaa` | A wrapping button keeps its icon above the words. |
+| P7 | `9501190` | Hollow legend keys for shares under 5%. |
+| P8 | `134d801` | A hold is a "Storm hold" with a bolt only when the weather says so; otherwise "18 rides paused at once" with a pause icon. |
+| S1, S7 | `2f6b121` | A per-trip manifest (`start_url=/?trip=CODE`) and the address carrying the trip while the install sheet is open; a Home Screen app with no trip asks for the code; both Safari layouts in the steps. Needs a real iPhone to confirm. |
+| S2, S8 | `5e1d9c4` | The badge count travels in each push and the service worker sets it; "down" and "closed" go out urgent. |
+| S3 | `737d6ad` | A monochrome transparent badge for Android's status bar. Needs an Android phone to confirm. |
+| S4 | `3e27dfc` | The service worker re-subscribes on `pushsubscriptionchange` and sends it with a new `PUT` device endpoint. Needs a rotating push service to confirm. |
+| S5 | `7d79f4b` | Covered by H5's fix: readings from before a hold are dropped and the level pauses 30 minutes after. |
+| S6 | `d3ae9b8`, `0a9a334`, `7d79f4b` | Volume is down through H1, H3 and H8 (headliners by default). Production's own outage counts were not measured: that needs its data. |
+| Words | `55d2a37` and the groups above | Every row of the words table: "Check back in about 20 min", "Stay close", holds named for what is known, the lightning rule spelled out, no "just", long outages named, one "Often back" phrasing, the ntfy wording, "Done", "One moment…". |
+
+Not acted on, as they are product calls rather than defects: the three product ideas, "What's missing", and "What to cut" (the trip-wide test row did go, in M17; the scorecard and "Most outages" were left where they are).
+
 
 ## Verdict
 
