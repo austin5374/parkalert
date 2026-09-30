@@ -415,3 +415,26 @@ test('a phone whose push subscription was replaced keeps its place and its pause
   assert.match(trips[trip.code].devices[0].endpoint, /\/new$/);
   assert.equal((await call('PUT', `/api/trips/${trip.code}/devices/nope`, sub('x'))).status, 404);
 });
+
+test('a phone registered on a new trip stops getting the old trip\'s alerts', async () => {
+  const { generateKeyPairSync, randomBytes } = await import('node:crypto');
+  const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const raw = publicKey.export({ format: 'jwk' });
+  const p256dh = Buffer.concat([Buffer.from([4]), Buffer.from(raw.x, 'base64url'), Buffer.from(raw.y, 'base64url')]).toString('base64url');
+  const sub = { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/same-phone', keys: { p256dh, auth: randomBytes(16).toString('base64url') } } };
+  const oldTrip = await newTrip();
+  const newer = await newTrip();
+  assert.equal((await call('POST', `/api/trips/${oldTrip.code}/devices`, sub)).status, 201);
+  assert.equal((await call('POST', `/api/trips/${newer.code}/devices`, sub)).status, 201);
+  const { trips } = await import('../server/store.js');
+  assert.equal(trips[oldTrip.code].devices.length, 0, 'gone from the old trip');
+  assert.equal(trips[newer.code].devices.length, 1);
+});
+
+test('ntfy can be turned off for a trip, and says so', async () => {
+  const trip = await newTrip();
+  assert.equal((await call('GET', `/api/trips/${trip.code}`)).body.trip.ntfy, true, 'on by default');
+  const off = await call('PATCH', `/api/trips/${trip.code}`, { ntfy: false });
+  assert.equal(off.body.trip.ntfy, false);
+  assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { ntfy: 'no' })).status, 400);
+});

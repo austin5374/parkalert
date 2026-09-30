@@ -16,7 +16,7 @@ import { PORT, NTFY_BASE, HEALTH_TOKEN } from './config.js';
 import { parkStatus, rideCounts } from './parkstatus.js';
 import { startHistorySync } from './history.js';
 import { startWeatherSync } from './weather.js';
-import { deliver, MAX_DEVICES, deviceMuted } from './deliver.js';
+import { deliver, MAX_DEVICES, deviceMuted, ntfyOn } from './deliver.js';
 import { vapidKeys, isPushEndpoint } from './webpush.js';
 import { HttpError, requireObject, requireRideId, parseTripPatch, parseWaitAlert, parseSubscription, parseDeviceMute } from './validate.js';
 import { LIMITS, createLimiter, clientKey, createKnownCodes } from './ratelimit.js';
@@ -142,9 +142,20 @@ const zoneOf = (parkId) => parkState[parkId]?.timezone || getPark(parkId)?.timez
 
 const parkToday = (parkId, now = Date.now()) => localDate(now, zoneOf(parkId));
 
+// One phone, one trip. A phone left registered on an older trip (from
+// before a reinstall, or a trip it moved on from) kept getting that trip's
+// alerts, and no pause on the current trip could stop them.
+function onlyOnThisTrip(trip, endpoint) {
+  for (const other of Object.values(trips)) {
+    if (other !== trip && other.devices?.some((d) => d.endpoint === endpoint)) {
+      other.devices = other.devices.filter((d) => d.endpoint !== endpoint);
+    }
+  }
+}
+
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
-  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts };
+  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts, ntfy: ntfyOn(trip) };
 }
 
 
@@ -329,6 +340,7 @@ async function handleApi(req, res, url) {
     if (patch.crowdAlerts !== undefined) trip.crowdAlerts = patch.crowdAlerts;
     // A phone on ntfy said a test arrived: the topic reaches someone.
     if (patch.ntfyWorking !== undefined) trip.ntfyConfirmedAt = patch.ntfyWorking ? Date.now() : null;
+    if (patch.ntfy !== undefined) trip.ntfy = patch.ntfy;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });
   }
@@ -380,8 +392,11 @@ async function handleApi(req, res, url) {
       } else {
         device = { id: crypto.randomBytes(9).toString('base64url'), ...sub, mute: null, createdAt: Date.now(), seenAt: Date.now() };
         trip.devices.push(device);
+      }
+      onlyOnThisTrip(trip, sub.endpoint);
+      if (trip.devices.length > MAX_DEVICES) {
         // A phone that reinstalled the app many times leaves old ones behind.
-        if (trip.devices.length > MAX_DEVICES) trip.devices.splice(0, trip.devices.length - MAX_DEVICES);
+        trip.devices.splice(0, trip.devices.length - MAX_DEVICES);
       }
       saveTrips();
       return json(res, 201, { device: { id: device.id, mute: device.mute } });
@@ -401,6 +416,7 @@ async function handleApi(req, res, url) {
     if (req.method === 'PUT' && parts.length === 5) {
       const sub = parseSubscription(await readBody(req), isPushEndpoint);
       Object.assign(device, { endpoint: sub.endpoint, keys: sub.keys, seenAt: Date.now() });
+      onlyOnThisTrip(trip, sub.endpoint);
       saveTrips();
       return json(res, 200, { device: { id: device.id, mute: device.mute } });
     }

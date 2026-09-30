@@ -1834,6 +1834,10 @@ function renderTrip() {
     : st.scope === 'phone' ? `This phone, ${until}` : `Everyone, ${until}`;
   $('#park-detail').textContent = parkLabel(dash.park.name);
   $('#switch-crowd').setAttribute('aria-checked', String(!!dash.trip.crowdAlerts));
+  // The ntfy switch matters only once some phone uses the app's own
+  // notifications; before that, ntfy is how the trip gets alerts at all.
+  $('#row-ntfy').classList.toggle('hidden', !dash.trip.phones);
+  $('#switch-ntfy').setAttribute('aria-checked', String(dash.trip.ntfy !== false));
 }
 
 // Before the first dashboard arrives there is nothing to show but where that
@@ -1941,11 +1945,15 @@ function openPause({ fresh = false } = {}) {
   }
   // Who, then one list of how long: a choice of scope over the list rather
   // than the same list twice.
-  let scope = perPhone ? 'phone' : 'trip';
+  // "This phone" only pauses ParkAlert's own notifications. While the trip
+  // still sends to ntfy, a phone subscribed there would keep getting alerts,
+  // so the safe choice is the default and the catch is said out loud.
+  const ntfyLive = dash.trip.ntfy !== false;
+  let scope = perPhone && !ntfyLive ? 'phone' : 'trip';
   if (perPhone) {
     const who = el(`<div class="segmented pause-scope" role="group" aria-label="Pause">
-      <button type="button" data-scope="phone" aria-pressed="true">This phone</button>
-      <button type="button" data-scope="trip" aria-pressed="false">Everyone</button>
+      <button type="button" data-scope="phone" aria-pressed="${scope === 'phone'}">This phone</button>
+      <button type="button" data-scope="trip" aria-pressed="${scope === 'trip'}">Everyone</button>
     </div>`);
     who.addEventListener('click', (e) => {
       const b = e.target.closest('[data-scope]');
@@ -1955,6 +1963,7 @@ function openPause({ fresh = false } = {}) {
       haptic();
     });
     content.appendChild(who);
+    if (ntfyLive) content.appendChild(el('<p class="footnote">This phone only pauses ParkAlert\'s own notifications, not the ntfy app. To stop everything, pause everyone, or turn off ntfy on the Trip tab.</p>'));
   }
   const list = el('<div class="group plain spaced-sm"></div>');
   for (const [label, until] of options) {
@@ -2053,6 +2062,14 @@ function alertSetupContent() {
 
   if (phone.id) {
     head.appendChild(el('<p>Notifications are on for this phone. You get an alert when a ride with alerts on goes down, comes back up, or closes.</p>'));
+    if (dash.trip.ntfy !== false) {
+      // Subscribed in ntfy as well, this phone gets each alert twice, and
+      // pausing just this phone can't silence the ntfy copy.
+      const tip = el(`<div class="group padded tip-box"><p>Also subscribed in the ntfy app? Then this phone gets every alert twice, and pausing it won't stop the ntfy ones. If nobody on this trip uses ntfy, turn it off.</p>
+        <button class="btn-secondary pressable" type="button" data-act="ntfy-off">Turn off ntfy for this trip</button></div>`);
+      tip.querySelector('[data-act=ntfy-off]').onclick = () => { setNtfy(false); sheet.open(alertSetupContent()); };
+      content.appendChild(tip);
+    }
     content.appendChild(el(`<div class="btn-stack">
       <button class="btn-primary pressable" type="button" data-act="phone-test">${icon('send')}<span>Send this phone a test</span></button>
       <button class="btn-secondary pressable" type="button" data-act="phone-off">Turn off for this phone</button>
@@ -3291,6 +3308,11 @@ $('#row-setup').onclick = withDash(openAlertSetup);
 $('#row-pause').onclick = withDash(openPause);
 $('#row-park').onclick = withDash(openPark);
 $('#row-leave').onclick = openLeave;
+function setNtfy(on) {
+  haptic();
+  save((t) => { t.ntfy = on; }, { ntfy: on }, () => toast(on ? 'Alerts go to the ntfy app too' : 'ntfy is off for this trip. Each alert comes once, from ParkAlert'));
+}
+$('#switch-ntfy').onclick = withDash(() => setNtfy(dash.trip.ntfy === false));
 $('#switch-crowd').onclick = withDash(() => {
   haptic();
   const on = !dash.trip.crowdAlerts;

@@ -758,3 +758,6 @@ main { position: relative; transition: none; }
   #view-down .cards[data-key=hold] { grid-template-columns: minmax(0, 1fr); }
   #view-rides, #view-trip { max-width: 40rem; margin: 0 auto; }
 }
+
+.tip-box { margin-top: 1rem; }
+.tip-box p { font-size: 0.9375rem; color: var(--label-2); line-height: 1.4; margin-bottom: 0.7rem; }

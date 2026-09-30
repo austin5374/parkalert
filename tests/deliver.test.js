@@ -108,3 +108,12 @@ test('a push to a trip whose only phone is paused reaches nobody who will see it
   assert.equal(reachedSomeone(trip, result), true);
   assert.equal(hasReceiver({ topic: 't' }), true, 'a trip on ntfy alone is reached through it');
 });
+
+test('a trip with ntfy turned off sends only to its phones', async () => {
+  hits.length = 0;
+  const trip = { code: 'FFFFFF', topic: 't-off', ntfy: false, devices: [device('j')] };
+  const result = await deliver(trip, { title: 'x', message: 'y' });
+  assert.equal(result.ntfy, false);
+  assert.equal(result.devices, 1);
+  assert.deepEqual(hits.map((h) => h.path), ['/j']);
+});
