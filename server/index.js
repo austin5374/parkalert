@@ -8,6 +8,7 @@ import { PARKS, getPark } from './parks.js';
 import { trips, parkState, createTrip, getTrip, saveTrips, touchTrip, flushState, activeParkIds, history } from './store.js';
 import { rideHistory, rideToday, parkSummary, waitTrend, outagesToday } from './insights.js';
 import { parkCrowd, crowdToday, rideBestTimes, usualWaits, isOtherAttraction, defaultFollows } from './crowdstate.js';
+import { rideFacts } from './lands.js';
 import { scorecard } from './scorecard.js';
 import { parkDayStart, localDate } from './time.js';
 import { currentWaitAlerts, pruneWaitAlerts, WAIT_ALERT_MIN, WAIT_ALERT_MAX } from './waitalerts.js';
@@ -28,7 +29,7 @@ const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..',
 // deploy can tell it is running old code and reload.
 export const APP_VERSION = (() => {
   const h = crypto.createHash('sha1');
-  for (const f of ['index.html', 'app.js', 'time.js', 'style.css', 'sw.js']) {
+  for (const f of ['index.html', 'app.js', 'time.js', 'scene.js', 'style.css', 'sw.js']) {
     try { h.update(fs.readFileSync(path.join(PUBLIC_DIR, f))); } catch {}
   }
   return h.digest('hex').slice(0, 12);
@@ -153,9 +154,16 @@ function onlyOnThisTrip(trip, endpoint) {
   }
 }
 
+// A phone's id is what lets it pause or leave, so it never goes out to
+// the rest of the trip: a phone's own wait alert shows only a one-way
+// fingerprint of it, which that phone can recognise and no one can use.
+export const ownerTag = (code, deviceId) => crypto.createHash('sha256').update(`${code}:${deviceId}`).digest('base64url').slice(0, 16);
+const alertsView = (trip) => Object.fromEntries(Object.entries(currentWaitAlerts(trip, parkToday(trip.parkId)))
+  .map(([id, { device, ...a }]) => [id, device ? { ...a, owner: ownerTag(trip.code, device) } : a]));
+
 function tripView(trip) {
   const { code, topic, parkId, watched, mute, rideMutes } = trip;
-  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: currentWaitAlerts(trip, parkToday(parkId)), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts, ntfy: ntfyOn(trip) };
+  return { code, topic, parkId, watched, mute, rideMutes, waitAlerts: alertsView(trip), phones: trip.devices?.length || 0, crowdAlerts: !!trip.crowdAlerts, ntfy: ntfyOn(trip) };
 }
 
 
@@ -190,6 +198,8 @@ async function dashboard(trip) {
     rides: Object.entries(state.rides || {}).map(([id, r]) => ({
       id,
       ...r,
+      // Its land, a short name for lists, and whether it is a coaster.
+      ...rideFacts(park?.name, r.name),
       // Its usual posted wait at this hour, where the archive knows one.
       usual: usual[id] ?? null,
       // Never posts a wait: listed apart, and never alerted about.
@@ -358,13 +368,20 @@ async function handleApi(req, res, url) {
     pruneWaitAlerts(trip, today);
     const alerts = { ...trip.waitAlerts };
     if (req.method === 'PUT') {
-      const { max } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      const { max, device } = parseWaitAlert(await readBody(req), WAIT_ALERT_MIN, WAIT_ALERT_MAX);
+      // "Just me": only a phone on this trip can keep an alert to itself.
+      if (device && !(trip.devices || []).some((d) => d.id === device)) return json(res, 400, { error: 'unknown device' });
       // Only a ride the park has: an alert for anything else could never fire.
       const known = parkState[trip.parkId]?.rides;
       if (!known || !Object.hasOwn(known, rideId)) return json(res, 404, { error: 'ride not found' });
-      alerts[rideId] = { max, day: today, setAt: Date.now() };
+      alerts[rideId] = { max, day: today, setAt: Date.now(), ...(device ? { device } : {}) };
       if (Object.keys(alerts).length > MAX_WAIT_ALERTS) return json(res, 400, { error: 'too many wait alerts' });
-    } else delete alerts[rideId];
+    } else {
+      // A phone's own alert is removed only by that phone (it names itself).
+      const own = alerts[rideId]?.device;
+      if (own && url.searchParams.get('device') !== own) return json(res, 403, { error: "another phone's wait alert" });
+      delete alerts[rideId];
+    }
     trip.waitAlerts = alerts;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });

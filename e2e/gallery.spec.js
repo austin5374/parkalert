@@ -14,9 +14,11 @@ const shots = [];
 test.skip(!process.env.GALLERY, 'run with npm run gallery');
 
 test.beforeAll(async () => {
+  test.setTimeout(150_000);
   fs.mkdirSync(OUT, { recursive: true });
   for (const name of ['storm', 'wave', 'breakdown']) await fetch(`${LAB}/lab/scenario`, { method: 'POST', body: JSON.stringify({ park: MK, name }) });
-  await new Promise((r) => setTimeout(r, 25_000));
+  // Long enough for the lab's lightning to reach the weather check.
+  await new Promise((r) => setTimeout(r, 70_000));
 });
 
 for (const [phone, device] of Object.entries(PHONES)) {
@@ -26,7 +28,7 @@ for (const [phone, device] of Object.entries(PHONES)) {
       const page = await context.newPage();
       await page.addInitScript(() => localStorage.setItem('parkalert.alertsReady.MKLABS', '1'));
       await page.goto('http://127.0.0.1:3210/?trip=MKLABS');
-      await page.waitForFunction(() => typeof dash !== 'undefined' && dash && document.querySelector('#down-list [data-ride], #down-list .empty'));
+      await page.waitForFunction(() => typeof dash !== 'undefined' && dash && document.querySelector('#down-list [data-key]:not([data-key=skeleton])'));
       await page.emulateMedia({ reducedMotion: 'reduce' });
       const snap = async (label) => {
         await page.waitForTimeout(400);
@@ -34,22 +36,39 @@ for (const [phone, device] of Object.entries(PHONES)) {
         await page.screenshot({ path: path.join(OUT, file), fullPage: false });
         shots.push({ phone, scheme, label, file });
       };
-      await snap('1-down-now');
-      await page.evaluate(() => switchView('rides'));
-      await snap('2-rides');
+      await snap('01-down-now');
+      await page.evaluate(() => { document.querySelector('[data-act=toggle-others]')?.click(); window.scrollTo(0, 360); });
+      await snap('02-down-scrolled');
+      await page.evaluate(() => { document.querySelector('[data-act=toggle-others]')?.click(); window.scrollTo(0, 0); switchView('rides'); });
+      await snap('03-rides');
       await page.evaluate(() => switchView('trip'));
-      await snap('3-trip');
-      await page.evaluate(() => { switchView('down'); openRide(dash.rides.find((r) => r.status === 'DOWN' && !r.other).id); });
+      await snap('04-trip');
+      await page.evaluate(() => { switchView('down'); openRide(dash.rides.find((r) => r.status === 'DOWN' && r.outlook?.kind !== 'hold' && !r.other)?.id || dash.rides.find((r) => r.status === 'DOWN').id); });
       await page.waitForTimeout(1500);
-      await snap('4-ride-down');
-      await page.evaluate(() => { pages.clear(); openRide(dash.rides.find((r) => r.status === 'OPERATING' && r.waitTime != null).id); });
+      await snap('05-ride-down');
+      await page.evaluate(() => { pages.clear(); openRide(dash.rides.find((r) => r.status === 'OPERATING' && r.waitTime != null && !r.other).id); });
       await page.waitForTimeout(1500);
-      await snap('5-ride-open');
+      await snap('06-ride-open');
+      await page.evaluate(() => document.querySelector('.page [data-act=wait-sheet]')?.click());
+      await snap('07-wait-alert');
+      await page.evaluate(() => { document.querySelector('#scrim').click(); });
+      await page.waitForTimeout(500);
+      await page.evaluate(() => { pages.clear(); if (dash.rides.some((r) => r.outlook?.kind === 'hold')) openHold(); });
+      await page.waitForTimeout(800);
+      await snap('08-hold');
       await page.evaluate(() => { pages.clear(); openParkInfo(); });
       await page.waitForTimeout(1500);
-      await snap('6-park');
+      await snap('09-park');
       await page.evaluate(() => { pages.clear(); openPause(); });
-      await snap('7-pause-sheet');
+      await snap('10-pause-sheet');
+      await page.evaluate(() => { document.querySelector('#scrim').click(); });
+      await page.waitForTimeout(500);
+      await page.evaluate(() => document.querySelector('#btn-choose').click());
+      await snap('11-choose');
+      await page.evaluate(() => { document.querySelector('#scrim').click(); });
+      await page.waitForTimeout(500);
+      await page.evaluate(() => { document.documentElement.style.fontSize = '170%'; dispatchEvent(new Event('resize')); renderAll(); });
+      await snap('12-large-text');
       await context.close();
     });
   }

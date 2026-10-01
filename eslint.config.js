@@ -4,7 +4,7 @@ import js from '@eslint/js';
 import globals from 'globals';
 
 export default [
-  { ignores: ['node_modules/', 'data/', 'e2e/results/', 'e2e/gallery/', '.lab-data*/'] },
+  { ignores: ['node_modules/', 'data/', 'e2e/results/', 'e2e/gallery/', '.lab-data*/', '.shots*.mjs'] },
   js.configs.recommended,
   {
     rules: {
@@ -23,7 +23,7 @@ export default [
       globals: {
         ...globals.node, ...globals.browser,
         dash: 'readonly', pages: 'readonly', openRide: 'readonly', openParkInfo: 'readonly', openPause: 'readonly',
-        refresh: 'readonly', switchView: 'readonly',
+        refresh: 'readonly', switchView: 'readonly', openHold: 'readonly', renderAll: 'readonly',
       },
     },
   },
@@ -34,12 +34,12 @@ export default [
   {
     // Classic scripts, not modules: no build step, loaded straight from
     // index.html, time.js first so app.js can use its functions.
-    files: ['public/app.js', 'public/time.js'],
+    files: ['public/app.js', 'public/time.js', 'public/scene.js'],
     languageOptions: { sourceType: 'script', globals: globals.browser },
   },
   {
     files: ['public/app.js'],
-    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly', fmtDuration: 'readonly', matchesSearch: 'readonly', extractTripCode: 'readonly' } },
+    languageOptions: { globals: { localDay: 'readonly', nextLocalHour: 'readonly', fmtDuration: 'readonly', matchesSearch: 'readonly', extractTripCode: 'readonly', sceneSvg: 'readonly', sceneMood: 'readonly' } },
   },
   {
     files: ['public/sw.js'],

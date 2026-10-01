@@ -55,7 +55,7 @@ test('a storm hold is one push naming the rides, and tapping it opens the hold',
   const { sent } = await notifyTrips(PARK, events, { simulated: true });
   assert.equal(sent, 1);
   assert.equal(received.length, 1);
-  assert.equal(received[0].title, '6 rides paused at once');
+  assert.equal(received[0].title, '6 rides down together');
   assert.match(received[0].message, /Ride 0, Ride 1, Ride 2, Ride 3, Ride 4 and 1 more/);
   assert.match(received[0].message, /Magic Kingdom · /);
   assert.equal(received[0].click, 'https://parkalert.example/?trip=AAAAAA&view=hold');
@@ -70,12 +70,12 @@ test("an incident's rides coming back are one update, then an all-clear", async 
   rides.r0.status = 'OPERATING';
   rides.r1.status = 'OPERATING';
   await notifyTrips(PARK, [], { updates: [{ incident: 'hold-1', ups: [up('r0'), up('r1')], final: false }] });
-  assert.deepEqual(received.map((m) => m.title), ['2 of 4 rides are back up']);
+  assert.deepEqual(received.map((m) => m.title), ['2 of 4 rides are open again']);
   assert.equal(received[0].priority, 2, 'a quiet update');
   rides.r2.status = 'OPERATING';
   rides.r3.status = 'CLOSED';
   await notifyTrips(PARK, [], { updates: [{ incident: 'hold-1', ups: [up('r2')], final: true }] });
-  assert.equal(received[1].title, '3 of 4 rides are back up');
+  assert.equal(received[1].title, '3 of 4 rides are open again');
   assert.match(received[1].message, /Closed for now: Ride 3$/);
 });
 

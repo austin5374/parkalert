@@ -438,3 +438,33 @@ test('ntfy can be turned off for a trip, and says so', async () => {
   assert.equal(off.body.trip.ntfy, false);
   assert.equal((await call('PATCH', `/api/trips/${trip.code}`, { ntfy: 'no' })).status, 400);
 });
+
+test('a wait alert can be kept to one phone on the trip, and only a phone that is on it', async () => {
+  const trip = await newTrip();
+  const { generateKeyPairSync, randomBytes } = await import('node:crypto');
+  const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const raw = publicKey.export({ format: 'jwk' });
+  const p256dh = Buffer.concat([Buffer.from([4]), Buffer.from(raw.x, 'base64url'), Buffer.from(raw.y, 'base64url')]).toString('base64url');
+  const made = await call('POST', `/api/trips/${trip.code}/devices`, { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/mine', keys: { p256dh, auth: randomBytes(16).toString('base64url') } } });
+  const id = made.body.device.id;
+  const put = (body) => call('PUT', `/api/trips/${trip.code}/wait-alerts/${MK}-1`, body);
+  const r = await put({ max: 15, device: id });
+  assert.equal(r.status, 200);
+  const a = r.body.trip.waitAlerts[`${MK}-1`];
+  assert.equal(a.device, undefined, "the phone's id never goes out to the trip");
+  const { ownerTag } = await import('../server/index.js');
+  assert.equal(a.owner, ownerTag(trip.code, id));
+  assert.equal((await put({ max: 15, device: 'someone-else' })).status, 400);
+  const del = (q) => call('DELETE', `/api/trips/${trip.code}/wait-alerts/${MK}-1${q}`);
+  assert.equal((await del('')).status, 403, "another phone can't remove it");
+  assert.equal((await del('?device=wrong')).status, 403);
+  assert.equal((await del(`?device=${id}`)).status, 200, 'its own phone can');
+});
+
+test('the dashboard gives each ride its land, a short name and whether it is a coaster', async () => {
+  const trip = await newTrip();
+  const { body } = await call('GET', `/api/trips/${trip.code}/dashboard`);
+  for (const r of body.rides) {
+    assert.ok('land' in r && 'short' in r && 'coaster' in r, r.name);
+  }
+});

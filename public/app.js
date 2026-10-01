@@ -611,9 +611,17 @@ const pages = (() => {
     document.body.classList.toggle('paging', stack.length > 0);
   }
 
+  // A page with a scene opens on a strip of the Down now sky, its title on
+  // it and Back over it; the rest scroll up underneath.
   function draw(p) {
     if (!p.el.isConnected) return;
-    morph(p.body, `<h1 class="page-title large-title" data-key="page-title">${esc(p.title())}</h1>${p.render()}`);
+    const strip = p.scene?.();
+    p.el.classList.toggle('has-strip', !!strip);
+    const title = `<h1 class="page-title large-title" data-key="page-title">${esc(p.title())}</h1>`;
+    const head = strip
+      ? `<div class="page-strip" data-key="strip"><div class="sky-art" data-key="art">${sceneSvg(skyMood(), dash?.park.name || '', { strip: true, train: strip.train })}</div>${title}${strip.action || ''}</div>`
+      : title;
+    morph(p.body, `${head}${p.render()}`);
     p.el.querySelector('.page-nav-title').textContent = p.title();
     mountCharts(p.body, p.charts?.());
   }
@@ -1111,10 +1119,6 @@ function hoursText() {
   return 'Hours unavailable';
 }
 
-// The park name is the screen's title and the way into the park sheet, so it
-// shrinks to fit beside the alerts pill ("Magic Kin…" told nobody anything),
-// down to a floor, and past that takes a second line. Relative to the
-// computed size, so the reader's text size setting still counts.
 // At accessibility text sizes (150% and up) iOS stops squeezing things side
 // by side: titles take the full width and trailing controls move below.
 // The layout switches on a class, set from the root size, which follows
@@ -1137,7 +1141,10 @@ function syncDynamicType() {
   document.body.appendChild(probe);
   const px = parseFloat(getComputedStyle(probe).fontSize);
   probe.remove();
-  if (px > 0) document.documentElement.style.fontSize = `${((px / 17) * 100).toFixed(2)}%`;
+  // Up to twice the default: past that the rows still read, but only one
+  // or two fit a screen, and iPhone Zoom serves better. Headlines stop
+  // growing sooner (in style.css), so the answer stays on screen.
+  if (px > 0) document.documentElement.style.fontSize = `${((Math.min(px, 34) / 17) * 100).toFixed(2)}%`;
 }
 syncDynamicType();
 document.addEventListener('visibilitychange', () => {
@@ -1156,55 +1163,66 @@ function syncTypeSize() {
 syncTypeSize();
 addEventListener('resize', syncTypeSize);
 
-function fitTitle() {
-  if (syncTypeSize()) {
-    // On its own line it wraps at spaces, and shrinks only as far as needed
-    // for its longest word to fit, so "Kingdom" never breaks as "Kingdo-m".
-    const h = $('#park-name');
-    h.style.fontSize = '';
-    h.classList.add('wrap', 'ax');
-    const max = parseFloat(getComputedStyle(h).fontSize);
-    for (let size = max; h.scrollWidth > h.clientWidth && size > max * 0.5; ) {
-      size -= 1;
-      h.style.fontSize = `${size}px`;
-    }
-    return;
-  }
-  $('#park-name').classList.remove('ax');
-  const h = $('#park-name');
-  h.style.fontSize = '';
-  h.classList.remove('wrap');
-  const max = parseFloat(getComputedStyle(h).fontSize);
-  const floor = max * 0.62;
-  for (let size = max; h.scrollWidth > h.clientWidth && size > floor; ) {
-    size = Math.max(floor, size - 1);
-    h.style.fontSize = `${size}px`;
-  }
-  if (h.scrollWidth > h.clientWidth) h.classList.add('wrap');
-}
-addEventListener('resize', () => { lastFit = null; if (dash) renderHeader(); });
 
-let lastFit = null;
 let lastBadge = null;
 let lastMetaGist = null;
 const announce = (text) => { $('#announce').textContent = text; };
+
+// The compact bar's title: the park on Down now, else the tab's name.
+function syncNavBar() {
+  $('#nav-bar-title').textContent = view === 'down' ? (dash ? parkLabel(dash.park.name) : 'ParkAlert') : ({ rides: 'Rides', trip: 'Trip' })[view] || '';
+}
+
+// The screen's headline: how many of your rides are down, or how the park
+// stands when none are.
+function statusTitle() {
+  if (!dash.lastPoll) return 'Waiting for ride times';
+  const down = dash.rides.filter((r) => r.status === 'DOWN' && r.downSince && !r.other);
+  const mine = down.filter((r) => isFollowing(r.id)).length;
+  if (mine) return `${mine} of your rides ${mine === 1 ? 'is' : 'are'} down`;
+  const open = Date.parse(dash.park.openingTime || '');
+  if (dash.park.status === 'closedEarly') return 'Most rides are closed';
+  if (open && Date.now() < open) return `Opens at ${fmtTime(open)}`;
+  if (alertState().kind === 'closed') return 'Closed for the day';
+  if (offline || Date.now() - dash.lastPoll > STALE_MS) return `Nothing was down at ${fmtTime(dash.lastPoll)}`;
+  return down.length ? 'Your rides are running' : "Everything's running";
+}
+
+// The sky over the board: the park's own coaster, lit for the hour on the
+// park's clock, and stormy while the weather has rides closed.
+const skyMood = () => sceneMood(dash ? parkHour() : new Date().getHours(), !!dash?.rides.some((r) => r.status === 'DOWN' && stormGoingOn(r.outlook)));
+function syncSky() {
+  const mood = skyMood();
+  const art = $('#sky-art');
+  const key = `${mood}|${dash?.park.name || ''}`;
+  if (art.dataset.key !== key) {
+    art.dataset.key = key;
+    art.innerHTML = sceneSvg(mood, dash?.park.name || '');
+  }
+}
+
 function renderHeader() {
-  $('#park-name').textContent = parkLabel(dash.park.name);
-  $('#nav-bar-title').textContent = parkLabel(dash.park.name);
-  document.title = `${parkLabel(dash.park.name)} · ParkAlert`;
+  const name = parkLabel(dash.park.name);
+  $('#park-name').textContent = name;
+  $('#btn-park').setAttribute('aria-label', `${name}. Park hours, crowds and other parks`);
+  syncNavBar();
+  document.title = `${name} · ParkAlert`;
+  morph($('#status-title'), esc(statusTitle()));
+  syncSky();
 
   const meta = $('#park-meta');
   // Old by the data's age alone: one failed poll is not an outage (the
   // server polls every minute, and says nothing is wrong for 3).
   const stale = !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
   const flash = metaFlash && Date.now() < metaFlash.until ? metaFlash : null;
+  const crowd = dash.crowd && !dash.crowd.paused && alertState().kind !== 'closed' ? dash.crowd.label : null;
   meta.textContent = flash ? flash.text : offline
-    ? `${FAILURE_META[failure]} · as of ${fmtUntil(dash.lastPoll)}`
+    ? `${FAILURE_META[failure]} · updated ${fmtUntil(dash.lastPoll)}`
     : stale
       ? !dash.lastPoll ? 'Waiting for the ride feed'
-        : dash.lastError ? `Ride feed not answering · as of ${fmtUntil(dash.lastPoll)}`
+        : dash.lastError ? `Ride feed not answering · updated ${fmtUntil(dash.lastPoll)}`
           : `Ride times may be out of date · ${fmtDuration(Date.now() - dash.lastPoll)} old`
-      : hoursText();
+      : [hoursText(), crowd].filter(Boolean).join(' · ');
   meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
   // Screen readers hear it when it says something new, not each minute
   // that "2 min old" becomes "3 min old".
@@ -1221,21 +1239,15 @@ function renderHeader() {
     none: ['bell-off', 'No ride alerts'],
   }[st.kind];
   const pill = $('#btn-alerts');
-  pill.className = `pill pressable ${st.kind}`;
+  pill.className = `pill glass pressable ${st.kind}`;
   morph(pill, `${icon(glyph)}<span>${label}</span>`);
-  // Re-fit only when the title, the pill (whose label sets the room left)
-  // or the width changed: fitting measures the text step by step.
-  const fitKey = `${dash.park.name}|${label}|${innerWidth}|${getComputedStyle(document.documentElement).fontSize}`;
-  if (fitKey !== lastFit) {
-    lastFit = fitKey;
-    fitTitle();
-  }
   pill.setAttribute('aria-label', st.kind === 'paused' && st.until ? `Alerts paused until ${fmtUntil(st.until)}` : label);
 
   const down = dash.rides.filter((r) => r.status === 'DOWN' && isFollowing(r.id)).length;
   const badge = $('#down-badge');
   badge.textContent = down;
   badge.classList.toggle('hidden', !down);
+  $('#tab-down').setAttribute('aria-label', down ? `Down now, ${down} of your rides down` : 'Down now');
   // The same count on the Home Screen icon, where the platform allows it.
   if (down !== lastBadge) {
     lastBadge = down;
@@ -1256,39 +1268,6 @@ function isOther(rideId) {
 function isFollowing(rideId) {
   const t = dash.trip;
   return !isOther(rideId) && (t.watched === null || t.watched.includes(rideId)) && !t.rideMutes?.[rideId];
-}
-
-// Elapsed in red, and the usual reopening window shaded just ahead of it.
-// With no upper end to the range, only its start is marked: an invented
-// "twice that" would claim more than the estimate does.
-function timeline(r) {
-  const w = r.outlook?.window;
-  if (!w || w.lo == null) return '';
-  const spent = (Date.now() - r.downSince) / 60000;
-  const hi = w.hi ?? w.lo;
-  const end = (spent + hi) * 1.12 || 1;
-  const pct = (m) => `${Math.min(100, (m / end) * 100).toFixed(1)}%`;
-  return `<div class="timeline" aria-hidden="true">
-    <span class="window" style="left:${pct(spent + w.lo)};width:${pct(Math.max(hi - w.lo, end * 0.015))}"></span>
-    <span class="spent" style="width:${pct(spent)}"></span>
-  </div>`;
-}
-
-// The range as clock times, which is what people plan around, said one way
-// everywhere: "Often back 8:05 to 8:27 AM", or "around 8:05 AM" with no
-// upper end. The start never moves earlier than one already shown for the
-// same outage: a range read later can shift back a little as the curve
-// updates, and "back by 8:38" after "8:40" reads as a mistake.
-const shownFrom = new Map(); // "rideId|downSince" -> epoch ms
-function backClock(r, o) {
-  const w = o?.window;
-  if (!w || w.lo == null) return '';
-  const key = `${r.id}|${r.downSince}`;
-  const lo = Math.max(Date.now() + w.lo * 60000, shownFrom.get(key) ?? 0);
-  shownFrom.set(key, lo);
-  if (shownFrom.size > 200) shownFrom.delete(shownFrom.keys().next().value);
-  const hi = w.hi == null ? null : Math.max(lo, Date.now() + w.hi * 60000);
-  return `Often back ${fmtSpan(lo, hi)}`;
 }
 
 // "8:05 to 8:27 AM", "11:50 AM to 12:10 PM", or "around 8:05 AM".
@@ -1322,73 +1301,74 @@ function fmtHour(h) {
   return new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 1, h)).replace(/\s(?=[AP]M\b)/, '\u00a0');
 }
 
-// How busy the park is right now: the big rides' waits against their usual
-// for this hour, as a sentence and the numbers behind it. Paused during a
-// hold and just after, when waits say more about the hold than the crowd.
-// Old data is greyed and dated, like the rest of the screen.
-function crowdRowHtml() {
-  const c = dash.crowd;
-  // Paused, it would only take a whole card to say it can't say anything;
-  // the park page carries the reason.
-  if (!c || c.paused || alertState().kind === 'closed') return '';
-  const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
-  const [title, detail] = c.paused === 'hold'
-    ? ['Crowd level paused', "Waits during a hold and just after it don't show how busy the park is"]
-    : c.paused
-      ? ['Crowd level paused', 'Too few of the big rides are posting waits right now']
-      : [c.label, `Big rides average about ${c.index} min, usually ${c.typical} at ${fmtHour(c.hour)}`];
-  const asOf = stale && dash.lastPoll ? ` · as of ${fmtTime(dash.lastPoll)}` : '';
-  return `<div class="group crowd-group" data-key="crowd"><button class="row crowd-row pressable${stale ? ' stale' : ''}" type="button" data-act="open-park"
-      aria-label="Crowds: ${esc(title)}. ${esc(detail + asOf)}. Show park">
-    <span class="row-label">
-      <span class="crowd-word">${esc(title)}</span>
-      <small>${esc(detail + asOf)}</small>
-    </span>
-    ${icon('chevron', 'chevron')}
-  </button></div>`;
+/* ---------- What the app says about a down ride ---------- */
+// One way to say everything, on the list, the ride page and the lock screen.
+// The ride data only says a ride is down, never why, so nothing here says it
+// broke; weather is the app's inference from public weather reports, so it
+// is always "likely".
+const listName = (r) => r.short || r.name;
+const stormGoingOn = (o) => !!o?.cause && o.weather !== 'passed';
+const causeWord = (o) => (o?.cause === 'rain' ? 'rain' : 'lightning');
+// A duration that never breaks across lines: "1 hr 40 min".
+const keepTogether = (s) => esc(s).replace(/ /g, '\u00a0');
+
+// "11:10", or "11:10 PM" when that is the other half of the day from now;
+// a phone on a 24-hour clock gets "23:10" either way.
+function pillTime(ts) {
+  const full = fmtTime(ts);
+  const m = full.match(/^(.*)\u00a0([AP]M)$/);
+  if (!m) return full;
+  return m[2] === fmtTime(Date.now()).match(/([AP]M)$/)?.[1] ? m[1] : full;
 }
 
-// The chance a ride is back within 15, 30 and 60 minutes, drawn as three
-// nested fills on one track, darkest for soonest: a long dark bar means
-// likely soon. The numbers sit in a legend beneath, so nothing rests on
-// shade alone.
-// A few dozen outages can't make anything certain, so the ends read ">95%"
-// and "<5%", never 100% or 0%. A key for a share that small is drawn hollow,
-// as its fill on the bar is.
-function chanceHtml(o, id = '') {
-  const c = o?.chance;
-  // Nothing likely within the hour: an empty bar and three "<5%" say less
-  // than the verdict above it ("these usually take over an hour").
-  if (!c || c[60] < 0.045) return '';
-  const pct = (p) => Math.round(p * 100);
-  const say = (p) => (p >= 0.955 ? '>95%' : p < 0.045 ? '<5%' : `${pct(p)}%`);
-  // Only the chances worth reading: "15 min <5%" beside "1 hr 50%" is noise.
-  const keys = [[15, '15 min'], [30, '30 min'], [60, '1 hr']].filter(([m]) => c[m] >= 0.045);
-  const key = ([m, label]) => `<span><i class="k${m}"></i>${label} ${say(c[m])}</span>`;
-  const text = keys.length === 1
-    ? `<span><i class="k${keys[0][0]}"></i>${say(c[keys[0][0]])} chance it's back within ${keys[0][1] === '1 hr' ? 'the hour' : keys[0][1]}</span>`
-    : `<span class="chance-label">Back within</span>${keys.map(key).join('')}`;
-  return `<div class="chance" aria-hidden="true">
-      <span class="c60" style="width:${pct(c[60])}%"></span>
-      <span class="c30" style="width:${pct(c[30])}%"></span>
-      <span class="c15" style="width:${pct(c[15])}%"></span>
-    </div>
-    <p class="chance-key"${id ? ` id="${id}"` : ''}>${text}</p>`;
+// When a down ride is likely back:
+//   time   back at about `at` (the middle of the usual range), range [lo, hi]
+//   later  weather cleared: likely back `at` or later (the rule's floor)
+//   storm  still storming: no time until it clears, since any would be a guess
+//   hour   more than an hour away, or longer than nearly every outage like it
+//   closed often closed for the rest of the day
+//   none   too little history to say
+// A time never moves earlier than one already shown for the same outage:
+// "11:08" after "11:10" reads as a mistake.
+const shownBack = new Map(); // "rideId|downSince" -> ms last shown
+function backAt(r, o = r.outlook) {
+  if (!o) return { kind: 'none' };
+  if (stormGoingOn(o)) return { kind: 'storm' };
+  const a = o.advice?.key;
+  if (a === 'closed') return { kind: 'closed' };
+  if (a === 'closing') return { kind: 'closing' };
+  const w = o.window;
+  if (a === 'long' || a === 'go' || (w?.lo != null && w.lo >= 60)) return { kind: 'hour' };
+  if (w?.lo == null) return { kind: 'none' };
+  const now = Date.now();
+  const mid = o.cause || w.hi == null ? w.lo : (w.lo + w.hi) / 2;
+  const key = `${r.id}|${r.downSince}`;
+  const at = Math.max(now + mid * 60_000, shownBack.get(key) ?? 0);
+  shownBack.set(key, at);
+  if (shownBack.size > 200) shownBack.delete(shownBack.keys().next().value);
+  return { kind: o.cause ? 'later' : 'time', at, range: !o.cause && w.hi != null ? [now + w.lo * 60_000, now + w.hi * 60_000] : null };
 }
 
-function adviceHtml(o, cls = 'card-advice', id = '') {
-  const a = o?.advice;
-  const idAttr = id ? ` id="${id}"` : '';
-  if (!a) return o?.text ? `<p class="card-outlook"${idAttr}>${esc(o.text)}</p>` : '';
-  return `<p class="${cls} advice-${a.key}"${idAttr}><strong>${esc(a.verdict)}.</strong> ${esc(a.detail)}</p>`;
+// The right-hand end of a row: "Likely back" (said once, above the list, and
+// again on each row at large text sizes, where the time sits under the name)
+// and one time, or a few plain words.
+const backEnd = (b) => `<span class="back-end"><span class="back-label">Likely back</span>${backCell(b)}</span>`;
+function backCell(b) {
+  if (b.kind === 'time') return `<span class="tile">${esc(pillTime(b.at))}</span>`;
+  if (b.kind === 'later') return `<span class="when2"><span class="tile">${esc(pillTime(b.at))}</span><small>or later</small></span>`;
+  const words = { storm: 'After storm', hour: 'Over an hour', closed: 'Maybe not today', closing: 'Maybe not before close', none: 'No estimate yet' }[b.kind];
+  return `<span class="notsoon">${words}</span>`;
 }
-
-
-// A hold is a storm only when the weather says so; otherwise it is named
-// for what was seen (a fireworks or power hold looks the same).
-const holdName = (o, n) => (o?.cause ? `Storm hold · ${n} ride${n === 1 ? '' : 's'}` : `${n} ride${n === 1 ? '' : 's'} paused at once`);
-// The rides in a hold: this trip's first, then A to Z.
-const holdOrder = (a, b) => (isFollowing(b.id) - isFollowing(a.id)) || sortKey(a.name).localeCompare(sortKey(b.name));
+// The same, as a screen reader hears it.
+const backWords = (b) => ({
+  time: () => `back at about ${fmtTime(b.at)}`,
+  later: () => `likely back ${fmtTime(b.at)} or later`,
+  storm: () => 'back after the storm passes',
+  hour: () => 'back in over an hour',
+  closed: () => 'often closed for the rest of the day',
+  closing: () => 'may not reopen before the park closes',
+  none: () => 'no estimate yet',
+}[b.kind])();
 
 // How long a ride has been down, as far as anyone knows: exact, or at
 // least this long when it went down unseen (in a gap in the feed, or before
@@ -1399,41 +1379,57 @@ function downFor(r) {
   return ms >= 60_000 ? `${fmtDuration(ms)}+` : '';
 }
 
-// When it went down, as far as anyone knows. A late opening is when it was
-// noticed: nobody knows it "went down", it just never opened.
-function downWhen(r) {
-  if (r.outlook?.kind === 'opening') return `Late to open · noticed ${fmtTime(r.downSince)}`;
-  if (r.downExact !== false) return `Down since ${fmtTime(r.downSince)}`;
-  if (r.downAfter != null) return `Went down between ${fmtTime(r.downAfter)} and ${fmtTime(r.downSince)}`;
-  return `Down since before ${fmtTime(r.downSince)}`;
+// The rides in a hold: this trip's first, then A to Z.
+const holdOrder = (a, b) => (isFollowing(b.id) - isFollowing(a.id)) || sortKey(a.name).localeCompare(sortKey(b.name));
+
+// A red dot for a ride that is down, an orange bolt for one closed by the
+// weather, gray for rides you don't follow: shape as well as colour.
+const statusMark = (r, theirs) => (r.outlook?.cause
+  ? `<svg class="bolt-mark${theirs ? ' theirs' : ''}"><use href="#i-bolt"/></svg>`
+  : `<span class="status-dot${theirs ? ' theirs' : ''}"></span>`);
+
+// One down ride, one line: its name, where and how long, and when it's back.
+function boardRow(r, { theirs = false } = {}) {
+  const o = r.outlook;
+  const b = backAt(r);
+  const since = downFor(r);
+  const what = o?.cause ? `Stopped, likely ${causeWord(o)}`
+    : o?.kind === 'opening' ? 'Late to open'
+      : since ? `down ${since}` : 'down';
+  const said = [r.name, o?.cause ? `stopped, likely for ${causeWord(o)}` : o?.kind === 'opening' ? 'late to open' : since ? `down ${since}` : 'down', backWords(b)].join(', ');
+  return `<button class="slim pressable${theirs ? ' theirs' : ''}" type="button" data-ride="${esc(r.id)}" data-key="r-${esc(r.id)}" aria-label="${esc(said)}">
+    <span class="mk">${statusMark(r, theirs)}</span>
+    <span class="rl"><span class="nm">${esc(listName(r))}</span><small>${r.land ? `${esc(r.land)} · ` : ''}${keepTogether(what)}</small></span>
+    ${backEnd(b)}${theirs ? '' : icon('chevron', 'chevron')}
+  </button>`;
 }
 
-function downCard(r) {
-  const o = r.outlook || {};
-  const following = isFollowing(r.id);
-  const since = downWhen(r);
-  // How the estimate was made lives on the ride's page, not on every card.
-  const foot = following ? '' : 'Alerts off';
-  // A link to the ride's page that reads as the whole card: its name, then
-  // when it went down, the advice, the chances and the clock.
-  const id = `card-${r.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
-  const clock = backClock(r, o);
-  const described = [`${id}-s`, (o.advice || o.text) && `${id}-a`, o.chance && `${id}-p`, clock && `${id}-c`].filter(Boolean).join(' ');
-  return `
-    <div class="card pressable ${following ? '' : 'unfollowed'}" data-ride="${esc(r.id)}" role="link" tabindex="0"
-         aria-labelledby="${id}-n" aria-describedby="${described}">
-      <div class="card-top">
-        <h2 class="card-title" id="${id}-n">${esc(r.name)}</h2>
-        <span class="elapsed" aria-hidden="true">${downFor(r)}</span>
-        ${icon('chevron', 'chevron')}
-      </div>
-      <p class="card-sub" id="${id}-s">${esc(since)}${downFor(r) ? `<span class="vh">, ${esc(downFor(r))}</span>` : ''}</p>
-      ${adviceHtml(o, 'card-advice', `${id}-a`)}
-      ${o.chance ? chanceHtml(o, `${id}-p`) : timeline(r)}
-      ${clock ? `<p class="card-clock" id="${id}-c">${esc(clock)}</p>` : ''}
-      ${foot ? `<p class="card-foot">${esc(foot)}</p>` : ''}
-    </div>`;
+// Your rides caught in a hold: one line that opens the hold. With one of
+// yours in it, that ride leads ("Big Thunder Mountain, closed, likely
+// lightning"); with several, the count does, so it matches the headline
+// ("16 rides closed, likely lightning, includes Big Thunder Mountain and 15
+// more of yours").
+function holdRow(held, mine) {
+  // The ride most people would name first: the one with the longest usual wait.
+  const first = [...mine].sort((a, b) => (b.usual ?? 0) - (a.usual ?? 0))[0];
+  const o = first.outlook;
+  const b = backAt(first);
+  const what = o?.cause ? `stopped, likely ${causeWord(o)}` : 'down together';
+  const others = held.length - 1;
+  const name = mine.length > 1 ? `${held.length} rides ${what}` : listName(first);
+  const sub = mine.length > 1
+    ? `Includes ${listName(first)} and ${mine.length - 1} more of yours`
+    : `${o?.cause ? `Stopped, likely ${causeWord(o)}` : 'Down'}${others ? `, with ${others} other ride${others === 1 ? '' : 's'}` : ''}`;
+  const said = `${name}, ${sub}, ${backWords(b)}. Show all ${held.length}`;
+  return `<button class="slim pressable" type="button" data-act="open-hold" data-key="hold" aria-label="${esc(said)}">
+    <span class="mk">${statusMark(first, false)}</span>
+    <span class="rl"><span class="nm">${esc(name)}</span><small>${esc(sub)}</small></span>
+    ${backEnd(b)}${icon('chevron', 'chevron')}
+  </button>`;
 }
+
+let othersOpen = false; // "14 other rides are down", opened in place
+let mineOpen = false; // more than four of yours, opened in place
 
 const setupRowHtml = () => `
   <div class="group" style="margin-top:1.2rem" data-key="setup-row"><button class="row pressable" type="button" data-act="setup-alerts">
@@ -1450,19 +1446,15 @@ function renderDown() {
   const list = $('#down-list');
   const anchor = view === 'down' && scrollY > 8 && !pages.top ? readingAnchor() : null;
   const loading = !!list.querySelector('[data-key=skeleton]');
-  const before = new Set(list.querySelectorAll('.card[data-ride], .cards[data-key], .crowd-group'));
+  const before = new Set(list.querySelectorAll('.slim[data-key]'));
   morph(list, downHtml());
   renderRecent(new Set(dash.rides.filter((r) => r.status === 'DOWN' && r.downSince).map((r) => r.id)));
   if (anchor) {
     const shift = anchor.el.isConnected ? anchor.el.getBoundingClientRect().top - anchor.top : 0;
     if (Math.abs(shift) > 1) scrollBy(0, shift);
   } else if (!loading && before.size && !reducedMotion()) {
-    for (const el of list.querySelectorAll('.card[data-ride], .cards[data-key], .crowd-group')) {
-      if (before.has(el)) continue;
-      // A new group of cards grows as one; the cards inside come with it.
-      if (el.matches('.card') && !before.has(el.parentElement)) continue;
-      grow(el);
-    }
+    // A ride newly down grows into the board rather than shoving it.
+    for (const el of list.querySelectorAll('.slim[data-key]')) if (!before.has(el)) grow(el);
   }
 }
 
@@ -1470,7 +1462,7 @@ function renderDown() {
 // the header, and where it sits now.
 function readingAnchor() {
   const top = document.body.classList.contains('compact') ? $('#nav-bar').getBoundingClientRect().bottom : 0;
-  for (const el of document.querySelectorAll('#view-down .card, #view-down .crowd-group, #view-down .row, #view-down .section-label')) {
+  for (const el of document.querySelectorAll('#view-down .slim, #view-down .barrow, #view-down .section-label, #view-down .group')) {
     const r = el.getBoundingClientRect();
     if (r.bottom > top && r.height) return { el, top: r.top };
   }
@@ -1483,77 +1475,68 @@ function grow(el) {
 }
 
 function downHtml() {
-  const down = dash.rides
-    .filter((r) => r.status === 'DOWN' && r.downSince && !r.other)
-    .sort((a, b) => (isFollowing(b.id) - isFollowing(a.id)) || b.downSince - a.downSince);
-  const parts = [crowdRowHtml()];
+  const down = dash.rides.filter((r) => r.status === 'DOWN' && r.downSince && !r.other);
   if (!dash.lastPoll) {
     // No ride data yet is not the same as nothing being down.
-    parts.push(`
-      <div class="empty offline" data-key="empty">
-        ${icon('wifi-off')}
-        <h2 class="title-2">No ride data yet</h2>
-        <p>The park's ride feed isn't answering right now. This updates on its own.</p>
-      </div>`);
-  } else if (!down.length) {
-    // Only a live, open park gets the green check. Closed, not open yet,
-    // and old or offline data each say what they are.
-    const open = Date.parse(dash.park.openingTime || '');
-    const stale = offline || Date.now() - dash.lastPoll > STALE_MS;
-    // What the rides are doing, not just that none is down: every ride
-    // closed early must never read as "Everything's running".
-    const c = dash.park.counts || rideCountsOf(dash.rides);
-    const running = c.total ? c.operating / c.total : 1;
-    const [glyph, cls, title, text] =
-      dash.park.status === 'closedEarly' ? ['moon', 'closed', 'Most rides are closed', `Only ${c.operating} of ${c.total} are running, so the park seems to have closed early. Alerts are off until rides reopen.`]
-        : alertState().kind === 'closed' ? ['moon', 'closed', 'Park closed', 'Closed for the day. Alerts start again when it opens.']
-          : open && Date.now() < open ? ['moon', 'closed', 'Not open yet', `Opens at ${fmtTime(open)}. You'll get an alert if a ride with alerts on is late to open.`]
-            : stale ? ['check-circle', 'offline', `Nothing was down as of ${fmtTime(dash.lastPoll)}`, staleText()]
-              : running >= 0.6 ? ['check-circle', '', "Everything's running", "You'll get an alert when a ride with alerts on goes down."]
-                : ['check-circle', '', 'Nothing is down', `${c.operating} of ${c.total} rides are running; the rest are closed. You'll get an alert when a ride with alerts on goes down.`];
-    parts.push(`
-      <div class="empty ${cls}" data-key="empty">
-        ${icon(glyph)}
-        <h2 class="title-2">${esc(title)}</h2>
-        <p>${esc(text)}</p>
-      </div>`);
-  } else {
-    const holds = down.filter((r) => r.outlook?.kind === 'hold');
-    const rest = down.filter((r) => r.outlook?.kind !== 'hold');
-    if (holds.length) {
-      // One card for the hold, not a card per ride: in a storm that was
-      // thirty identical cards before the breakdowns below. The rides are
-      // rows inside it, each opening its own page.
-      const first = holds.reduce((a, r) => (r.downSince < a.downSince ? r : a));
-      const o = first.outlook || {};
-      holds.sort(holdOrder);
-      parts.push(`
-        <div class="cards" data-key="hold"><div class="card hold-card">
-          <button class="hold-header pressable" type="button" data-act="open-hold">${icon(o.cause ? 'bolt' : 'pause')}<span>${esc(holdName(o, holds.length))}</span>${icon('chevron', 'chevron')}</button>
-          <p class="card-sub">${esc(downWhen(first).replace(/^Down s/, 'S'))}</p>
-          ${adviceHtml(o)}
-          ${o.chance ? chanceHtml(o) : timeline(first)}
-          ${o.text && o.advice ? `<p class="card-clock">${esc(o.text)}</p>` : ''}
-          <div class="hold-rides">${holds.slice(0, holds.length > 4 ? 3 : 4).map((r) => `
-            <button class="hold-ride pressable ${isFollowing(r.id) ? '' : 'unfollowed'}" type="button" data-ride="${esc(r.id)}">
-              <span class="row-label">${esc(r.name)}</span>
-              <span class="row-detail">${downFor(r)}</span>
-              ${icon('chevron', 'chevron')}
-            </button>`).join('')}${holds.length > 4 ? `
-            <button class="hold-ride hold-all pressable" type="button" data-act="open-hold" data-key="more">
-              <span class="row-label">All ${holds.length} rides in this hold</span>
-              ${icon('chevron', 'chevron')}
-            </button>` : ''}</div>
-        </div></div>`);
-    }
-    if (rest.length) {
-      if (holds.length) parts.push('<h2 class="section-label" data-key="down-label">Down</h2>');
-      parts.push(`<div class="cards" data-key="down">${rest.map(downCard).join('')}</div>`);
+    return stateCard("The park's ride feed isn't answering right now. This updates on its own.");
+  }
+  const held = down.filter((r) => r.outlook?.kind === 'hold').sort(holdOrder);
+  const heldMine = held.filter((r) => isFollowing(r.id));
+  const solo = down.filter((r) => r.outlook?.kind !== 'hold' && isFollowing(r.id)).sort((a, b) => b.downSince - a.downSince);
+  const rows = solo.map((r) => boardRow(r));
+  if (heldMine.length) rows.splice(0, 0, holdRow(held, heldMine));
+  // The board never grows past four rows of yours: the rest open in place,
+  // so the shortest lines below stay in reach on a storm day.
+  let mine = rows;
+  if (rows.length > 4 && !mineOpen) {
+    mine = [...rows.slice(0, 3), `<button class="slim quiet pressable" type="button" data-act="more-mine" data-key="more-mine" aria-expanded="false">
+      <span class="rl">${rows.length - 3} more of yours are down</span>${icon('chevron', 'chevron')}</button>`];
+  }
+  const others = down.filter((r) => !isFollowing(r.id));
+  const parts = [];
+  if (mine.length) parts.push(`<div class="boardhead" aria-hidden="true" data-key="head"><span>Your rides</span><span>Likely back</span></div>`, ...mine);
+  if (others.length) {
+    parts.push(`<button class="slim quiet pressable" type="button" data-act="toggle-others" data-key="others" aria-expanded="${othersOpen}">
+      <span class="rl">${others.length} ${mine.length ? 'other ' : ''}ride${others.length === 1 ? ' is' : 's are'} down</span>${icon('chevron', `chevron turn${othersOpen ? ' open' : ''}`)}</button>`);
+    if (othersOpen) {
+      // The rides you don't follow in a hold are one line that opens the
+      // hold; the rest are rows of their own, smaller and gray.
+      const heldTheirs = held.filter((r) => !isFollowing(r.id));
+      if (heldTheirs.length) {
+        const o = heldTheirs[0].outlook;
+        const names = heldTheirs.slice(0, 3).map(listName).join(', ');
+        parts.push(`<button class="slim theirs pressable" type="button" data-act="open-hold" data-key="held-theirs">
+          <span class="mk">${statusMark(heldTheirs[0], true)}</span>
+          <span class="rl"><span class="nm">${heldTheirs.length} ${heldMine.length ? 'more ' : ''}${o?.cause ? `stopped, likely ${causeWord(o)}` : 'down together'}</span><small>${esc(names)}${heldTheirs.length > 3 ? ` and ${heldTheirs.length - 3} more` : ''}</small></span>
+          ${backCell(backAt(heldTheirs[0]))}</button>`);
+      }
+      for (const r of others.filter((x) => x.outlook?.kind !== 'hold').sort((a, b) => b.downSince - a.downSince)) parts.push(boardRow(r, { theirs: true }));
     }
   }
-  if (!alertsReady()) parts.push(setupRowHtml());
-  return parts.join('');
+  const out = [];
+  if (parts.length) {
+    out.push(`<div class="group lift board" data-key="board">${parts.join('')}</div>`);
+    out.push(`<button class="more-below" type="button" data-act="more-below" data-key="more-below" aria-hidden="true" tabindex="-1">More below ${icon('chevron')}</button>`);
+  } else {
+    // Nothing down. Only a live, open park gets the shortest lines as its
+    // card; closed, not open yet, and old data each say what they are.
+    const open = Date.parse(dash.park.openingTime || '');
+    const stale = offline || Date.now() - dash.lastPoll > STALE_MS;
+    const c = dash.park.counts || rideCountsOf(dash.rides);
+    const text = dash.park.status === 'closedEarly' ? `Only ${c.operating} of ${c.total} rides are running, so the park seems to have closed early. Alerts are off until rides reopen.`
+      : alertState().kind === 'closed' ? 'Closed for the day. Alerts start again when it opens.'
+        : open && Date.now() < open ? `Opens at ${fmtTime(open)}. If a ride you follow is late to open, you'll hear about it.`
+          : stale ? staleText()
+            : null;
+    const short = text ? '' : shortestHtml({ lifted: true });
+    out.push(text ? stateCard(text) : short || stateCard(`You'll hear the moment one of your ${dash.rides.filter((r) => isFollowing(r.id)).length} rides goes down.`));
+  }
+  if (!alertsReady()) out.push(setupRowHtml());
+  return out.join('');
 }
+
+// Something to say instead of a list, in the card that sits on the sky.
+const stateCard = (text) => `<div class="group lift padded" data-key="state"><p class="state-text">${esc(text)}</p></div>`;
 
 // Rides now, leaving out any missing from the feed (as server/parkstatus.js counts).
 function rideCountsOf(rides) {
@@ -1575,8 +1558,9 @@ function staleText() {
   return "The park's ride feed isn't answering, so alerts are paused until it's back.";
 }
 
-// Rides that came back, or gave up and closed, recently: so an alert opened
-// late still makes sense. Each ride's latest word only.
+// Under the board: lines getting longer, the shortest lines right now, and
+// rides that came back or closed recently (so an alert opened late still
+// makes sense). Each ride's latest word only.
 const RECENT_SINGLE_MS = 30 * 60_000;
 const openReturns = new Set(); // incidents whose returns are shown ride by ride
 
@@ -1590,9 +1574,8 @@ function renderRecent(downIds) {
   });
   const ups = latest.filter((e) => e.type === 'UP');
   const closed = latest.filter((e) => e.type === 'CLOSED');
-  // A hold's (or a wave's) returns are one row that opens with a tap: after a
-  // storm that was twenty rows for two hours. A single return stays half an
-  // hour.
+  // A hold's returns are one row that opens with a tap: after a storm that
+  // was twenty rows for two hours. A single return stays half an hour.
   const byIncident = new Map();
   for (const e of ups) if (e.incident) byIncident.set(e.incident, [...(byIncident.get(e.incident) || []), e]);
   const groups = [...byIncident].filter(([, es]) => es.length >= 3);
@@ -1601,72 +1584,93 @@ function renderRecent(downIds) {
     ...groups.map(([id, es]) => ({ at: Math.max(...es.map((e) => e.at)), id, es })),
     ...ups.filter((e) => !grouped.has(e) && Date.now() - e.at < RECENT_SINGLE_MS).map((e) => ({ at: e.at, e })),
   ].sort((a, b) => b.at - a.at);
+  const nameOf = (id, fallback) => { const r = liveRide(id); return r ? listName(r) : fallback; };
   const upRow = (e, cls = '') => `
-      <button class="row recent-row pressable ${cls}" type="button" data-ride="${esc(e.id)}">
-        ${icon('arrow-up', 'row-icon tint-green')}
-        <span class="row-label">${esc(e.name)}<small>${e.late
+      <button class="slim pressable ${cls}" type="button" data-ride="${esc(e.id)}" data-key="up-${esc(e.id)}">
+        <span class="mk">${icon('arrow-up', 'up-mark')}</span>
+        <span class="rl"><span class="nm">${esc(nameOf(e.id, e.name))}</span><small>${e.late
           ? `Opened at ${fmtTime(e.at)}`
-          : `Back at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)}` : ''}`}</small></span>
+          : `Open again at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${keepTogether(fmtDuration(e.downtimeMs))}` : ''}`}</small></span>
         ${icon('chevron', 'chevron')}
       </button>`;
   const groupRows = ({ id, es }) => {
     const open = openReturns.has(id);
-    const what = id.startsWith('hold') ? 'back after the hold' : 'back up';
     const times = es.map((e) => e.at);
     return `
-      <button class="row recent-row pressable" type="button" data-act="toggle-returns" data-inc="${esc(id)}" aria-expanded="${open}">
-        ${icon('arrow-up', 'row-icon tint-green')}
-        <span class="row-label">${es.length} rides ${what}<small>Back ${fmtSpan(Math.min(...times), Math.max(...times))}</small></span>
+      <button class="slim pressable" type="button" data-act="toggle-returns" data-inc="${esc(id)}" data-key="inc-${esc(id)}" aria-expanded="${open}">
+        <span class="mk">${icon('arrow-up', 'up-mark')}</span>
+        <span class="rl"><span class="nm">${es.length} rides open again</span><small>${fmtSpan(Math.min(...times), Math.max(...times))}</small></span>
         ${icon('chevron', `chevron turn${open ? ' open' : ''}`)}
-      </button>${open ? es.map((e) => upRow(e, 'sub')).join('') : ''}`;
+      </button>${open ? es.map((e) => upRow(e, 'theirs')).join('') : ''}`;
   };
   const parts = [];
+  const building = dash.crowd?.building;
+  if (building && alertState().kind !== 'closed') {
+    parts.push(`<div class="group spaced-sm" data-key="building"><button class="slim pressable" type="button" data-act="open-park">
+      <span class="mk">${icon('trend-up', 'trend-mark')}</span>
+      <span class="rl"><span class="nm">Lines are getting longer</span><small>Big rides average ${building.to}\u00a0min, up from ${building.from} half an hour ago</small></span>
+      ${icon('chevron', 'chevron')}</button></div>`);
+  }
+  // The shortest lines sit here unless the board had nothing to show and
+  // they are its card already.
+  const downCount = dash.rides.filter((r) => r.status === 'DOWN' && r.downSince && !r.other).length;
+  if (downCount) parts.push(shortestHtml());
+  if (entries.length) {
+    parts.push(`<h2 class="section-label" data-key="up-label">Open again</h2>
+      <div class="group" data-key="up">${entries.map((x) => (x.es ? groupRows(x) : upRow(x.e))).join('')}</div>`);
+  }
   if (closed.length) {
-    parts.push(`<h2 class="section-label" data-key="closed-label">Closed after an outage</h2>
+    parts.push(`<h2 class="section-label" data-key="closed-label">Closed after being down</h2>
       <div class="group" data-key="closed">${closed.map((e) => `
-      <button class="row recent-row pressable" type="button" data-ride="${esc(e.id)}">
-        ${icon('moon', 'row-icon tint-orange')}
-        <span class="row-label">${esc(e.name)}<small>Closed at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${fmtDuration(e.downtimeMs)} down` : ''}</small></span>
+      <button class="slim pressable" type="button" data-ride="${esc(e.id)}" data-key="cl-${esc(e.id)}">
+        <span class="mk">${icon('moon', 'moon-mark')}</span>
+        <span class="rl"><span class="nm">${esc(nameOf(e.id, e.name))}</span><small>Closed at ${fmtTime(e.at)}${e.downtimeMs ? ` after ${keepTogether(fmtDuration(e.downtimeMs))} down` : ''}</small></span>
         ${icon('chevron', 'chevron')}
       </button>`).join('')}</div>`);
   }
-  if (entries.length) {
-    parts.push(`<h2 class="section-label" data-key="up-label">Back up recently</h2>
-      <div class="group" data-key="up">${entries.map((x) => (x.es ? groupRows(x) : upRow(x.e))).join('')}</div>`);
-  }
-  parts.push(shortWaitsHtml());
   morph($('#recent-block'), parts.join(''));
 }
 
-// Rides worth heading for right now: running with a wait well under their
-// usual for this hour, best first (as the lines-building alert picks them).
-// A carousel's 5 minutes isn't news; a headliner at half its usual is. Only
+// A running ride's posted wait against its usual for this hour, as a bar on
+// one scale for every ride, with the usual as a tick. Green only when it is
+// at least five minutes shorter than usual. A wait past the scale fills it.
+const WAIT_SCALE = 90;
+const isGood = (r) => r.waitTime != null && r.usual != null && r.waitTime <= r.usual - 5;
+function waitBar(r) {
+  if (r.status !== 'OPERATING' || r.waitTime == null) return '';
+  const pct = (m) => Math.min(100, (m / WAIT_SCALE) * 100).toFixed(1);
+  return `<div class="wbar${isGood(r) ? ' good' : ''}" aria-hidden="true"><i style="width:${pct(r.waitTime)}%"></i>${r.usual != null ? `<b style="left:${pct(r.usual)}%"></b>` : ''}</div>`;
+}
+function waitRow(r, { sub = null, following = false } = {}) {
+  const usual = r.usual != null ? `usually ${r.usual}\u00a0min` : null;
+  const small = sub ?? [r.land, usual].filter(Boolean).join(' · ');
+  const said = [`${r.name}, ${r.waitTime} minute wait`, small.replace(/\u00a0/g, ' ').replace(/ · /g, ', '), following ? 'alerts on' : ''].filter(Boolean).join(', ');
+  return `<button class="barrow pressable" type="button" data-ride="${esc(r.id)}" data-key="w-${esc(r.id)}" aria-label="${esc(said)}">
+    <span class="top2"><span class="rl">${esc(listName(r))}${following ? icon('bell', 'bell-mark') : ''}${small ? `<small>${esc(small)}</small>` : ''}</span>
+    <span class="wait-num${isGood(r) ? ' good' : ''}">${r.waitTime}<small>min</small></span></span>
+    ${waitBar(r)}</button>`;
+}
+
+// The shortest lines right now: running rides whose wait is well under their
+// usual for this hour, best deal first (as the lines alert picks them). A
+// carousel's 5 minutes isn't news; a headliner at half its usual is. Only
 // while the park is open and the data is fresh.
-function shortWaitsHtml() {
+function shortestHtml({ lifted = false } = {}) {
   const st = alertState();
   const stale = offline || !dash.lastPoll || Date.now() - dash.lastPoll > STALE_MS;
   if (st.kind === 'closed' || stale) return '';
   const quick = dash.rides
-    .filter((r) => !r.other && r.status === 'OPERATING' && r.waitTime != null && r.usual >= 15 && r.waitTime <= r.usual * 0.7)
+    .filter((r) => !r.other && r.status === 'OPERATING' && r.waitTime != null && r.usual >= 15 && r.waitTime <= r.usual * 0.8)
     .sort((a, b) => a.waitTime / a.usual - b.waitTime / b.usual || b.usual - a.usual)
-    .slice(0, 4);
+    .slice(0, 3);
   if (!quick.length) return '';
-  return `<h2 class="section-label" data-key="short-label">Shorter than usual right now</h2>
-    <div class="group plain" data-key="short">${quick.map((r) => `
-    <button class="row recent-row pressable" type="button" data-ride="${esc(r.id)}">
-      <span class="row-label">${esc(r.name)}<small>Usually ${r.usual} min at this time${queueTags(r).length ? ` · ${esc(queueTags(r).join(' · '))}` : ''}</small></span>
-      <span class="row-detail">${r.waitTime} min${trendHtml(r)}</span>
-      ${icon('chevron', 'chevron')}
-    </button>`).join('')}</div>`;
+  const rows = quick.map((r) => waitRow(r)).join('');
+  return lifted
+    ? `<div class="group lift" data-key="short"><h2 class="section-label in-card" data-key="short-label">Shortest lines right now</h2>${rows}</div>`
+    : `<h2 class="section-label" data-key="short-label">Shortest lines right now</h2><div class="group" data-key="short">${rows}</div>`;
 }
 
 /* ---------- Rides ---------- */
-// A small marker in the Rides list for a ride with a wait alert still to go off.
-function waitBadge(r) {
-  const a = dash.trip.waitAlerts?.[r.id];
-  return a && !a.sentAt ? `<span class="wait-badge" title="Wait alert">${icon('timer')}≤${a.max}</span>` : '';
-}
-
 // The other lines a guest weighs: single rider, and Lightning Lane with its
 // next return time. Words, not symbols, and only where the data has them.
 function queueTags(r) {
@@ -1682,185 +1686,152 @@ function queueTags(r) {
   return tags;
 }
 
-// A growing or shrinking line, in the list: an arrow with words for
-// screen readers. Waits that barely moved show nothing.
-function trendHtml(r) {
-  const t = r.status === 'OPERATING' && r.trend;
-  if (!t) return '';
-  const words = t.direction === 'up' ? `up ${t.change} min in the last half hour` : `down ${-t.change} min in the last half hour`;
-  return `<span class="trend ${t.direction}" title="${words}"><span class="vh">, ${words}</span>${icon(`trend-${t.direction}`)}</span>`;
-}
-
-function rideMeta(r) {
-  if (r.status === 'OPERATING') return `Open · ${r.waitTime != null ? `${r.waitTime} min wait` : 'no posted wait'}`;
-  if (r.status === 'DOWN') return `Down ${r.downSince ? downFor(r) : ''}`.trim();
-  if (r.status === 'REFURBISHMENT') return 'Refurbishment';
-  return 'Closed';
-}
-
-// A–Z, or shortest wait first: what's quickest to ride right now. Running
-// rides by posted wait, then down ones, then closed. Remembered per phone.
-let rideSort = (() => { try { return localStorage.getItem('parkalert.rideSort') || 'name'; } catch { return 'name'; } })();
+// How the Rides list is shown: by land, A to Z, shortest wait first, coasters
+// only, or the rides you get alerts about. Remembered per phone.
+const RIDE_VIEWS = ['land', 'name', 'wait', 'coasters', 'following'];
+let rideView = (() => { try { const v = localStorage.getItem('parkalert.rideView'); return RIDE_VIEWS.includes(v) ? v : 'land'; } catch { return 'land'; } })();
+// A ride switched off under "My alerts" stays listed until the view, the
+// search or the tab changes, so a mis-tap can be undone where it happened.
+const keepListed = new Set();
 const byName = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name));
-// Rides posting a wait come first, shortest first: that's what someone
-// sorting by wait is after. Attractions that post no wait (shows, walk-
-// throughs, a train) follow, then rides that are down, then closed ones.
-function rideOrder(a, b) {
-  if (rideSort !== 'wait') return byName(a, b);
+// Shortest first: rides posting a wait by their wait, then ones that post
+// none (shows, a train), then rides that are down, then closed ones.
+function byWait(a, b) {
   const rank = (r) => (r.status === 'OPERATING' ? (r.waitTime != null ? 0 : 1) : r.status === 'DOWN' ? 2 : 3);
   return rank(a) - rank(b) || (a.waitTime ?? 0) - (b.waitTime ?? 0) || byName(a, b);
 }
-
-// Which rides to list: all, open ones, down ones, or the ones you get
-// alerts about. Remembered per phone, like the sort.
-let rideFilter = (() => { try { return localStorage.getItem('parkalert.rideFilter') || 'all'; } catch { return 'all'; } })();
-// A ride switched off under "With alerts" stays in the list until the
-// filter, the search or the tab changes, as in Settings, so a mis-tap can
-// be switched straight back instead of vanishing from under the finger.
-const keepListed = new Set();
-const FILTERS = {
-  all: () => true,
-  open: (r) => r.status === 'OPERATING',
-  down: (r) => r.status === 'DOWN',
-  following: (r) => isFollowing(r.id) || keepListed.has(r.id),
+const VIEW_EMPTY = {
+  coasters: 'No coasters listed at this park.',
+  following: "You aren't getting alerts about any ride. Tap Choose to pick some.",
 };
-const FILTER_EMPTY = {
-  open: 'No rides are open right now.',
-  down: 'Nothing is down right now.',
-  following: "You aren't getting alerts about any ride. Turn some on under All.",
-};
-function setRideFilter(filter) {
-  rideFilter = FILTERS[filter] ? filter : 'all';
+function setRideView(v) {
+  rideView = RIDE_VIEWS.includes(v) ? v : 'land';
   keepListed.clear();
-  try { localStorage.setItem('parkalert.rideFilter', rideFilter); } catch {}
-  document.querySelectorAll('[data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === rideFilter)));
+  try { localStorage.setItem('parkalert.rideView', rideView); } catch {}
+  document.querySelectorAll('[data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.filter === rideView)));
   if (dash) renderRides();
 }
-document.querySelectorAll('[data-filter]').forEach((b) => { b.onclick = () => setRideFilter(b.dataset.filter); });
-setRideFilter(rideFilter);
+document.querySelectorAll('[data-filter]').forEach((b) => { b.onclick = () => { haptic(); setRideView(b.dataset.filter); }; });
+setRideView(rideView);
 
-function setRideSort(sort) {
-  rideSort = sort;
-  try { localStorage.setItem('parkalert.rideSort', sort); } catch {}
-  const btn = $('#btn-sort');
-  btn.innerHTML = `${icon('sort')}<span>${sort === 'wait' ? 'Wait' : 'A–Z'}</span>`;
-  btn.setAttribute('aria-label', sort === 'wait' ? 'Sorted by shortest wait. Sort A to Z instead' : 'Sorted A to Z. Sort by shortest wait instead');
-  if (dash) renderRides();
+// A ride that isn't running says what it is instead of drawing a bar.
+function statusRow(r, following) {
+  const [word, cls] = r.status === 'DOWN'
+    ? (r.outlook?.cause ? ['Stopped', 'weather'] : ['Down', 'down'])
+    : r.status === 'OPERATING' ? ['No posted wait', '']
+      : r.status === 'REFURBISHMENT' ? ['Refurbishing', ''] : ['Closed', ''];
+  const sub = [rideView === 'land' ? null : r.land, r.status === 'DOWN' && r.outlook?.cause ? `likely ${causeWord(r.outlook)}` : null].filter(Boolean).join(' · ');
+  return `<button class="barrow pressable" type="button" data-ride="${esc(r.id)}" data-key="w-${esc(r.id)}" aria-label="${esc(`${r.name}, ${word.toLowerCase()}${sub ? `, ${sub}` : ''}${following ? ', alerts on' : ''}`)}">
+    <span class="top2"><span class="rl">${esc(listName(r))}${following ? icon('bell', 'bell-mark') : ''}${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+    <span class="wait-word ${cls}">${word}</span></span></button>`;
 }
-$('#btn-sort').onclick = () => { haptic(); setRideSort(rideSort === 'wait' ? 'name' : 'wait'); };
-setRideSort(rideSort);
+
+// A bell beside a followed ride, only when some rides aren't followed:
+// with every ride on, a bell on every row says nothing.
+const bellFor = (r) => isFollowing(r.id) && dash.rides.some((x) => !x.other && !isFollowing(x.id));
+function rideRow(r) {
+  const following = bellFor(r);
+  if (r.status !== 'OPERATING' || r.waitTime == null) return statusRow(r, following);
+  const alert = dash.trip.waitAlerts?.[r.id];
+  const extras = [
+    rideView === 'land' ? null : r.land,
+    r.usual != null ? `usually ${r.usual}\u00a0min` : null,
+    ...queueTags(r),
+    alert && !alert.sentAt ? `wait alert at ${alert.max}\u00a0min` : null,
+  ].filter(Boolean).join(' · ');
+  return waitRow(r, { sub: extras, following });
+}
 
 function renderRides() {
-  drawRides();
-}
-
-function drawRides() {
   const q = $('#ride-search').value.trim();
-  const all = dash.rides.filter((r) => !r.other).sort(rideOrder);
-  const shown = all.filter((r) => FILTERS[rideFilter](r) && (!q || matchesSearch(r.name, q)));
+  const all = dash.rides.filter((r) => !r.other);
   const following = all.filter((r) => isFollowing(r.id)).length;
+  $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length} rides` : `Alerts on for ${following} of ${all.length} rides`;
+  $('#btn-choose').classList.remove('hidden');
 
-  // Counts on the filter, as Mail shows unread: how many are open or down
-  // before you tap.
-  for (const b of document.querySelectorAll('[data-filter]')) {
-    const f = b.dataset.filter;
-    const n = f === 'all' ? null : all.filter(FILTERS[f]).length;
-    const label = { all: 'All', open: 'Open', down: 'Down', following: 'Alerts' }[f];
-    morph(b, n == null ? label : `${label} <span class="count">${n}</span>`);
-  }
-  $('#follow-summary').textContent = following === all.length ? `Alerts on for all ${all.length}` : `Alerts on for ${following} of ${all.length}`;
-  const btn = $('#btn-follow-all');
-  btn.textContent = following === all.length ? 'Turn all off' : 'Turn all on';
-  btn.onclick = following === all.length ? unfollowAll : followAll;
-  // While searching it would be unclear whether this acts on the matches or on everything.
-  btn.classList.toggle('hidden', !!q);
-
-  // Shows, exhibits and play areas: under All only, with their status and
-  // no switch, since they never alert.
-  const others = rideFilter === 'all'
-    ? dash.rides.filter((r) => r.other && (!q || matchesSearch(r.name, q))).sort((a, b) => sortKey(a.name).localeCompare(sortKey(b.name)))
-    : [];
-  morph($('#other-block'), others.length ? `<h2 class="section-label" data-key="other-label">Other attractions</h2>
-    <div class="group rides" data-key="other">${others.map((r) => `
-      <div class="row ride-row" data-key="${esc(r.id)}">
-        <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
-          <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}</span>
-          </span>
-        </button>
-      </div>`).join('')}</div>
-    <p class="footnote" data-key="other-foot">Shows, exhibits and play areas that never post a wait. They don't send alerts.</p>` : '');
+  const keep = {
+    coasters: (r) => r.coaster,
+    following: (r) => isFollowing(r.id) || keepListed.has(r.id),
+  }[rideView] || (() => true);
+  const shown = all.filter((r) => keep(r) && (!q || matchesSearch(r.name, q) || (r.short && matchesSearch(r.short, q))));
+  shown.sort(rideView === 'wait' ? byWait : byName);
 
   const list = $('#rides-list');
-  list.className = 'group rides';
   if (!shown.length) {
-    morph(list, `<p class="no-results" data-key="none">${q ? `No rides match “${esc(q)}”.` : esc(FILTER_EMPTY[rideFilter] || 'No rides.')}</p>`);
-    return;
+    morph(list, `<p class="no-results" data-key="none">${q ? `No rides match “${esc(q)}”.` : esc(VIEW_EMPTY[rideView] || 'No rides.')}</p>`);
+  } else if (rideView === 'land') {
+    // Grouped by land, in the order a park map reads, rides with no known
+    // land last.
+    const lands = new Map();
+    for (const r of shown) {
+      const land = r.land || 'Other rides';
+      if (!lands.has(land)) lands.set(land, []);
+      lands.get(land).push(r);
+    }
+    const order = [...lands.keys()].sort((a, b) => (a === 'Other rides') - (b === 'Other rides') || sortKey(a).localeCompare(sortKey(b)));
+    morph(list, order.map((land) => `<h2 class="section-label" data-key="l-${esc(land)}">${esc(land)}</h2>
+      <div class="group" data-key="g-${esc(land)}">${lands.get(land).map(rideRow).join('')}</div>`).join(''));
+  } else {
+    morph(list, `<div class="group spaced-sm" data-key="all">${shown.map(rideRow).join('')}</div>`);
   }
-  morph(list, shown.map((r) => {
-    const on = isFollowing(r.id);
-    return `
-      <div class="row ride-row" data-key="${esc(r.id)}">
-        <button class="row-main pressable" type="button" data-ride="${esc(r.id)}">
-          <span class="row-label">${esc(r.name)}
-            <span class="meta ${r.status}"><span class="dot ${r.status}"></span>${esc(rideMeta(r))}${trendHtml(r)}${waitBadge(r)}</span>
-            ${queueTags(r).length ? `<span class="tags">${queueTags(r).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}
-          </span>
-        </button>
-        <button class="switch" type="button" role="switch" aria-checked="${on}" data-id="${esc(r.id)}"
-                aria-label="Alerts for ${esc(r.name)}"></button>
-      </div>`;
-  }).join(''));
+
+  // Shows, exhibits and play areas never post a wait and never alert: listed
+  // apart, under the full list only.
+  const others = rideView === 'land' || rideView === 'name'
+    ? dash.rides.filter((r) => r.other && (!q || matchesSearch(r.name, q))).sort(byName)
+    : [];
+  morph($('#other-block'), others.length ? `<h2 class="section-label" data-key="other-label">Shows and other attractions</h2>
+    <div class="group" data-key="other">${others.map((r) => statusRow(r, false)).join('')}</div>
+    <p class="footnote" data-key="other-foot">They never post a wait, so they don't send alerts.</p>` : '');
 }
 
-// Switches slide as well as tap, as in Settings: the knob follows a
-// sideways drag and the switch ends up whichever way the finger finished.
-// The tap that ends a drag is swallowed and the change made once, here.
-let slide = null;
-let swallowClick = false;
-document.addEventListener('pointerdown', (e) => {
-  const sw = e.target.closest('.switch');
-  if (!sw || e.button > 0) return;
-  slide = { sw, x: e.clientX, id: e.pointerId, on: sw.getAttribute('aria-checked') === 'true', want: null };
-}, true);
-document.addEventListener('pointermove', (e) => {
-  if (!slide || e.pointerId !== slide.id) return;
-  const dx = e.clientX - slide.x;
-  if (Math.abs(dx) < 8 && slide.want === null) return;
-  slide.want = dx > 0;
-  slide.sw.classList.toggle('slide-on', slide.want);
-  slide.sw.classList.toggle('slide-off', !slide.want);
-}, true);
-const endSlide = (e) => {
-  if (!slide || e.pointerId !== slide.id) return;
-  const { sw, on, want } = slide;
-  slide = null;
-  sw.classList.remove('slide-on', 'slide-off');
-  if (want === null || e.type === 'pointercancel') return;
-  swallowClick = true;
-  setTimeout(() => { swallowClick = false; }, 400);
-  if (want !== on) sw.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-};
-document.addEventListener('pointerup', endSlide, true);
-document.addEventListener('pointercancel', endSlide, true);
-document.addEventListener('click', (e) => {
-  if (swallowClick && e.isTrusted && e.target.closest('.switch')) {
-    swallowClick = false;
-    e.stopImmediatePropagation();
-    e.preventDefault();
-  }
-}, true);
-
-$('#rides-list').addEventListener('click', (e) => {
-  const sw = e.target.closest('.switch');
-  if (sw) toggleFollow(sw.dataset.id);
-});
+// Choose rides: every ride with a check, as picking photos. Faster than a
+// switch per ride for a dozen at once, and it keeps the list itself calm.
+function openChoose() {
+  const draw = () => {
+    const all = dash.rides.filter((r) => !r.other).sort(byName);
+    const on = all.filter((r) => isFollowing(r.id)).length;
+    return `<div data-sheet="choose">
+      ${sheetHead('Choose rides', "You'll get an alert when these go down, and when they're open again.")}
+      <div class="btn-row choose-all" style="display:flex;gap:0.5rem;padding:0 var(--gutter) 0.8rem">
+        <button class="btn-secondary pressable" type="button" data-act="all"${on === all.length ? ' disabled' : ''}>Select all</button>
+        <button class="btn-secondary pressable" type="button" data-act="none"${on === 0 ? ' disabled' : ''}>Clear all</button>
+      </div>
+      <div class="group">${all.map((r) => `
+        <button class="pick" type="button" role="checkbox" aria-checked="${isFollowing(r.id)}" data-id="${esc(r.id)}">
+          <span class="ring">${icon('check')}</span>
+          <span class="row-label">${esc(r.name)}${r.land ? `<small>${esc(r.land)}</small>` : ''}</span>
+        </button>`).join('')}</div>
+      <div class="btn-stack"><button class="btn-primary pressable" type="button" data-act="done">Done</button></div>
+    </div>`;
+  };
+  const content = el(draw());
+  content.addEventListener('click', (e) => {
+    const pick = e.target.closest('.pick');
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (pick) {
+      toggleFollow(pick.dataset.id);
+      pick.setAttribute('aria-checked', String(isFollowing(pick.dataset.id)));
+    } else if (act === 'all') followAll();
+    else if (act === 'none') unfollowAll();
+    else if (act === 'done') return sheet.close();
+    else return;
+    // The counts on the buttons follow each change.
+    const all = dash.rides.filter((r) => !r.other);
+    const on = all.filter((r) => isFollowing(r.id)).length;
+    content.querySelector('[data-act=all]').disabled = on === all.length;
+    content.querySelector('[data-act=none]').disabled = on === 0;
+    for (const p of content.querySelectorAll('.pick')) p.setAttribute('aria-checked', String(isFollowing(p.dataset.id)));
+  });
+  sheet.open(content);
+}
+$('#btn-choose').onclick = () => { if (dash) openChoose(); };
 
 // One control per ride. The old star (watch) and bell (mute) did the same job
 // two different ways; following now clears any leftover per-ride mute too.
 function toggleFollow(rideId) {
   haptic();
-  if (rideFilter === 'following') keepListed.add(rideId);
+  if (rideView === 'following') keepListed.add(rideId);
   const all = dash.rides.map((r) => r.id);
   const on = isFollowing(rideId);
   let watched = dash.trip.watched === null ? all : [...dash.trip.watched];
@@ -1894,7 +1865,7 @@ function renderTrip() {
   $('#trip-code').textContent = tripCode;
   const ready = alertsReady();
   const d = $('#setup-detail');
-  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'Via ntfy' : 'Not set up';
+  d.textContent = phone.id ? (phoneMuted() ? 'Paused' : 'On') : ready ? 'On' : 'Not set up';
   d.className = `row-detail ${ready ? 'ok' : 'warn'}`;
   const st = alertState();
   // Nothing when not paused, as Settings shows no value for an unset row;
@@ -1914,9 +1885,8 @@ function renderTrip() {
 // stands: loading, or unreachable with a way to try again.
 function renderNoData() {
   $('#park-name').textContent = 'ParkAlert';
-  $('#park-name').style.fontSize = '';
-  $('#park-name').classList.remove('wrap');
-  lastFit = null;
+  $('#status-title').textContent = offline ? "Can't load ride times" : 'Loading…';
+  syncSky();
   const meta = $('#park-meta');
   meta.textContent = offline ? (failure === 'offline' ? 'Offline. Waiting for a connection…' : `${FAILURE_META[failure]}…`) : 'Loading…';
   meta.classList.toggle('warn', offline);
@@ -1924,21 +1894,18 @@ function renderNoData() {
   $('#down-badge').classList.add('hidden');
   $('#trip-code').textContent = tripCode;
   for (const id of ['#setup-detail', '#pause-detail', '#park-detail', '#follow-summary']) $(id).textContent = '';
-  $('#btn-follow-all').classList.add('hidden');
+  $('#btn-choose').classList.add('hidden');
   morph($('#recent-block'), '');
 
   morph($('#down-list'), offline
-    ? `<div class="empty offline" data-key="empty">
-        ${icon('wifi-off')}
-        <h2 class="title-2">${failure === 'offline' ? "You're offline" : "Can't reach ParkAlert"}</h2>
-        <p>${failure === 'offline' ? 'Rides show up here as soon as your phone reconnects.' : "Your connection is fine; ParkAlert isn't answering. This tries again on its own."}</p>
-        <button class="btn-secondary pressable" type="button" data-act="retry-dash">Try again</button>
+    ? `<div class="group lift padded" data-key="state">
+        <p class="state-text">${failure === 'offline' ? 'Rides show up here as soon as your phone reconnects.' : "Your connection is fine; ParkAlert isn't answering. This tries again on its own."}</p>
+        <button class="btn-secondary pressable" type="button" data-act="retry-dash" style="margin-top:0.8rem">Try again</button>
       </div>`
     : skeleton('cards'));
-  $('#rides-list').className = 'group rides';
   morph($('#rides-list'), offline
     ? `<p class="no-results" data-key="none">${failure === 'offline' ? 'Rides show up once your phone reconnects.' : 'Rides show up once ParkAlert answers.'}</p>`
-    : Array.from({ length: 6 }, (_, i) => `<div class="row sk-row" data-key="sk${i}" aria-hidden="true"><span class="row-label"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>`).join(''));
+    : skeleton('rows'));
 }
 
 // Actions inside the main views, delegated so patched content keeps working.
@@ -1948,6 +1915,9 @@ $('#app').addEventListener('click', (e) => {
   else if (act === 'open-hold') openHold();
   else if (act === 'open-park') openParkInfo();
   else if (act === 'retry-dash') { offline = false; renderAll(); refresh(); }
+  else if (act === 'toggle-others') { othersOpen = !othersOpen; haptic(); renderDown(); }
+  else if (act === 'more-mine') { mineOpen = true; renderDown(); }
+  else if (act === 'more-below') scrollBy({ top: innerHeight * 0.6, behavior: reducedMotion() ? 'auto' : 'smooth' });
   else if (act === 'toggle-returns') {
     const id = e.target.closest('[data-inc]').dataset.inc;
     if (!openReturns.delete(id)) openReturns.add(id);
@@ -1955,8 +1925,14 @@ $('#app').addEventListener('click', (e) => {
   }
 });
 
+let myTagFor = null;
 function renderAll() {
   if (!dash) return renderNoData();
+  // Which wait alerts are this phone's own, worked out once per trip and phone.
+  if (myTagFor !== `${tripCode}:${phone.id}`) {
+    myTagFor = `${tripCode}:${phone.id}`;
+    syncMyTag().then(() => pages.refresh(), () => {});
+  }
   renderHeader();
   renderDown();
   renderRides();
@@ -1996,9 +1972,7 @@ function openPause({ fresh = false } = {}) {
   const perPhone = !!phone.id;
   const note = st.kind === 'closed'
     ? 'The park is closed, so alerts are already off until it opens.'
-    : perPhone
-      ? 'Pause just this phone, or everyone on the trip. The Down now list keeps updating either way.'
-      : 'Nobody on this trip gets alerts while paused. The Down now list keeps updating.';
+    : 'The Down now list keeps updating while alerts are paused.';
   const content = el(`<div data-sheet="pause">${sheetHead('Pause alerts', note)}</div>`);
   const resumeRow = (label, run) => {
     const g = el(`<div class="group plain"><button class="row pressable" type="button">${icon('bell', 'row-icon tint-accent')}<span class="row-label">${label}</span></button></div>`);
@@ -2020,33 +1994,69 @@ function openPause({ fresh = false } = {}) {
   // so the safe choice is the default and the catch is said out loud.
   const ntfyLive = dash.trip.ntfy !== false;
   let scope = perPhone && !ntfyLive ? 'phone' : 'trip';
+  // Who goes quiet, said in full, since that is the choice that matters.
+  const whoNote = el('<p class="note strong" style="padding-top:0"></p>');
+  const sayWho = () => {
+    whoNote.textContent = scope === 'phone'
+      ? 'Only this phone goes quiet. The rest of the trip still gets alerts.'
+      : ntfyLive && perPhone
+        ? 'Nobody on the trip gets alerts, including the ntfy app. Pausing just this phone can\'t silence ntfy.'
+        : 'Nobody on the trip gets alerts while paused.';
+  };
   if (perPhone) {
-    const who = el(`<div class="segmented pause-scope" role="group" aria-label="Pause">
-      <button type="button" data-scope="phone" aria-pressed="${scope === 'phone'}">This phone</button>
-      <button type="button" data-scope="trip" aria-pressed="${scope === 'trip'}">Everyone</button>
+    const who = el(`<div class="segmented pause-scope scope" role="radiogroup" aria-label="Who to pause">
+      <button type="button" role="radio" data-scope="phone" aria-checked="${scope === 'phone'}">Just this phone</button>
+      <button type="button" role="radio" data-scope="trip" aria-checked="${scope === 'trip'}">Everyone</button>
     </div>`);
     who.addEventListener('click', (e) => {
       const b = e.target.closest('[data-scope]');
       if (!b) return;
       scope = b.dataset.scope;
-      for (const x of who.querySelectorAll('[data-scope]')) x.setAttribute('aria-pressed', String(x === b));
+      for (const x of who.querySelectorAll('[data-scope]')) x.setAttribute('aria-checked', String(x === b));
+      sayWho();
       haptic();
     });
     content.appendChild(who);
-    if (ntfyLive) content.appendChild(el('<p class="footnote">This phone only pauses ParkAlert\'s own notifications, not the ntfy app. To stop everything, pause everyone, or turn off ntfy on the Trip tab.</p>'));
   }
+  sayWho();
+  content.appendChild(whoNote);
   const list = el('<div class="group plain spaced-sm"></div>');
   // The morning row already names the day; its detail is just the time.
   for (const [label, until, timeOnly] of options) {
     const detail = until && (timeOnly ? fmtTime(until) : `Until ${fmtUntil(until)}`);
     const row = el(`<button class="row pressable" type="button"><span class="row-label">${label}</span>${detail ? `<span class="row-detail">${esc(detail)}</span>` : ''}</button>`);
-    row.onclick = () => { sheet.close(); if (scope === 'phone') setPhoneMute({ until }); else setMute({ until }); };
+    row.onclick = () => {
+      if (scope === 'phone') { sheet.close(); setPhoneMute({ until }); return; }
+      // Everyone, from a phone that could have paused just itself: ask first,
+      // naming how many phones, since the whole family goes quiet.
+      if (perPhone && dash.trip.phones <= 1 && !ntfyLive) { sheet.close(); setMute({ until }); }
+      else confirmPauseAll(until, label);
+    };
     list.appendChild(row);
   }
   content.appendChild(list);
   const cancel = el('<div class="btn-stack"><button class="btn-secondary pressable" type="button">Cancel</button></div>');
   cancel.querySelector('button').onclick = () => sheet.close();
   content.appendChild(cancel);
+  sheet.open(content);
+}
+
+// Pausing every phone on the trip: Cancel is the big, easy button.
+function confirmPauseAll(until, label) {
+  const n = dash.trip.phones;
+  // Phones on the ntfy app aren't counted by the server, so a count is
+  // only given when it is the whole story.
+  const who = n > 1 && dash.trip.ntfy === false ? `all ${n} phones on this trip` : 'everyone on this trip';
+  const how = until == null ? 'until someone turns them back on' : label.startsWith('For') ? `${label.toLowerCase()}, until ${fmtUntil(until)}` : `until ${fmtUntil(until)}`;
+  const content = el(`<div data-sheet="pause-all" class="center-head" style="padding:0.4rem var(--gutter) 0">
+    <h2>Pause alerts for ${esc(who)}?</h2>
+    <p>Nobody on the trip will get alerts ${esc(how)}.</p>
+    <div class="btn-stack" style="padding-left:0;padding-right:0">
+      <button class="btn-primary pressable" type="button" data-act="cancel">Cancel</button>
+      <button class="btn-ghost pressable" type="button" data-act="all">Pause for everyone</button>
+    </div></div>`);
+  content.querySelector('[data-act=cancel]').onclick = () => sheet.close();
+  content.querySelector('[data-act=all]').onclick = () => { sheet.close(); setMute({ until }); };
   sheet.open(content);
 }
 
@@ -2133,7 +2143,7 @@ function alertSetupContent() {
   const ntfy = ntfyStepsContent();
 
   if (phone.id) {
-    head.appendChild(el('<p>Notifications are on for this phone. You get an alert when a ride with alerts on goes down, comes back up, or closes.</p>'));
+    head.appendChild(el('<p>Notifications are on for this phone. You get an alert when a ride you follow goes down, is open again, or closes.</p>'));
     if (dash.trip.ntfy !== false) {
       // Subscribed in ntfy as well, this phone gets each alert twice, and
       // pausing just this phone can't silence the ntfy copy.
@@ -2151,11 +2161,12 @@ function alertSetupContent() {
     head.appendChild(el(`<p>${denied
       ? 'Notifications are blocked for ParkAlert on this phone. Turn them on in your phone\'s Settings (on iPhone: Settings, Notifications, ParkAlert), then come back here.'
       : 'ParkAlert can notify this phone itself. One tap, nothing else to install.'}</p>`));
+    if (!denied) content.appendChild(el(`<p class="say">Your ${platform === 'ios' ? 'iPhone' : 'phone'} will ask once. Tap Allow.</p>`));
     content.appendChild(el(`<div class="btn-stack">
-      <button class="btn-primary pressable" type="button" data-act="push-on" ${denied ? 'disabled' : ''}>${icon('bell')}<span>Turn on notifications</span></button>
+      <button class="btn-primary pressable" type="button" data-act="push-on" ${denied ? 'disabled' : ''}>${icon('bell')}<span>Allow notifications</span></button>
       <p class="footnote center hidden" data-note></p>
     </div>`));
-    const more = el('<details class="more"><summary>Or get alerts through ntfy, a free app</summary></details>');
+    const more = el('<details class="more"><summary>Alerts not arriving? Try another way (the free ntfy app)</summary></details>');
     more.appendChild(ntfy);
     content.appendChild(more);
     content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
@@ -2164,7 +2175,7 @@ function alertSetupContent() {
     content.appendChild(el(`<div class="btn-stack">
       <button class="btn-primary pressable" type="button" data-act="install">${icon('share')}<span>Add to Home Screen</span></button>
     </div>`));
-    const more = el('<details class="more"><summary>Or get alerts through ntfy, a free app</summary></details>');
+    const more = el('<details class="more"><summary>Or try another way (the free ntfy app)</summary></details>');
     more.appendChild(ntfy);
     content.appendChild(more);
     content.appendChild(el(`<div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">${alertsReady() ? 'Done' : 'Set up later'}</button></div>`));
@@ -2183,19 +2194,18 @@ function alertSetupContent() {
     const btn = e.currentTarget;
     const note = content.querySelector('[data-note]');
     btn.disabled = true;
-    btn.querySelector('span').textContent = 'Turning on…';
+    btn.querySelector('span').textContent = 'Asking your phone…';
     const result = await subscribePhone();
     if (result === 'on') {
       try { localStorage.removeItem(`parkalert.phoneOff.${tripCode}`); } catch {}
       api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' }).catch(() => {});
       haptic();
       renderAll();
-      sheet.open(alertSetupContent());
-      toast('Notifications are on. A test is on its way.');
+      sheet.open(allSetContent());
       return;
     }
     btn.disabled = result === 'denied';
-    btn.querySelector('span').textContent = 'Turn on notifications';
+    btn.querySelector('span').textContent = 'Allow notifications';
     note.classList.remove('hidden');
     note.textContent = result === 'denied'
       ? "Notifications are blocked. Turn them on for ParkAlert in your phone's Settings, then try again."
@@ -2222,6 +2232,44 @@ function alertSetupContent() {
     sheet.open(alertSetupContent());
     toast('This phone no longer gets alerts');
   });
+  return content;
+}
+
+// The end of setting up: a clear yes, and a check that the test arrived.
+// "No" leads to the three things that usually explain it.
+function allSetContent() {
+  const content = el(`<div data-sheet="all-set" class="center-head" style="padding:0.4rem var(--gutter) 0">
+    <span class="bigcheck">${icon('check')}</span>
+    <h2>This phone will now get alerts</h2>
+    <p>We just sent a test alert. Did it arrive?</p>
+    <div class="btn-stack" style="padding-left:0;padding-right:0">
+      <button class="btn-primary pressable" type="button" data-act="yes">Yes, it arrived</button>
+      <button class="btn-ghost pressable" type="button" data-act="no">No, it didn't</button>
+    </div>
+    <div class="help hidden" style="text-align:left;margin-top:0.6rem">
+      <p class="note strong" style="padding:0">Give it a few seconds, then check:</p>
+      <ul style="margin:0.4rem 0 0 1.2rem;color:var(--label-2);font-size:0.9375rem;line-height:1.5">
+        <li>Focus or Do Not Disturb is off, or lets ParkAlert through.</li>
+        <li>Notifications are on for ParkAlert in Settings, Notifications.</li>
+        <li>Still nothing? The free ntfy app works on any phone. It's under Alerts on this phone on the Trip tab.</li>
+      </ul>
+      <div class="btn-stack" style="padding-left:0;padding-right:0">
+        <button class="btn-secondary pressable" type="button" data-act="again">Send another test</button>
+        <button class="btn-ghost pressable" type="button" data-act="done">Done</button>
+      </div>
+    </div></div>`);
+  const q = (a) => content.querySelector(`[data-act=${a}]`);
+  q('yes').onclick = () => { sheet.close(); toast('Alerts are working on this phone'); };
+  q('no').onclick = () => { content.querySelector('.help').classList.remove('hidden'); q('no').classList.add('hidden'); };
+  q('done').onclick = () => sheet.close();
+  q('again').onclick = async () => {
+    try {
+      await api(`/trips/${tripCode}/devices/${encodeURIComponent(phone.id)}/test`, { method: 'POST' });
+      toast('Test sent to this phone');
+    } catch (err) {
+      toast(testError(err));
+    }
+  };
   return content;
 }
 
@@ -2361,9 +2409,16 @@ function openRide(rideId, { fresh = false } = {}) {
     title: () => liveRide(rideId)?.name || known.name,
     render() {
       if (fresh && !this.detail && !this.failed) return skeleton('ride');
-      return rideHtml(freshestRide(liveRide(rideId) || known, this.detail), this.detail, this.failed, this.tab);
+      return rideHtml(freshestRide(liveRide(rideId) || known, this.detail), this.detail, this.failed);
     },
-    tab: 'today',
+    scene() {
+      const r = liveRide(rideId) || known;
+      const on = isFollowing(rideId);
+      return {
+        train: r.status === 'DOWN' ? 'stopped' : r.status === 'OPERATING' ? 'running' : null,
+        action: r.other ? '' : `<button class="pill glass pressable strip-action" type="button" data-act="follow" data-key="follow" aria-pressed="${on}">${icon(on ? 'bell' : 'bell-off')}<span>${on ? 'Alerts on' : 'Alerts off'}</span></button>`,
+      };
+    },
     charts() { return this.detail ? rideCharts(this.detail) : null; },
     async load() {
       try {
@@ -2401,41 +2456,15 @@ function waitChoices(r, posted) {
   return below.slice(-5);
 }
 
-function waitAlertHtml(r) {
-  if (r.other) return '';
-  const alert = dash.trip.waitAlerts?.[r.id];
-  const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
-  const armed = alert && !alert.sentAt;
-  let choices = waitChoices(r, posted);
-  if (armed && !choices.includes(alert.max)) choices = [...choices, alert.max].sort((a, b) => a - b);
-  const state = armed
-    ? `You'll get an alert when the wait is ${alert.max} min or less.`
-    : alert?.sentAt
-      ? `Sent at ${fmtTime(alert.sentAt)}, when the wait was ${alert.sentWait} min. Pick a limit to be told again.`
-      : posted != null && !choices.length
-        ? `The wait is only ${posted} min right now.`
-        : posted != null
-          ? `Now ${posted} min. Alert me when the wait is at or under:`
-          : 'When it reopens, alert me if the wait is at or under:';
-  return `
-    <div class="group padded wait-alert" data-key="wait-alert">
-      <p class="wait-state">${icon('timer', 'inline-icon')} ${esc(state)}</p>
-      ${choices.length ? `<div class="segmented wait-limits" role="group" aria-label="Wait alert limit">
-        ${armed ? '<button class="chip" type="button" data-act="wait-off" data-key="off" aria-pressed="false">Off</button>' : ''}
-        ${choices.map((m) => `<button class="chip" type="button" data-act="wait-${m}" data-key="${m}" aria-pressed="${armed && alert.max === m}" aria-label="${m} minutes">${m}</button>`).join('')}
-      </div>` : ''}
-    </div>`;
-}
-
-async function setWaitAlert(rideId, max) {
+async function setWaitAlert(rideId, max, device = null) {
   try {
     const path = `/trips/${tripCode}/wait-alerts/${encodeURIComponent(rideId)}`;
-    const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: { max } });
+    const { trip } = await api(max == null && device ? `${path}?device=${encodeURIComponent(device)}` : path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: device ? { max, device } : { max } });
     dash.trip = trip;
     confirmTrip(trip);
     tellOtherTabs();
     renderAll();
-    toast(max == null ? 'Wait alert off' : `Wait alert set for ${max} min or less`);
+    toast(max == null ? 'Wait alert off' : `Wait alert set for ${max} min or less${device ? ', on this phone' : ', for everyone'}`);
   } catch {
     toast("Couldn't save that. Check your connection and try again.");
   }
@@ -2457,15 +2486,146 @@ function rideCharts(detail) {
   };
 }
 
-// A ride's page, built to be read top down and not all at once: one card
-// that answers "can I ride it, and when", two actions, then one section at
-// a time (Today, Best times, History) behind a switcher, instead of every
-// chart and list stacked up. How an estimate is worked out folds away.
-function rideHtml(r, detail, failed, tab = 'today') {
-  const o = (r.status === 'DOWN' ? r.outlook : null) || (detail?.ride?.status === 'DOWN' ? detail.outlook : null);
-  const down = r.status === 'DOWN' && r.downSince;
-  const parts = [heroHtml(r, o, detail), actionsHtml(r)];
+// The return time on flip tiles, as a posted-wait sign shows it: "11:10",
+// with AM or PM (or "or later") beside it, never inside a tile.
+function flipTiles(ts, suffix = '', weather = false) {
+  const full = fmtTime(ts);
+  const m = full.match(/^(.*)\u00a0([AP]M)$/);
+  const digits = m ? m[1] : full;
+  const side = [m ? m[2] : '', suffix].filter(Boolean).join(' ');
+  const tiles = [...digits].map((ch) => (ch === ':' || ch === '.' ? `<em>${ch}</em>` : `<span>${esc(ch)}</span>`)).join('');
+  return `<div class="flip" role="img" aria-label="${esc(`${full}${suffix ? ` ${suffix}` : ''}`)}">${tiles}${side ? `<b class="suffix${weather ? ' weather' : ''}">${esc(side)}</b>` : ''}</div>`;
+}
 
+// "About 6 in 10 are over within 30 min": the chance, in words people use.
+function chanceWords(o) {
+  const c = o?.chance;
+  if (!c) return '';
+  for (const m of [15, 30, 60]) {
+    const n = Math.round(c[m] * 10);
+    if (n >= 3 && n <= 9) return `About ${n} in 10 are over within ${m === 60 ? 'the hour' : `${m}\u00a0min`}.`;
+  }
+  return '';
+}
+
+// Where an estimate comes from, in a line under "How we estimate this".
+function basisLine(o) {
+  if (o?.cause) return "From public weather reports near the park, not Disney's own sensors.";
+  if (!o?.basis) return '';
+  if (o.basis.from === 'prior') return 'From typical theme park outages, until ParkAlert knows this park.';
+  const where = { ride: 'of this ride', park: 'at this park' }[o.basis.from] || 'across all parks';
+  const what = { hold: 'group closures', opening: 'late openings' }[o.kind] || 'closures';
+  return `From ${o.basis.outages} past ${what} ${where}.`;
+}
+
+// The answer for a closed ride, shared by the ride page and the hold page.
+function downAnswer(r, o) {
+  const b = backAt(r, o);
+  const parts = [];
+  if (b.kind === 'time') {
+    parts.push('<p class="flabel">Back at about</p>', flipTiles(b.at));
+    if (b.range) parts.push(`<p class="range">Usually ${esc(fmtSpan(b.range[0], b.range[1]))}. ${esc(chanceWords(o))}</p>`);
+  } else if (b.kind === 'later') {
+    parts.push('<p class="flabel">Likely back</p>', flipTiles(b.at, 'or later', true));
+    parts.push(`<p class="range">${o.cause === 'rain'
+      ? 'Rides like this reopen once the rain stops and the track dries.'
+      : 'Outdoor rides usually stay closed about 30\u00a0min after lightning clears, then need testing, often another 15 to 45\u00a0min.'}</p>`);
+  } else {
+    const [big, text] = {
+      storm: [o?.cause === 'rain' ? 'Waiting for the rain to stop' : 'Waiting for the storm to pass', "Once the weather clears, outdoor rides usually reopen 30\u00a0min or more later. You'll get an alert when there's a time."],
+      hour: ['Back in over an hour', o?.advice?.detail || 'Closures this long rarely end soon.'],
+      closed: ['May not reopen today', o?.advice?.detail || ''],
+      closing: ['May not reopen before close', o?.advice?.detail || ''],
+      none: ['No estimate yet', "ParkAlert hasn't seen enough closures like this one to say."],
+    }[b.kind];
+    parts.push(`<p class="big-wait" style="font-size:min(1.5rem,34px)">${esc(big)}</p>`, text ? `<p class="range">${esc(text)}</p>` : '');
+  }
+  const how = [estimateExplainer(o), o?.cause ? WEATHER_NOTE[o.cause] : KIND_NOTE[o?.kind] || ''].filter(Boolean);
+  if (how.length) {
+    parts.push(`<details class="how-wrap" data-key="how"><summary class="how-row"><span class="row-label">How we estimate this<small>${esc(basisLine(o))}</small></span>${icon('chevron', 'chevron')}</summary>
+      <div class="how-body">${how.map((t) => `<p>${esc(t)}</p>`).join('')}</div></details>`);
+  }
+  return parts.join('');
+}
+
+// What kind of closure, in the kicker above the answer.
+function downKicker(r, o) {
+  if (o?.cause) {
+    const cleared = o.weather === 'passed' && o.clearedAt ? `weather cleared ${fmtTime(o.clearedAt)}` : 'still storming nearby';
+    return `<p class="kicker weather">${icon('bolt')}Stopped, likely ${causeWord(o)} · ${esc(cleared)}</p>`;
+  }
+  const what = o?.kind === 'opening' ? 'Late to open' : `Down ${downFor(r)}`;
+  const extra = o?.kind === 'hold' && o.rides > 1 ? ` · with ${o.rides - 1} other ride${o.rides === 2 ? '' : 's'}` : '';
+  return `<p class="kicker down">${icon('down')}${keepTogether(what)}${esc(extra)}</p>`;
+}
+
+// The top card: what a guest wants first. Down: when it is likely back.
+// Open: the wait, against the usual for this hour. Closed: when it opens.
+function heroHtml(r, o, detail) {
+  if (r.status === 'DOWN' && r.downSince) {
+    return `<div class="group padded hero" data-key="hero">${downKicker(r, o)}${downAnswer(r, o)}</div>`;
+  }
+  if (r.status === 'OPERATING') {
+    const usual = detail?.bestTimes?.typical?.[parkHour()] ?? r.usual ?? null;
+    const ride = { ...r, usual };
+    const diff = r.waitTime != null && usual != null ? r.waitTime - usual : null;
+    const kick = diff != null && diff <= -5 ? `Open · ${-diff}\u00a0min shorter than usual`
+      : diff != null && diff >= 10 ? `Open · ${diff}\u00a0min longer than usual` : 'Open';
+    const t = r.trend;
+    const lines = [
+      usual != null ? `Usually ${usual}\u00a0min at ${fmtHour(parkHour())}.` : '',
+      t ? `${Math.abs(t.change)}\u00a0min ${t.direction === 'up' ? 'longer' : 'shorter'} than half an hour ago.` : '',
+    ].filter(Boolean).join(' ');
+    const tags = queueTags(r);
+    return `<div class="group padded hero" data-key="hero">
+      <p class="kicker ${diff != null && diff <= -5 ? 'open' : 'closed'}">${icon('check-circle')}${esc(kick)}</p>
+      <p class="big-wait">${r.waitTime != null ? `${r.waitTime}<small> min wait</small>` : 'No posted wait'}</p>
+      ${lines ? `<p class="range">${esc(lines)}</p>` : ''}
+      ${waitBar(ride)}
+      ${tags.length ? `<p class="range" style="margin-top:0.6rem">${esc(tags.join(' · '))}</p>` : ''}
+    </div>`;
+  }
+  const opens = dash.park.openingTime && Date.now() < Date.parse(dash.park.openingTime);
+  return `<div class="group padded hero" data-key="hero">
+    <p class="kicker closed">${icon('moon')}${r.status === 'REFURBISHMENT' ? 'Closed for refurbishment' : 'Closed'}</p>
+    <p class="big-wait" style="font-size:min(1.5rem,34px)">${r.status === 'REFURBISHMENT' ? 'Not running for now' : opens ? `Opens at ${fmtTime(Date.parse(dash.park.openingTime))}` : 'Not running right now'}</p>
+  </div>`;
+}
+
+// Today's closures as marks on one line from opening to now.
+function dayLineHtml(r, detail, o) {
+  const events = [...detail.today];
+  const down = r.status === 'DOWN' && r.downSince;
+  if (down && !events.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) events.push({ type: 'DOWN', at: r.downSince, opening: o?.kind === 'opening' });
+  events.sort((a, b) => a.at - b.at);
+  const spells = [];
+  for (const e of events) {
+    if (e.type === 'DOWN') spells.push({ from: e.at, to: null });
+    else if (spells.length && spells[spells.length - 1].to == null) spells[spells.length - 1].to = e.at;
+  }
+  if (!spells.length) {
+    return `<div class="group padded" data-key="today"><div class="day-head"><b>Today</b><span>No closures so far</span></div></div>`;
+  }
+  const open = Date.parse(dash.park.openingTime || '') || spells[0].from - 3600_000;
+  const now = Date.now();
+  const span = Math.max(now - open, 1);
+  const pct = (t) => Math.min(100, Math.max(0, ((t - open) / span) * 100)).toFixed(1);
+  const marks = spells.map((s) => `<i class="${s.to ? 'past' : ''}" style="left:${pct(s.from)}%;width:${Math.max(1.5, pct(s.to ?? now) - pct(s.from)).toFixed(1)}%"></i>`).join('');
+  const first = spells[0], last = spells[spells.length - 1];
+  const keyFor = (s) => `${fmtTime(s.from)}<br>${s.to ? keepTogether(fmtDuration(s.to - s.from)) : 'still down'}`;
+  return `<div class="group padded" data-key="today" role="img" aria-label="${esc(`${spells.length} closure${spells.length === 1 ? '' : 's'} today: ${spells.map((s) => `${fmtTime(s.from)}${s.to ? `, ${fmtDuration(s.to - s.from)}` : ', still down'}`).join('; ')}`)}">
+    <div class="day-head" aria-hidden="true"><b>Today</b><span>${spells.length} closure${spells.length === 1 ? '' : 's'}</span></div>
+    <div class="day-line" aria-hidden="true">${marks}</div>
+    <div class="day-keys" aria-hidden="true"><span>${keyFor(first)}</span>${spells.length > 1 ? `<span style="text-align:right">${keyFor(last)}</span>` : ''}</div>
+  </div>`;
+}
+
+// A ride's page: the answer first, then today, then a few rows that open
+// the rest (best times, past closures, a wait alert).
+function rideHtml(r, detail, failed) {
+  const o = (r.status === 'DOWN' ? r.outlook : null) || (detail?.ride?.status === 'DOWN' ? detail.outlook : null);
+  const parts = [heroHtml(r, o, detail)];
+  if (r.status === 'DOWN' && !r.other && r.lightningLane) parts.push('<p class="note" data-key="ll">Had a Lightning Lane for this ride? Check the Disney app for your options.</p>');
   if (!detail) {
     parts.push(failed
       ? `<div class="retry" data-key="retry"><p class="footnote">Couldn't load this ride's wait times and history.</p>
@@ -2473,145 +2633,159 @@ function rideHtml(r, detail, failed, tab = 'today') {
       : skeleton('ride'));
     return parts.join('');
   }
-
-  const tabs = [['today', 'Today'], ...(detail.bestTimes ? [['best', 'Best times']] : []), ...(detail.history?.archivedDays ? [['history', 'History']] : [])];
-  if (!tabs.some(([k]) => k === tab)) tab = 'today';
-  parts.push(`<div class="segmented page-tabs" role="tablist" aria-label="Ride detail" data-key="tabs">${tabs.map(([k, label]) =>
-    `<button type="button" role="tab" data-act="tab-${k}" data-key="${k}" aria-selected="${k === tab}" aria-pressed="${k === tab}">${label}</button>`).join('')}</div>`);
-
-  if (tab === 'today') {
-    if (detail.waits.some(([, v]) => v != null)) {
-      parts.push(`<div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
-        <p class="footnote" data-key="waits-foot">Posted waits over the last six hours. Drag across to see any time.</p>`);
-    }
-    const today = [...detail.today];
-    if (down && !today.some((e) => e.type === 'DOWN' && e.at >= r.downSince - 120_000)) {
-      today.push({ type: 'DOWN', at: r.downSince, opening: o?.kind === 'opening' });
-      today.sort((a, b) => a.at - b.at);
-    }
-    parts.push('<h2 class="section-label" data-key="today-label">Outages today</h2>');
-    parts.push(today.length
-      ? `<div class="group" data-key="today">${today.map((e) => `
-        <div class="row" data-key="${e.type}-${e.at}">
-          ${e.type === 'CLOSED' ? icon('moon', 'row-icon tint-orange') : icon(e.type === 'DOWN' ? 'down' : 'arrow-up', `row-icon ${e.type === 'DOWN' ? 'tint-red' : 'tint-green'}`)}
-          <span class="row-label">${e.type === 'CLOSED' ? 'Closed' : e.type === 'DOWN' ? (e.opening ? 'Delayed opening' : 'Went down') : e.late ? 'Opened' : 'Back up'}${
-            e.type === 'UP' && e.downtimeMs && !e.late ? `<small>after ${fmtDuration(e.downtimeMs)}</small>`
-            : e.type === 'CLOSED' && e.downtimeMs ? `<small>after ${fmtDuration(e.downtimeMs)} down</small>` : ''}</span>
-          <span class="row-detail">${fmtTime(e.at)}</span>
-        </div>`).join('')}</div>`
-      : '<div class="group plain" data-key="today"><div class="row"><span class="row-label muted">None so far today</span></div></div>');
+  if (r.status === 'OPERATING' && detail.waits.some(([, v]) => v != null)) {
+    parts.push(`<h2 class="section-label" data-key="waits-label">Waits today</h2>
+      <div class="group padded" data-chart="wait" data-key="wait-chart" data-sig="${sigOf(detail.waits)}"></div>
+      <p class="footnote" data-key="waits-foot">Drag across to see any time.</p>`);
   }
-
-  if (tab === 'best') {
+  parts.push(`<div class="spaced-sm" data-key="today-wrap">${dayLineHtml(r, detail, o)}</div>`);
+  const rows = [];
+  if (!r.other) {
+    const alert = dash.trip.waitAlerts?.[r.id];
+    const armed = alert && !alert.sentAt;
+    const who = { me: 'Just me', other: 'Another phone', all: 'Everyone' }[alertOwner(alert)];
+    rows.push(`<button class="row pressable" type="button" data-act="wait-sheet" data-key="wait" aria-haspopup="dialog">
+      <span class="row-label">Wait alert${armed ? `<small>${esc(who)}, at ${alert.max}\u00a0min or less</small>` : alert?.sentAt ? `<small>Sent at ${fmtTime(alert.sentAt)}</small>` : ''}</span>
+      <span class="row-detail">${armed ? 'On' : 'Off'}</span>${icon('chevron', 'chevron')}</button>`);
+  }
+  if (detail.bestTimes) {
     const bt = detail.bestTimes;
     const left = bestLeftToday(bt.typical);
-    parts.push(`<div class="group padded" data-key="best">
+    const line = left
+      ? left.hour === parkHour() ? `Now is about as short as it gets, usually ${left.wait}\u00a0min` : `Around ${fmtHour(left.hour)}, usually ${left.wait}\u00a0min`
+      : `Usually shortest around ${fmtHour(bt.best.hour)}`;
+    rows.push(`<button class="row pressable" type="button" data-act="open-best" data-key="best"><span class="row-label">Best time today<small>${esc(line)}</small></span>${icon('chevron', 'chevron')}</button>`);
+  }
+  if (detail.history?.archivedDays) {
+    const h = detail.history;
+    const n = h.days.reduce((x, d) => x + d.outages, 0);
+    const line = [`${n} in ${h.days.length} days`, h.typicalMinutes != null ? `usually ${fmtDuration(h.typicalMinutes * 60000)}` : null].filter(Boolean).join(', ');
+    rows.push(`<button class="row pressable" type="button" data-act="open-history" data-key="hist"><span class="row-label">Past closures<small>${esc(line)}</small></span>${icon('chevron', 'chevron')}</button>`);
+  }
+  if (r.other) rows.push('<div class="row" data-key="other"><span class="row-label muted">This attraction never posts a wait, so it has no alerts.</span></div>');
+  if (rows.length) parts.push(`<div class="group spaced-sm" data-key="rows">${rows.join('')}</div>`);
+  return parts.join('');
+}
+
+// Best times and past closures, each on a page of its own under the ride.
+function rideSectionHtml(detail, section) {
+  if (!detail) return skeleton('rows');
+  if (section === 'best' && detail.bestTimes) {
+    const bt = detail.bestTimes;
+    const left = bestLeftToday(bt.typical);
+    return `<div class="group padded" data-key="best">
         <p class="best-line">${left
-    ? left.hour === parkHour() ? `Now is about as short as it gets today, usually ${left.wait} min.`
-      : `Shortest for the rest of today around <strong>${fmtHour(left.hour)}</strong>, usually ${left.wait} min.`
-    : `On a usual day, shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait} min) and longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait} min).`}</p>
+    ? left.hour === parkHour() ? `Now is about as short as it gets today, usually ${left.wait}\u00a0min.`
+      : `Shortest for the rest of today around <strong>${fmtHour(left.hour)}</strong>, usually ${left.wait}\u00a0min.`
+    : `On a usual day, shortest around <strong>${fmtHour(bt.best.hour)}</strong> (${bt.best.wait}\u00a0min) and longest around ${fmtHour(bt.worst.hour)} (${bt.worst.wait}\u00a0min).`}</p>
         <div data-chart="hours" data-key="hours-chart" data-sig="${sigOf(bt.typical)}"></div>
       </div>
-      <p class="footnote" data-key="best-foot">The usual posted wait for each hour, from ${bt.days} day${bt.days === 1 ? '' : 's'} of history. Tap an hour.</p>`);
+      <p class="footnote" data-key="best-foot">The usual posted wait for each hour, from ${bt.days} day${bt.days === 1 ? '' : 's'} of history. Tap an hour.</p>`;
   }
-
-  if (tab === 'history') {
+  if (section === 'history' && detail.history) {
     const h = detail.history;
-    parts.push(`<div class="group padded" data-key="hist">
+    const parts = [`<div class="group padded" data-key="hist">
         <div class="stats">
-          <div><p class="stat-label">Outages</p><p class="stat-value">${h.days.reduce((n, d) => n + d.outages, 0)}</p></div>
+          <div><p class="stat-label">Closures</p><p class="stat-value">${h.days.reduce((n, d) => n + d.outages, 0)}</p></div>
           <div><p class="stat-label">Typical</p><p class="stat-value">${h.typicalMinutes != null ? fmtDuration(h.typicalMinutes * 60000) : 'None'}</p></div>
           <div><p class="stat-label">Longest</p><p class="stat-value">${h.longestMinutes != null ? fmtDuration(h.longestMinutes * 60000) : 'None'}</p></div>
         </div>
         <div data-chart="days" data-key="days-chart" data-sig="${sigOf(h.days)}"></div>
-      </div>`);
+      </div>`];
     if (h.last.length) {
-      parts.push(`<h2 class="section-label" data-key="last-label">Recent outages</h2>
+      parts.push(`<h2 class="section-label" data-key="last-label">Recent closures</h2>
         <div class="group plain" data-key="last">${h.last.slice(0, 5).map((ep) => `
         <div class="row" data-key="${ep.start}">
           <span class="row-label">${esc(fmtDay(ep.start))}<small>${esc([
             fmtTime(ep.start),
-            { hold: 'park-wide hold', opening: 'delayed opening' }[ep.kind],
+            { hold: 'with other rides', opening: 'late opening' }[ep.kind],
             ep.reopened ? '' : "didn't reopen that day",
           ].filter(Boolean).join(' · '))}</small></span>
           <span class="row-detail">${ep.reopened ? fmtDuration(ep.minutes * 60000) : ''}</span>
         </div>`).join('')}</div>`);
     }
-    parts.push(`<p class="footnote" data-key="hist-foot">Breakdowns over the last ${h.days.length} days, from the ThemeParks.wiki archive.</p>`);
+    parts.push(`<p class="footnote" data-key="hist-foot">Closures over the last ${h.days.length} days, from the ThemeParks.wiki archive.</p>`);
+    return parts.join('');
   }
-  return parts.join('');
+  return '';
 }
 
-// The top card: what a guest wants first. Down: whether to wait and when it
-// is likely back. Open: the wait, where it's heading, and how it compares
-// with usual for this hour. Closed: when it opens.
-function heroHtml(r, o, detail) {
-  if (r.status === 'DOWN' && r.downSince) {
-    const clock = backClock(r, o);
-    const tag = o?.cause ? `${o.cause === 'rain' ? 'Rain' : 'Lightning'}${o.weather === 'passed' ? ', now passed' : ''}`
-      : o?.kind === 'hold' ? 'Down with other rides' : o?.kind === 'opening' ? 'Delayed opening' : '';
-    const how = [o?.text ? estimateExplainer(o) : '', o?.cause ? WEATHER_NOTE[o.cause] : KIND_NOTE[o?.kind] || ''].filter(Boolean);
-    return `<div class="group padded hero down" data-key="hero">
-      <p class="hero-kicker tint-red">${icon('down', 'inline-icon')}Down ${fmtDuration(Date.now() - r.downSince)}${tag ? ` · ${esc(tag)}` : ''}</p>
-      <p class="hero-title">${esc(o?.advice?.verdict || 'Not enough history to say yet')}</p>
-      ${clock ? `<p class="hero-sub">${esc(clock)}</p>` : o?.text ? `<p class="hero-sub">${esc(o.text)}</p>` : ''}
-      ${o?.chance ? chanceHtml(o) : ''}
-      ${how.length ? `<details class="how"><summary>How is this worked out?</summary>${how.map((t) => `<p>${esc(t)}</p>`).join('')}</details>` : ''}
-    </div>`;
-  }
-  if (r.status === 'OPERATING') {
-    const usual = detail?.bestTimes?.typical?.[parkHour()] ?? r.usual ?? null;
-    const cmp = r.waitTime == null || usual == null ? ''
-      : r.waitTime <= usual - 10 ? `Shorter than usual for ${fmtHour(parkHour())} (usually ${usual} min)`
-        : r.waitTime >= usual + 10 ? `Longer than usual for ${fmtHour(parkHour())} (usually ${usual} min)`
-          : `About usual for ${fmtHour(parkHour())}`;
-    const t = r.trend;
-    const trend = t ? `${t.direction === 'up' ? 'Up' : 'Down'} ${Math.abs(t.change)} min in the last half hour` : '';
-    const tags = queueTags(r);
-    return `<div class="group padded hero" data-key="hero">
-      <p class="hero-kicker tint-green">${icon('check-circle', 'inline-icon')}Open</p>
-      <p class="hero-title">${r.waitTime != null ? `${r.waitTime} min wait` : 'No posted wait'}${t ? trendHtml(r) : ''}</p>
-      ${cmp || trend ? `<p class="hero-sub">${esc([cmp, trend].filter(Boolean).join(' · '))}</p>` : ''}
-      ${tags.length ? `<p class="hero-tags">${tags.map((x) => `<span class="tag">${esc(x)}</span>`).join('')}</p>` : ''}
-    </div>`;
-  }
-  return `<div class="group padded hero" data-key="hero">
-    <p class="hero-kicker">${icon('moon', 'inline-icon')}${r.status === 'REFURBISHMENT' ? 'Refurbishment' : 'Closed'}</p>
-    <p class="hero-title">${r.status === 'REFURBISHMENT' ? 'Closed for refurbishment' : dash.park.openingTime && Date.now() < Date.parse(dash.park.openingTime) ? `Opens at ${fmtTime(Date.parse(dash.park.openingTime))}` : 'Closed right now'}</p>
-  </div>`;
+function openRideSection(rideId, section) {
+  const ride = pages.top;
+  if (!ride?.detail) return;
+  pages.push({
+    key: `ride:${rideId}:${section}`,
+    url: `/ride/${encodeURIComponent(rideId)}/${section}`,
+    back: listName(liveRide(rideId) || { name: 'Back' }),
+    title: () => (section === 'best' ? 'Best time to ride' : 'Past closures'),
+    render: () => rideSectionHtml(ride.detail, section),
+    charts: () => {
+      const c = rideCharts(ride.detail);
+      return section === 'best' ? { hours: c.hours } : { days: c.days };
+    },
+  });
 }
 
-// Two actions under the card, as a row of buttons rather than two forms.
-function actionsHtml(r) {
-  if (r.other) return '<p class="footnote" data-key="actions">This attraction never posts a wait, so it has no alerts.</p>';
-  const on = isFollowing(r.id);
-  const alert = dash.trip.waitAlerts?.[r.id];
-  const armed = alert && !alert.sentAt;
-  return `<div class="actions" data-key="actions">
-    <button class="action pressable ${on ? 'on' : ''}" type="button" data-act="follow" aria-pressed="${on}">
-      ${icon(on ? 'bell' : 'bell-off')}<span>${on ? 'Alerts on' : 'Alerts off'}</span></button>
-    <button class="action pressable ${armed ? 'on' : ''}" type="button" data-act="wait-sheet" aria-haspopup="dialog">
-      ${icon('timer')}<span>${armed ? `Wait ≤ ${alert.max} min` : 'Wait alert'}</span></button>
-  </div>`;
+// This phone's fingerprint, as the server tags its own wait alerts with.
+// Needs a secure page (as the app always is); elsewhere nothing is "mine".
+let myTag = null;
+async function syncMyTag() {
+  myTag = null;
+  if (!phone.id || !crypto.subtle) return;
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${tripCode}:${phone.id}`));
+  myTag = btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').slice(0, 16);
 }
+const alertOwner = (a) => (!a?.owner ? 'all' : a.owner === myTag ? 'me' : 'other');
 
-// The wait alert's limits, in a small sheet of their own.
+// A wait alert: a few limits under the posted wait, for this phone only or
+// for everyone on the trip. It starts on "Just me", as pausing does, so one
+// person's alert never buzzes the whole family by surprise.
 function openWaitAlert(rideId) {
   const r = liveRide(rideId);
   if (!r) return;
-  const content = el(`<div data-sheet="wait">${sheetHead(`Wait alert: ${r.name}`, 'One alert, to everyone on this trip, when the posted wait drops to your limit. Today only.')}${waitAlertHtml(r)}
-    <div class="btn-stack"><button class="btn-secondary pressable" type="button" data-act="done">Done</button></div></div>`);
+  const alert = dash.trip.waitAlerts?.[r.id];
+  const armed = alert && !alert.sentAt;
+  const posted = r.status === 'OPERATING' && r.waitTime != null ? r.waitTime : null;
+  let choices = waitChoices(r, posted);
+  if (armed && !choices.includes(alert.max)) choices = [...choices, alert.max].sort((a, b) => a - b);
+  let pick = armed ? alert.max : choices[choices.length - 1] ?? null;
+  const perPhone = !!phone.id;
+  const owner = armed ? alertOwner(alert) : null;
+  let scope = perPhone && owner !== 'all' ? 'me' : 'all';
+  const state = armed
+    ? owner === 'other' ? `Another phone on the trip has an alert here at ${alert.max}\u00a0min. Setting one replaces it.`
+      : `On: ${owner === 'me' ? 'just this phone' : 'everyone on the trip'}, at ${alert.max}\u00a0min or less.`
+    : alert?.sentAt ? `Sent at ${fmtTime(alert.sentAt)}, when the wait was ${alert.sentWait}\u00a0min.`
+      : posted != null ? `The wait is ${posted}\u00a0min now.` : 'It is not posting a wait right now.';
+  const content = el(`<div data-sheet="wait">
+    ${sheetHead('Wait alert', `One alert, once, when the posted wait for ${esc(listName(r))} drops to your number. Today only.`)}
+    ${perPhone ? `<div class="segmented scope" role="radiogroup" aria-label="Who gets it">
+      <button type="button" role="radio" data-scope="me" aria-checked="${scope === 'me'}">Just me</button>
+      <button type="button" role="radio" data-scope="all" aria-checked="${scope === 'all'}">Everyone</button></div>` : ''}
+    <p class="note" style="padding-top:0">${esc(state)}</p>
+    ${choices.length ? `<div class="wait-nums" role="radiogroup" aria-label="Minutes or less" style="margin-top:0.8rem">${choices.map((m) => `<button type="button" role="radio" data-m="${m}" aria-checked="${m === pick}" aria-label="${m} minutes or less">${m}</button>`).join('')}</div>
+      <p class="note">minutes or less</p>` : `<p class="note">The wait is already short. Nothing to set.</p>`}
+    <div class="btn-stack">
+      ${choices.length ? `<button class="btn-primary pressable" type="button" data-act="set">Set alert at ${pick}\u00a0min</button>` : ''}
+      ${armed && owner !== 'other' ? '<button class="btn-ghost pressable" type="button" data-act="off">Turn off this alert</button>' : '<button class="btn-ghost pressable" type="button" data-act="done">Cancel</button>'}
+    </div></div>`);
+  const sync = () => {
+    content.querySelectorAll('[data-m]').forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.m) === pick)));
+    content.querySelectorAll('[data-scope]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.scope === scope)));
+    const set = content.querySelector('[data-act=set]');
+    if (set) set.textContent = `Set alert at ${pick}\u00a0min${scope === 'all' ? ' for everyone' : ''}`;
+  };
   content.addEventListener('click', (e) => {
+    const m = e.target.closest('[data-m]');
+    const sc = e.target.closest('[data-scope]');
     const act = e.target.closest('[data-act]')?.dataset.act;
-    if (act === 'done') return sheet.close();
-    if (!act?.startsWith('wait-')) return;
-    haptic();
-    const alert = dash.trip.waitAlerts?.[rideId];
-    const armed = alert && !alert.sentAt;
-    const m = act.slice(5);
-    sheet.close();
-    setWaitAlert(rideId, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
+    if (m) { pick = Number(m.dataset.m); haptic(); sync(); }
+    else if (sc) { scope = sc.dataset.scope; haptic(); sync(); }
+    else if (act === 'done') sheet.close();
+    else if (act === 'off') { sheet.close(); setWaitAlert(rideId, null, owner === 'me' ? phone.id : null); }
+    else if (act === 'set') { sheet.close(); setWaitAlert(rideId, pick, scope === 'me' ? phone.id : null); }
   });
+  sync();
   sheet.open(content);
 }
 
@@ -2628,6 +2802,7 @@ function openParkInfo() {
     info: null,
     failed: false,
     title: () => parkLabel(dash.park.name),
+    scene: () => ({}),
     render() { return parkHtml(this.info, this.failed); },
     charts() { return this.info?.crowd ? { crowd: this.info.crowd } : null; },
     async load() {
@@ -2644,7 +2819,7 @@ function openParkInfo() {
 
 function parkHtml(info, failed) {
   const downNow = dash.rides.filter((r) => r.status === 'DOWN' && !r.other).length;
-  const parts = [`<p class="page-sub" data-key="hours">${esc(hoursText())}</p>`];
+  const parts = [];
   const { openingTime: open, closingTime: close, lateEvent } = dash.park;
   if (open || close) {
     parts.push(`<div class="group plain" data-key="hours-list">
@@ -2653,6 +2828,8 @@ function parkHtml(info, failed) {
       ${lateEvent ? `<div class="row" data-key="event"><span class="row-label">${esc(lateEvent.name)}<small>Alerts keep going until it ends</small></span><span class="row-detail">until ${fmtTime(Date.parse(lateEvent.closingTime))}</span></div>` : ''}
     </div>`);
   }
+  parts.push(`<div class="group spaced-sm" data-key="change"><button class="row pressable" type="button" data-act="change-park">
+    <span class="row-label">Change park<small>For everyone on this trip</small></span>${icon('chevron', 'chevron')}</button></div>`);
   const cr = info?.crowd;
   if (cr?.now || cr?.today.some((v) => v != null)) {
     parts.push(`<h2 class="section-label" data-key="crowd-label">Crowds</h2>
@@ -2697,6 +2874,7 @@ function parkHtml(info, failed) {
       : skeleton('rows'));
   }
   parts.push(`<p class="footnote" data-key="updated">${dash.lastPoll ? `Ride status updated at ${fmtTime(dash.lastPoll)}.` : ''}</p>`);
+  parts.push('<p class="unofficial" data-key="unofficial">ParkAlert is an unofficial fan app, not affiliated with Disney.</p>');
   return parts.join('');
 }
 
@@ -2706,43 +2884,50 @@ function openHold() {
     key: 'hold',
     url: '/hold',
     back: backLabel(),
-    title: () => (heldRides()[0]?.outlook?.cause ? 'Storm hold' : 'Rides paused at once'),
+    title: () => {
+      const held = heldRides();
+      const o = held[0]?.outlook;
+      return o?.cause ? `${held.length} rides stopped, likely ${causeWord(o)}` : `${held.length} rides down together`;
+    },
+    scene: () => ({}),
     render: holdHtml,
   });
 }
 
 const heldRides = () => dash.rides.filter((r) => r.status === 'DOWN' && r.outlook?.kind === 'hold' && !r.other).sort(holdOrder);
 
+// Rides closed together: one answer for all of them, then the rides, yours
+// first.
 function holdHtml() {
-  const holds = heldRides();
-  const parts = [`<p class="page-sub" data-key="note">${esc(KIND_NOTE[holds[0]?.outlook?.cause ? 'storm' : 'hold'])}</p>`];
-  if (!holds.length) {
+  const held = heldRides();
+  if (!held.length) {
     // Left open while the rides came back: say so rather than go blank.
-    parts.push(`<div class="group padded" data-key="over"><p class="big-outlook">The hold is over</p><p class="explain">Every ride in it is running again or has closed. They're listed under Back up recently on Down now.</p></div>`);
-    return parts.join('');
+    return `<div class="group padded" data-key="over"><p class="big-wait" style="font-size:min(1.5rem,34px)">They're all open again</p><p class="range">Every ride here is running again or has closed. They're under Open again on Down now.</p></div>`;
   }
-  const text = holds[0]?.outlook?.text;
-  if (text) parts.push(`<div class="group padded" data-key="range"><p class="big-outlook">${esc(text)}</p><p class="explain">${esc(estimateExplainer(holds[0].outlook))}</p></div>`);
-  parts.push(`<h2 class="section-label" data-key="count">${holds.length} ride${holds.length === 1 ? '' : 's'} still in this hold</h2>
-    <div class="group plain" data-key="rides">${holds.map((r) => `
-    <button class="row pressable" type="button" data-ride="${esc(r.id)}">
-      <span class="row-label">${esc(r.name)}<small>${esc(downWhen(r))}</small></span>
-      <span class="row-detail">${downFor(r)}</span>
-      ${icon('chevron', 'chevron')}
-    </button>`).join('')}</div>`);
-  return parts.join('');
+  const first = held[0];
+  const o = first.outlook;
+  const note = o?.cause ? '' : `<p class="note" data-key="why">Several rides closing together without bad weather is usually a park-wide pause, such as for fireworks or a safety check, and they tend to reopen together.</p>`;
+  const since = Math.min(...held.map((r) => r.downSince));
+  const kicker = o?.cause
+    ? `<p class="kicker weather">${icon('bolt')}Since ${fmtTime(since)} · ${esc(o.weather === 'passed' && o.clearedAt ? `weather cleared ${fmtTime(o.clearedAt)}` : 'still storming nearby')}</p>`
+    : `<p class="kicker down">${icon('down')}Since ${fmtTime(since)}</p>`;
+  return `<div class="group padded hero" data-key="hero">${kicker}${downAnswer(first, o)}</div>${note}
+    <h2 class="section-label" data-key="count">${held.length} ride${held.length === 1 ? '' : 's'}</h2>
+    <div class="group" data-key="rides">${held.map((r) => {
+      const yours = isFollowing(r.id);
+      return `<button class="slim pressable" type="button" data-ride="${esc(r.id)}" data-key="h-${esc(r.id)}" aria-label="${esc([r.name, r.land, yours ? 'yours' : null].filter(Boolean).join(', '))}">
+        <span class="mk">${statusMark(r, !yours)}</span>
+        <span class="rl"><span class="nm">${esc(listName(r))}</span><small>${esc([r.land, yours ? 'yours' : null].filter(Boolean).join(' · '))}</small></span>
+        ${icon('chevron', 'chevron')}</button>`;
+    }).join('')}</div>`;
 }
 
 // Placeholder shapes while something loads, so content settles into place
 // instead of popping in under the reader.
 function skeleton(kind) {
-  if (kind === 'cards') {
-    return `<div class="cards" data-key="skeleton">${[0, 1].map(() => `
-      <div class="card sk-card" aria-hidden="true"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span><span class="sk sk-bar"></span><span class="sk sk-line w50"></span></div>`).join('')}</div>`;
-  }
-  const rows = kind === 'ride' ? 3 : 5;
-  return `<div class="group sk-group" data-key="skeleton" aria-hidden="true">${Array.from({ length: rows }, () => `
-    <div class="row"><span class="row-label"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>`).join('')}</div>`;
+  const rows = kind === 'ride' ? 3 : kind === 'cards' ? 3 : 5;
+  return `<div class="group${kind === 'cards' ? ' lift' : ''} sk-group" data-key="skeleton" aria-hidden="true">${Array.from({ length: rows }, () => `
+    <div class="slim"><span class="rl"><span class="sk sk-line w60"></span><span class="sk sk-line w35"></span></span></div>`).join('')}</div>`;
 }
 
 // Taps on pages: one delegated listener, so patched content never loses a
@@ -2752,16 +2937,12 @@ $('#pages').addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (!page || !act) return;
   if (act === 'follow' && page.rideId) toggleFollow(page.rideId);
-  else if (act.startsWith('tab-')) { haptic(); page.tab = act.slice(4); pages.draw(page); }
   else if (act === 'wait-sheet' && page.rideId) openWaitAlert(page.rideId);
+  else if (act === 'open-best' && page.rideId) openRideSection(page.rideId, 'best');
+  else if (act === 'open-history' && page.rideId) openRideSection(page.rideId, 'history');
+  else if (act === 'open-park') openParkInfo();
+  else if (act === 'change-park') openPark();
   else if (act === 'retry') { page.failed = false; pages.draw(page); page.load?.(); }
-  else if (act.startsWith('wait-') && page.rideId) {
-    haptic();
-    const alert = dash.trip.waitAlerts?.[page.rideId];
-    const armed = alert && !alert.sentAt;
-    const m = act.slice(5);
-    setWaitAlert(page.rideId, m === 'off' || (armed && Number(m) === alert.max) ? null : Number(m));
-  }
 });
 
 // Any element carrying a ride id opens that ride, wherever it sits.
@@ -3267,6 +3448,8 @@ function showSetup() {
   $('#setup').classList.remove('hidden');
   document.body.classList.add('no-tabbar');
   document.title = 'ParkAlert';
+  // The first screen is the app icon's own dusk.
+  if (!$('#setup-art').firstChild) $('#setup-art').innerHTML = sceneSvg('dusk', 'Magic Kingdom', { align: 'xMidYMax' });
   renderSetupParks();
 }
 
@@ -3324,6 +3507,9 @@ function switchView(name, { top = false } = {}) {
   if (name !== view) scrollByView[view] = scrollY;
   if (name !== view && keepListed.size) { keepListed.clear(); if (dash) renderRides(); }
   view = name;
+  document.body.classList.remove('view-down', 'view-rides', 'view-trip');
+  document.body.classList.add(`view-${name}`);
+  syncNavBar();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${name}`));
   document.querySelectorAll('.tab').forEach((t) => {
     const on = t.dataset.view === name;
@@ -3348,6 +3534,11 @@ document.querySelectorAll('.tab').forEach((t) => {
   };
 });
 $('#btn-locate').onclick = locate;
+// Most family members arrive with a code: the button takes them to the field.
+$('#btn-join-jump').onclick = () => {
+  $('#join-form').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
+  $('#join-code').focus({ preventScroll: true });
+};
 
 const joinInput = $('#join-code');
 const joinBtn = $('#join-form button');
@@ -3537,8 +3728,9 @@ $('#row-install').onclick = async () => {
 };
 syncInstall();
 
-// Past the large title, the compact bar shows the park's name.
-const syncCompact = () => document.body.classList.toggle('compact', !onSetup() && $('#park-name').getBoundingClientRect().bottom < $('#nav-bar').offsetHeight);
+// Past the large title, the compact bar shows the screen's name.
+const titleEl = () => (view === 'down' ? $('#status-title') : $(`#view-${view} .view-title`));
+const syncCompact = () => document.body.classList.toggle('compact', !onSetup() && (titleEl()?.getBoundingClientRect().bottom ?? 1) < $('#nav-bar').offsetHeight);
 addEventListener('scroll', syncCompact, { passive: true });
 $('#nav-bar').onclick = () => window.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
 

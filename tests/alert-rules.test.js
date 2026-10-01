@@ -42,31 +42,31 @@ test('a hold is one push that leads with the hold, the range and what to do', ()
   const at = Date.parse('2026-09-27T19:12:00Z');
   const outlook = { kind: 'hold', text: 'Often back in 45 to 105 min', advice: { verdict: 'Ride something else' } };
   const down = incidentDownMessage('hold', names, 'Magic Kingdom', outlook, at, 'America/New_York');
-  assert.equal(down.title, '7 rides paused at once', 'not a storm unless the weather says so');
+  assert.equal(down.title, '7 rides down together', 'not a storm unless the weather says so');
   assert.equal(down.message, 'Often back in 45 to 105 min · Ride something else\nA, B, C, D, E and 2 more\nMagic Kingdom · 3:12\u00a0PM');
-  assert.equal(incidentDownMessage('hold', names, 'Magic Kingdom', { ...outlook, cause: 'lightning' }, at, 'America/New_York').title, 'Storm hold: 7 rides closed');
+  assert.equal(incidentDownMessage('hold', names, 'Magic Kingdom', { ...outlook, cause: 'lightning' }, at, 'America/New_York').title, '7 rides stopped, likely lightning');
   const wave = incidentDownMessage('group', ['A', 'B', 'C'], 'EPCOT', null, at, 'America/New_York');
   assert.equal(wave.title, '3 rides went down');
   const up = groupMessage('UP', names.slice(0, GROUP_MIN), 'EPCOT');
-  assert.equal(up.title, '3 rides are back up');
+  assert.equal(up.title, '3 rides are open again');
   assert.equal(up.message, 'A, B, C\nEPCOT');
 });
 
 test('an incident coming back is counted, quietly until the last ride', () => {
   const mid = incidentUpMessage({ names: ['A', 'B'], back: 6, total: 18, downtimes: [40, 42].map((m) => m * 60_000), final: false, parkName: 'Magic Kingdom' });
-  assert.deepEqual([mid.title, mid.quiet], ['6 of 18 rides are back up', true]);
+  assert.deepEqual([mid.title, mid.quiet], ['6 of 18 rides are open again', true]);
   assert.equal(mid.message, 'A, B\nDown about 42 min · Magic Kingdom');
   const last = incidentUpMessage({ names: ['C'], back: 18, total: 18, final: true, parkName: 'Magic Kingdom' });
-  assert.deepEqual([last.title, last.quiet], ['All 18 rides are back up', false]);
+  assert.deepEqual([last.title, last.quiet], ['All 18 rides are open again', false]);
   const someClosed = incidentUpMessage({ names: ['C'], back: 16, total: 18, closed: ['X', 'Y'], final: true, parkName: 'Magic Kingdom' });
-  assert.equal(someClosed.title, '16 of 18 rides are back up');
+  assert.equal(someClosed.title, '16 of 18 rides are open again');
   assert.match(someClosed.message, /Closed for now: X, Y$/);
 });
 
 test('a ride back after an hour or more says so in the title', () => {
   const ev = { type: 'UP', ride: { name: "Peter Pan's Flight", downSince: Date.parse('2026-09-27T12:52:00Z') }, downtimeMs: 320 * 60_000 };
   const m = upMessage(ev, 'Magic Kingdom', 'America/New_York');
-  assert.equal(m.title, "Peter Pan's Flight is back up after 5 hr 20 min");
+  assert.equal(m.title, "Peter Pan's Flight is open again after 5 hr 20 min");
   assert.equal(m.message, 'Down since 8:52\u00a0AM · Magic Kingdom');
 });
 

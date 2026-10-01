@@ -18,18 +18,33 @@ export function listNames(names, max = 5) {
   return `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 }
 
-// A range and the advice that goes with it: "Often back in 10 to 40 min · Check back in about 20 min".
-export function outlookLine(outlook) {
+// What to expect, in the words the app uses: "Back at about 3:40 PM",
+// "Likely back 3:55 PM or later" once a storm has passed, "Waiting for the
+// storm to pass" while it goes on, "Back in over an hour". A clock time
+// needs the park's timezone; without one (or a window) the range text stands.
+const clockIn = (min, timezone, now) => localTime(now + min * 60_000, timezone);
+export function outlookLine(outlook, timezone = null, now = Date.now()) {
   if (!outlook) return null;
+  if (outlook.cause && outlook.weather !== 'passed') return outlook.cause === 'rain' ? 'Waiting for the rain to stop' : 'Waiting for the storm to pass';
+  const w = outlook.window;
+  const key = outlook.advice?.key;
+  if (key === 'closed') return 'Often closed for the rest of the day';
+  if (key === 'closing') return 'May not reopen before the park closes';
+  if (key === 'long' || key === 'go' || (w?.lo != null && w.lo >= 60)) return 'Back in over an hour';
+  if (timezone && w?.lo != null) {
+    if (outlook.cause) return `Likely back ${clockIn(w.lo, timezone, now)} or later`;
+    return `Back at about ${clockIn(w.hi != null ? Math.round((w.lo + w.hi) / 2) : w.lo, timezone, now)}`;
+  }
   if (outlook.text && outlook.advice) return `${outlook.text} · ${outlook.advice.verdict}`;
   return outlook.text || outlook.advice?.verdict || null;
 }
 
-// What a hold is called: a storm only when the weather says so. Otherwise
-// just what was seen, since a fireworks or power hold (or a few breakdowns
-// at once) looks the same in the ride data.
+// What rides down together are called. The ride data never says why a ride
+// closed, so weather is only "likely", and anything else is just "together".
 const isStorm = (outlook) => !!outlook?.cause;
-export const holdTitle = (outlook, n) => (isStorm(outlook) ? `Storm hold: ${n} rides closed` : `${n} rides paused at once`);
+export const holdTitle = (outlook, n) => (isStorm(outlook)
+  ? `${n} rides stopped, likely ${outlook.cause === 'rain' ? 'rain' : 'lightning'}`
+  : `${n} rides down together`);
 
 // ---- One ride ----
 
@@ -42,12 +57,16 @@ export function wentDown(ride, timezone) {
   return ride.downAfter != null ? `Went down between ${localTime(ride.downAfter, timezone)} and ${at}` : `Down since before ${at}`;
 }
 
-export function downMessage(ride, outlook, parkName, timezone) {
-  const lines = [`${wentDown(ride, timezone)} · ${parkName}`];
-  if (outlook?.kind === 'hold') lines.push(isStorm(outlook) ? `Part of a storm hold: ${outlook.rides} rides closed` : `One of ${outlook.rides} rides paused at once`);
-  const line = outlookLine(outlook);
-  if (line) lines.push(line);
-  return { title: `${ride.name} is down`, message: lines.join('\n'), priority: 3, urgency: 'high' };
+export function downMessage(ride, outlook, parkName, timezone, now = Date.now()) {
+  // What to expect first: a lock screen shows two lines.
+  const lines = [outlookLine(outlook, timezone, now)];
+  if (outlook?.kind === 'hold') {
+    const others = Math.max(0, (outlook.rides ?? 1) - 1);
+    const n = `${others} other ride${others === 1 ? '' : 's'}`;
+    lines.push(isStorm(outlook) ? `Stopped, likely for ${outlook.cause === 'rain' ? 'rain' : 'lightning'}, with ${n}` : `Down with ${n}`);
+  }
+  lines.push(`${wentDown(ride, timezone)} · ${parkName}`);
+  return { title: `${ride.name} is down`, message: lines.filter(Boolean).join('\n'), priority: 3, urgency: 'high' };
 }
 
 // ev: an UP event (downtimeMs, late, reopenedAt).
@@ -62,7 +81,7 @@ export function upMessage(ev, parkName, timezone) {
   const long = ev.downtimeMs >= LONG_OUTAGE_MS;
   const took = ev.downtimeRange ? downtimeSpan(ev.downtimeRange) : ev.downtimeMs ? `Was down ${formatDuration(ev.downtimeMs)}` : null;
   return {
-    title: long ? `${ev.ride.name} is back up after ${ev.downtimeRange && ev.downtimeRange[1] == null ? 'at least ' : ''}${formatDuration(ev.downtimeRange?.[0] ?? ev.downtimeMs)}` : `${ev.ride.name} is back up`,
+    title: long ? `${ev.ride.name} is open again after ${ev.downtimeRange && ev.downtimeRange[1] == null ? 'at least ' : ''}${formatDuration(ev.downtimeRange?.[0] ?? ev.downtimeMs)}` : `${ev.ride.name} is open again`,
     message: `${long ? `Down since ${ev.ride.downExact === false ? 'before ' : ''}${localTime(ev.ride.downSince ?? Date.now() - ev.downtimeMs, timezone)}` : took ?? `Back at ${localTime(ev.reopenedAt ?? Date.now(), timezone)}`} · ${parkName}`,
     priority: 4,
   };
@@ -110,10 +129,10 @@ export function groupDowntime(ms, late = false) {
 export function incidentDownMessage(kind, names, parkName, outlook, at, timezone, after = null) {
   const when = `${parkName} · ${after != null ? `between ${localTime(after, timezone)} and ${localTime(at, timezone)}` : localTime(at, timezone)}`;
   if (kind === 'hold') {
-    const lines = [outlookLine(outlook), listNames(names), when].filter(Boolean);
+    const lines = [outlookLine(outlook, timezone, at), listNames(names), when].filter(Boolean);
     return { title: holdTitle(outlook, names.length), message: lines.join('\n'), priority: 3, urgency: 'high' };
   }
-  const lines = [listNames(names), when, outlookLine(outlook)].filter(Boolean);
+  const lines = [listNames(names), when, outlookLine(outlook, timezone, at)].filter(Boolean);
   return { title: `${names.length} rides went down`, message: lines.join('\n'), priority: 3, urgency: 'high' };
 }
 
@@ -128,8 +147,8 @@ export function incidentGrewMessage(kind, down, added, parkName, outlook) {
 // rides; closed: names that closed instead. Final when none is still down.
 export function incidentUpMessage({ names, back, total, closed = [], downtimes = [], late = false, final, parkName }) {
   const title = final && !closed.length
-    ? `All ${total} rides ${late ? 'are now open' : 'are back up'}`
-    : `${back} of ${total} rides ${late ? 'are now open' : 'are back up'}`;
+    ? `All ${total} rides ${late ? 'are now open' : 'are open again'}`
+    : `${back} of ${total} rides ${late ? 'are now open' : 'are open again'}`;
   const took = groupDowntime(downtimes, late);
   const lines = [listNames(names), `${took ? `${took} · ` : ''}${parkName}`];
   if (final && closed.length) lines.push(`Closed for now: ${listNames(closed)}`);
@@ -143,7 +162,7 @@ export function groupMessage(type, names, parkName, { late = false, downtimes = 
   }
   const took = groupDowntime(downtimes, late);
   return {
-    title: `${names.length} rides ${late ? 'are now open' : 'are back up'}`,
+    title: `${names.length} rides ${late ? 'are now open' : 'are open again'}`,
     message: `${listNames(names)}\n${took ? `${took} · ` : ''}${parkName}`,
     priority: 4,
   };
@@ -172,12 +191,11 @@ export function clockSpan(a, b, timezone) {
 // minutes from now, basis). down: this trip's rides still closed by it.
 export function stormPassedMessage(outlook, down, parkName, timezone, now = Date.now()) {
   const w = outlook.window;
-  const when = w ? clockSpan(now + w.lo * 60_000, w.hi == null ? null : now + w.hi * 60_000, timezone) : null;
-  const back = !when ? null
-    : outlook.basis?.from === 'rule' ? `Rides reopen about 30 min after the last lightning: ${when}`
-      : `Rides often back ${when}`;
+  // The weather reports can't see what Disney's own sensors do, and rides are
+  // tested before they reopen: the time is a minimum, never a promise.
+  const back = w ? `Outdoor rides likely back ${localTime(now + w.lo * 60_000, timezone)} or later, after testing` : null;
   return {
-    title: `${outlook.cause === 'rain' ? 'Rain stopped' : 'Storm passed'} at ${localTime(outlook.clearedAt, timezone)}`,
+    title: `${outlook.cause === 'rain' ? 'The rain seems to have stopped' : 'The storm seems to have passed'} at ${localTime(outlook.clearedAt, timezone)}`,
     message: [back, `${down.length} ride${down.length === 1 ? '' : 's'} still closed: ${listNames(down)}`, parkName].filter(Boolean).join('\n'),
     priority: 4,
   };
@@ -191,7 +209,7 @@ export function linesMessage(building, crowd, parkName, shorter = []) {
   const usual = crowd?.typical != null ? ` Usually ${crowd.typical} at ${hourLabel(crowd.hour)}.` : '';
   const tip = shorter.length ? ` Shorter than usual now: ${shorter.map((r) => `${r.name} ${r.wait} min (usually ${r.usual})`).join(', ')}.` : '';
   return {
-    title: `Lines are building at ${parkName}`,
+    title: `Lines are getting longer at ${parkName}`,
     message: `The big rides average about ${building.to} min, up from ${building.from} half an hour ago.${usual}${tip}`,
     priority: 3,
   };

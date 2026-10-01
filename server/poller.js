@@ -1,5 +1,5 @@
 import { fetchLiveAttractions, fetchSchedule } from './themeparks.js';
-import { deliver, hasReceiver, reachedSomeone } from './deliver.js';
+import { deliver, deviceMuted, hasReceiver, reachedSomeone } from './deliver.js';
 import { APP_URL } from './config.js';
 import { trips, parkState, saveState, saveTrips, activeParkIds, isTripActive, hasAlertPhones, tripIdleAt } from './store.js';
 import { dueWaitAlerts, pruneWaitAlerts, waitAlertMessage } from './waitalerts.js';
@@ -357,7 +357,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       const inc = key ? incidents[key] : null;
       const grouped = inc && followedIn(inc).length >= GROUP_MIN;
       if (!grouped) {
-        for (const ev of evs) single(ev, downMessage(ev.ride, downOutlook(parkId, ev.ride.id, (now - (ev.ride.downSince ?? now)) / 60_000, now), parkName, tz));
+        for (const ev of evs) single(ev, downMessage(ev.ride, downOutlook(parkId, ev.ride.id, (now - (ev.ride.downSince ?? now)) / 60_000, now), parkName, tz, now));
         continue;
       }
       const outlook = groupOutlook(evs.map((ev) => downOutlook(parkId, ev.ride.id, (now - (ev.ride.downSince ?? now)) / 60_000, now)));
@@ -377,7 +377,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       const evs = mine.filter((ev) => ev.type === type);
       const long = type === 'UP' ? evs.filter((ev) => ev.downtimeMs >= LONG_OUTAGE_MS && !ev.late) : [];
       const rest = evs.filter((ev) => !long.includes(ev));
-      for (const ev of long) single(ev, upMessage(ev, parkName, tz));
+      for (const ev of long) single(ev, upMessage(ev, parkName, tz, now));
       if (rest.length >= GROUP_MIN) {
         pushes.push({
           ...groupMessage(type, rest.map((ev) => ev.ride.name), parkName, { late: rest.every((ev) => ev.late), downtimes: rest.map((ev) => ev.downtimeMs) }),
@@ -385,12 +385,12 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
           tag: `${type.toLowerCase()}:${now}`,
         });
       } else {
-        for (const ev of rest) single(ev, type === 'UP' ? upMessage(ev, parkName, tz) : closedMessage(ev, parkName, tz));
+        for (const ev of rest) single(ev, type === 'UP' ? upMessage(ev, parkName, tz) : closedMessage(ev, parkName, tz, now));
       }
     }
 
     // A down ride that left the feed: nobody can say it is back, so say that.
-    for (const ev of mine.filter((e) => e.type === 'GONE')) single(ev, goneMessage(ev, parkName, tz));
+    for (const ev of mine.filter((e) => e.type === 'GONE')) single(ev, goneMessage(ev, parkName, tz, now));
 
     // An incident's rides coming back: one update per incident, replacing
     // the "went down" push, or single pushes for a trip that got singles.
@@ -400,7 +400,7 @@ export async function notifyTrips(parkId, events, { simulated = false, only = nu
       if (!mineUp.length) continue;
       const members = followedIn(inc);
       if (members.length < GROUP_MIN) {
-        for (const ev of mineUp) single(ev, upMessage(ev, parkName, tz));
+        for (const ev of mineUp) single(ev, upMessage(ev, parkName, tz, now));
         continue;
       }
       const back = members.filter((id) => rides[id]?.status === 'OPERATING' && !pendingUpFor(parkId, id)).length;
@@ -477,7 +477,10 @@ export async function notifyWaitAlerts(parkId, rides, now = Date.now()) {
     // With every phone paused, nobody would see it: hold it, don't use it up.
     if (paused || isPastClosing(state, now) || !hasReceiver(trip, now)) return;
     for (const { rideId, ride, alert } of dueWaitAlerts(trip, rides, today)) {
-      const result = await deliver(trip, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }, { tag: `wait:${rideId}`, now });
+      // One phone's own alert goes to it alone, and waits while it is paused.
+      const own = alert.device ? (trip.devices || []).find((d) => d.id === alert.device) : null;
+      if (alert.device && (!own || deviceMuted(own, now))) continue;
+      const result = await deliver(trip, { ...waitAlertMessage(ride, alert, parkName), click: appLink(trip, { ride: rideId }) }, { tag: `wait:${rideId}`, device: own?.id ?? null, now });
       if (!reachedSomeone(trip, result)) continue;
       alert.sentAt = now;
       alert.sentWait = ride.waitTime;
