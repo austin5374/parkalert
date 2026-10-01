@@ -376,7 +376,12 @@ async function handleApi(req, res, url) {
       if (!known || !Object.hasOwn(known, rideId)) return json(res, 404, { error: 'ride not found' });
       alerts[rideId] = { max, day: today, setAt: Date.now(), ...(device ? { device } : {}) };
       if (Object.keys(alerts).length > MAX_WAIT_ALERTS) return json(res, 400, { error: 'too many wait alerts' });
-    } else delete alerts[rideId];
+    } else {
+      // A phone's own alert is removed only by that phone (it names itself).
+      const own = alerts[rideId]?.device;
+      if (own && url.searchParams.get('device') !== own) return json(res, 403, { error: "another phone's wait alert" });
+      delete alerts[rideId];
+    }
     trip.waitAlerts = alerts;
     saveTrips();
     return json(res, 200, { trip: tripView(trip) });

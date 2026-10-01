@@ -1222,7 +1222,7 @@ function renderHeader() {
       ? !dash.lastPoll ? 'Waiting for the ride feed'
         : dash.lastError ? `Ride feed not answering · updated ${fmtUntil(dash.lastPoll)}`
           : `Ride times may be out of date · ${fmtDuration(Date.now() - dash.lastPoll)} old`
-      : [hoursText().replace(/^Open until/, 'Until'), crowd].filter(Boolean).join(' · ');
+      : [hoursText(), crowd].filter(Boolean).join(' · ');
   meta.classList.toggle('warn', flash ? flash.warn : offline || stale);
   // Screen readers hear it when it says something new, not each minute
   // that "2 min old" becomes "3 min old".
@@ -2459,7 +2459,7 @@ function waitChoices(r, posted) {
 async function setWaitAlert(rideId, max, device = null) {
   try {
     const path = `/trips/${tripCode}/wait-alerts/${encodeURIComponent(rideId)}`;
-    const { trip } = await api(path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: device ? { max, device } : { max } });
+    const { trip } = await api(max == null && device ? `${path}?device=${encodeURIComponent(device)}` : path, max == null ? { method: 'DELETE' } : { method: 'PUT', body: device ? { max, device } : { max } });
     dash.trip = trip;
     confirmTrip(trip);
     tellOtherTabs();
@@ -2782,7 +2782,7 @@ function openWaitAlert(rideId) {
     if (m) { pick = Number(m.dataset.m); haptic(); sync(); }
     else if (sc) { scope = sc.dataset.scope; haptic(); sync(); }
     else if (act === 'done') sheet.close();
-    else if (act === 'off') { sheet.close(); setWaitAlert(rideId, null); }
+    else if (act === 'off') { sheet.close(); setWaitAlert(rideId, null, owner === 'me' ? phone.id : null); }
     else if (act === 'set') { sheet.close(); setWaitAlert(rideId, pick, scope === 'me' ? phone.id : null); }
   });
   sync();
