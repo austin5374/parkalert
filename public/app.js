@@ -1356,7 +1356,7 @@ const backEnd = (b) => `<span class="back-end"><span class="back-label">Likely b
 function backCell(b) {
   if (b.kind === 'time') return `<span class="tile">${esc(pillTime(b.at))}</span>`;
   if (b.kind === 'later') return `<span class="when2"><span class="tile">${esc(pillTime(b.at))}</span><small>or later</small></span>`;
-  const words = { storm: 'After the storm', hour: 'In over an hour', closed: 'Maybe not today', closing: 'Maybe not before close', none: 'No estimate yet' }[b.kind];
+  const words = { storm: 'After storm', hour: 'Over an hour', closed: 'Maybe not today', closing: 'Maybe not before close', none: 'No estimate yet' }[b.kind];
   return `<span class="notsoon">${words}</span>`;
 }
 // The same, as a screen reader hears it.
